@@ -1,0 +1,1245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工作台 · 桌面概览</title>
+<style>
+    * { margin:0; padding:0; box-sizing:border-box; font-family:'Segoe UI',system-ui,sans-serif; }
+    html, body { width:100%; height:100%; overflow:hidden; }
+    :root {
+        --txt:#e2e8f0; --txt2:#94a3b8; --txt3:#64748b;
+        --panel-bg:rgba(30,41,59,0.55); --panel-border:rgba(148,163,184,0.12);
+        --item-bg:rgba(15,23,42,0.35); --bar-bg:#1e293b; --accent:#fbbf24;
+        --dt-border:rgba(148,163,184,0.15);
+    }
+    body {
+        background:linear-gradient(135deg,#0f172a 0%,#1e293b 55%,#0f172a 100%);
+        color:var(--txt); font-size:14px; line-height:1.5;
+        display:flex; flex-direction:column; padding:26px 34px 22px;
+        user-select:none;
+    }
+    /* 壁纸模式：默认背景半透明显桌面，开启后可选 */
+    body.wallpaper-on { background:rgba(10,16,32,0.45); backdrop-filter:blur(6px); }
+    #bgLayer { position:fixed; inset:0; z-index:-1; background-size:cover; background-position:center; background-repeat:no-repeat; }
+    ::-webkit-scrollbar { width:4px; height:4px; }
+    ::-webkit-scrollbar-thumb { background:#334155; border-radius:4px; }
+
+    .top { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; flex-shrink:0; padding-bottom:16px; border-bottom:1px solid var(--dt-border); }
+    .date-block { display:flex; align-items:baseline; gap:16px; }
+    .date-block .time { font-size:44px; font-weight:300; color:var(--txt); letter-spacing:1px; }
+    .date-block .date { font-size:17px; color:var(--txt2); }
+    .date-block .greet { font-size:13px; color:var(--txt3); }
+    .sync-status { font-size:12px; color:var(--txt3); display:flex; align-items:center; gap:6px; }
+    .close-app { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:4px; margin-left:2px; cursor:pointer; color:var(--txt3); transition:background 0.15s, color 0.15s; }
+    .close-app:hover { background:rgba(248,113,113,0.2); color:#f87171; }
+    .dot { width:8px; height:8px; border-radius:50%; background:#64748b; }
+    .dot.ok { background:#34d399; box-shadow:0 0 6px #34d399; }
+    .dot.err { background:#f87171; }
+
+    .cols { flex:1; display:grid; grid-template-columns: minmax(300px, 1.15fr) 1fr 1fr; gap:18px; margin-top:16px; min-height:0; }
+    .panel { background:var(--panel-bg); border:1px solid var(--panel-border); border-radius:16px; padding:16px 16px 12px; display:flex; flex-direction:column; backdrop-filter:blur(4px); min-height:0; overflow-y:auto; }
+    .panel h3 { font-size:14px; font-weight:600; color:var(--txt); margin-bottom:10px; display:flex; align-items:center; gap:8px; flex-shrink:0; }
+    .panel h3 .cnt { font-size:11px; color:var(--txt3); font-weight:400; margin-left:auto; }
+
+    /* 日历 */
+    .cal-wrap { overflow-y:auto; }
+    .cal { width:100%; border-collapse:collapse; font-size:12px; }
+    .cal th { color:var(--txt3); font-weight:500; padding:4px 0; text-align:center; }
+    .cal td { text-align:center; padding:3px 0; position:relative; }
+    .cal .day { display:inline-flex; width:30px; height:30px; align-items:center; justify-content:center; border-radius:9px; color:var(--txt); font-size:12.5px; position:relative; cursor:pointer; transition:background 0.15s; }
+    .cal .day:hover { background:rgba(59,109,240,0.25); }
+    .cal .day.today { background:linear-gradient(135deg,#2563eb,#3b6df0); color:#fff; font-weight:700; box-shadow:0 2px 8px rgba(59,109,240,0.5); }
+    .cal .day.selected { outline:2px solid var(--accent); outline-offset:1px; }
+    .cal .day.other { color:var(--txt3); }
+    .cal .day.has { font-weight:700; color:var(--accent); }
+    .cal .day.has.today { color:#fff; }
+    .cal .day.has::after { content:''; position:absolute; bottom:1px; left:50%; transform:translateX(-50%); width:4px; height:4px; border-radius:50%; background:var(--accent); }
+    .cal .day.has.today::after { background:#fff; }
+    /* 当日任务列表（日历下方，紧贴日期数字） */
+    .day-tasks { flex-shrink:0; max-height:40%; border-top:1px solid var(--dt-border); margin-top:8px; padding-top:8px; display:flex; flex-direction:column; min-height:0; }
+    .dt-head { font-size:11.5px; color:var(--txt2); margin-bottom:6px; display:flex; align-items:center; gap:6px; flex-shrink:0; }
+    .dt-head b { color:var(--txt); font-weight:600; }
+    .dt-list { overflow-y:auto; display:flex; flex-direction:column; gap:3px; }
+    .dt-item { display:flex; align-items:center; gap:6px; background:var(--item-bg); border-radius:7px; padding:4px 8px; font-size:12px; border-left:3px solid #3b6df0; }
+    .dt-item.done { border-left-color:#10b981; }
+    .dt-item.over { border-left-color:#f87171; }
+    .dt-item .t { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:var(--txt); }
+    .dt-item.done .t { text-decoration:line-through; color:var(--txt3); }
+    .dt-item .p { font-size:10px; color:var(--txt3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:38%; }
+    .dt-empty { color:var(--txt3); font-size:11.5px; padding:6px 2px; }
+
+    /* 待办 */
+    .todo-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:4px; }
+    .todo-item { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:8px; background:var(--item-bg); font-size:13px; }
+    .todo-item .chk { width:14px; height:14px; border-radius:4px; border:1.5px solid var(--txt3); flex-shrink:0; }
+    .todo-item.done .chk { background:#34d399; border-color:#34d399; }
+    .todo-item.done span { text-decoration:line-through; color:var(--txt3); }
+    .todo-item .due { margin-left:auto; font-size:11px; color:var(--txt2); flex-shrink:0; }
+    .todo-item .due.over { color:#f87171; }
+    .todo-item.done .due { color:var(--txt3); }
+    .todo-item { cursor:pointer; transition:background 0.15s; }
+    .todo-item:hover { background:rgba(255,255,255,0.08); }
+    .todo-item .chk { cursor:pointer; transition:transform 0.15s; }
+    .todo-item .chk:hover { transform:scale(1.15); }
+    .todo-item .todo-text { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .todo-tooltip { position:fixed; background:#1e293b; border:1px solid #334155; color:#e2e8f0; padding:8px 12px; border-radius:8px; font-size:12.5px; max-width:320px; z-index:150; box-shadow:0 8px 24px rgba(0,0,0,0.4); pointer-events:none; opacity:0; transition:opacity 0.15s; line-height:1.4; word-break:break-word; }
+    .empty { text-align:center; color:var(--txt3); font-size:12px; padding:18px 0; }
+
+    /* 项目进度 */
+    .proj-list { flex:1; overflow-y:auto; display:flex; flex-direction:column; gap:8px; }
+    .proj-item { background:var(--item-bg); border-radius:10px; padding:9px 10px; }
+    .proj-item .row1 { display:flex; align-items:center; gap:6px; font-size:12.5px; }
+    .proj-item .name { color:var(--txt); font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .proj-item .company { color:var(--txt3); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .proj-item .pct { margin-left:auto; font-size:11.5px; color:var(--txt2); flex-shrink:0; }
+    .proj-item .bar { height:5px; background:var(--bar-bg); border-radius:3px; margin-top:6px; overflow:hidden; }
+    .proj-item .bar i { display:block; height:100%; border-radius:3px; background:linear-gradient(90deg,#3b6df0,#10b981); transition:width 0.4s; }
+    .proj-item.done .bar i { background:linear-gradient(90deg,#10b981,#34d399); }
+    .proj-item.pending .bar i { background:#64748b; }
+    .st-tag { font-size:9.5px; padding:1px 6px; border-radius:8px; flex-shrink:0; font-weight:600; }
+    .st-tag.prog { background:rgba(59,109,240,0.2); color:#3b6df0; }
+    .st-tag.pend { background:rgba(148,163,184,0.16); color:var(--txt3); }
+    /* 优先级标记 */
+    .priority-tag { font-size:10px; margin-left:4px; line-height:1; flex-shrink:0; }
+    .priority-tag.imp { color:#fbbf24; }
+    .priority-tag.urg { color:#f87171; }
+    .priority-tag.both { color:#ef4444; }
+
+    .bottom { flex-shrink:0; display:flex; align-items:center; justify-content:space-between; margin-top:14px; font-size:11.5px; color:var(--txt3); }
+    .bottom .stats b { color:var(--txt2); font-weight:600; }
+    .bottom .hint { opacity:0.7; }
+
+    /* 配置面板（首次使用） */
+    #configPanel { position:fixed; inset:0; background:rgba(10,16,32,0.85); backdrop-filter:blur(8px); display:flex; align-items:center; justify-content:center; z-index:100; }
+    #configPanel .box { background:#1e293b; border:1px solid #334155; border-radius:16px; padding:26px; width:420px; max-width:92vw; }
+    #configPanel h2 { color:#fff; font-size:17px; margin-bottom:6px; }
+    #configPanel p { color:#94a3b8; font-size:12.5px; margin-bottom:16px; }
+    #configPanel input { width:100%; padding:9px 12px; border-radius:9px; border:1px solid #334155; background:#0f172a; color:#e2e8f0; font-size:13px; margin-bottom:10px; outline:none; }
+    #configPanel input:focus { border-color:#3b6df0; }
+    #configPanel .btn { width:100%; padding:10px; border:none; border-radius:9px; background:linear-gradient(135deg,#2563eb,#3b6df0); color:#fff; font-size:14px; cursor:pointer; font-weight:600; }
+    #configPanel .btn:hover { filter:brightness(1.1); }
+    #configPanel .skip { background:none; border:none; color:#64748b; font-size:12px; margin-top:12px; width:100%; cursor:pointer; }
+
+    /* 记日志入口 + 设置按钮（同尺寸，可拖拽） */
+    .log-fab, .layout-fab { position:fixed; right:24px; width:42px; height:42px; border-radius:50%;
+        display:flex; align-items:center; justify-content:center;
+        box-shadow:0 4px 14px rgba(0,0,0,0.35); cursor:grab; z-index:90; border:1px solid rgba(148,163,184,0.25);
+        transition:transform 0.15s, background 0.2s, color 0.2s; touch-action:none; }
+    .log-fab { background:linear-gradient(135deg,#2563eb,#3b6df0); color:#fff; font-size:18px; bottom:116px; }
+    .log-fab:hover { transform:scale(1.08); }
+    .layout-fab { background:rgba(30,41,59,0.85); color:#94a3b8; font-size:16px; bottom:58px; }
+    .layout-fab:hover { color:#fff; transform:scale(1.08); }
+    .log-fab.dragging, .layout-fab.dragging { cursor:grabbing; box-shadow:0 8px 22px rgba(0,0,0,0.5); }
+    #logModal { position:fixed; right:24px; bottom:166px; width:340px; max-width:94vw; background:#1e293b; border:1px solid #334155;
+        border-radius:16px; padding:16px; z-index:95; box-shadow:0 16px 40px rgba(0,0,0,0.5); display:none; }
+    #logModal h3 { color:#fff; font-size:14.5px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; }
+    #logModal .close { background:none; border:none; color:#64748b; font-size:18px; cursor:pointer; }
+    #logModal select, #logModal textarea { width:100%; background:#0f172a; border:1px solid #334155; border-radius:9px; color:#e2e8f0;
+        font-size:13px; padding:8px 10px; outline:none; margin-bottom:9px; }
+    #logModal select:focus, #logModal textarea:focus { border-color:#3b6df0; }
+    #logModal textarea { min-height:90px; resize:vertical; }
+    #logModal .btn { width:100%; padding:9px; border:none; border-radius:9px; background:linear-gradient(135deg,#2563eb,#3b6df0);
+        color:#fff; font-size:13.5px; cursor:pointer; font-weight:600; }
+    #logModal .tip { font-size:11px; color:#64748b; margin-top:7px; text-align:center; }
+
+    /* 布局设置（缩放 / 左侧避让图标区 / 背景颜色） */
+    body { transition:none; }
+    #layoutPanel { position:fixed; top:70px; right:24px; width:300px; background:rgba(15,23,42,0.92); border:1px solid #334155;
+        border-radius:14px; padding:16px; z-index:95; box-shadow:0 16px 40px rgba(0,0,0,0.5); display:none; backdrop-filter:blur(8px); }
+    #layoutPanel h3 { color:#fff; font-size:14px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; }
+    #layoutPanel .close { background:none; border:none; color:#64748b; font-size:16px; cursor:pointer; }
+    #layoutPanel .row { margin-bottom:14px; }
+    #layoutPanel .row label { display:flex; justify-content:space-between; font-size:12px; color:#94a3b8; margin-bottom:5px; }
+    #layoutPanel .row label b { color:#e2e8f0; font-weight:600; }
+    #layoutPanel input[type="range"] { width:100%; accent-color:#3b6df0; cursor:pointer; }
+    #layoutPanel .reset { width:100%; padding:7px; border:none; border-radius:8px; background:#334155; color:#e2e8f0; font-size:12px; cursor:pointer; }
+    #layoutPanel .reset:hover { background:#475569; }
+    #layoutPanel .hint { font-size:10.5px; color:#475569; margin-top:10px; line-height:1.5; }
+    /* 背景色预设 */
+    .bg-swatches { display:flex; gap:8px; margin-bottom:8px; flex-wrap:wrap; }
+    .bg-swatches .sw { width:30px; height:30px; border-radius:8px; cursor:pointer; border:2px solid transparent; transition:border 0.15s; }
+    .bg-swatches .sw:hover { transform:scale(1.12); }
+    .bg-swatches .sw.active { border-color:#fff; }
+    #bgOpacity { width:100%; accent-color:#3b6df0; cursor:pointer; }
+    #bgOpacityVal { color:#e2e8f0; }
+    /* 壁纸模式：窗口置底全屏，body 透明，仅面板/控件可交互；
+       空白处鼠标事件直接穿透到桌面图标/文件。
+       左侧避让通过 body padding-left 实现，透明空白区仍保持穿透。 */
+    body.widget { pointer-events:none; background:transparent !important; }
+    body.widget #bgLayer { display:none; }
+    body.widget .panel, body.widget .log-fab, body.widget .layout-fab,
+    body.widget #logModal, body.widget #configPanel, body.widget #layoutPanel, body.widget #todoDetailModal,
+    body.widget .todo-tooltip { pointer-events:auto; }
+    /* v3：壁纸模式下隐藏占满屏幕宽度的顶栏/底栏，只保留三块面板和浮动按钮，
+       避免大灰底被 SetWindowRgn 裁出来后像"抠图"。 */
+    body.widget .top, body.widget .bottom { display:none; }
+    body.widget .panel { backdrop-filter:blur(16px); }
+    body.widget { padding-top:26px; padding-bottom:22px; }
+</style>
+</head>
+<body>
+    <div id="bgLayer"></div>
+
+    <!-- 首次使用配置 Supabase -->
+    <div id="configPanel" style="display:none;">
+        <div class="box">
+            <h2>🔗 连接数据源 <button class="close" onclick="skipCfg()" style="float:right;background:none;border:none;color:#64748b;font-size:18px;cursor:pointer;">✕</button></h2>
+            <p>桌面概览版从 Supabase 读取数据，请填入与主工作台相同的配置（首次填一次，自动记忆）。</p>
+            <input id="cfgUrl" placeholder="Supabase URL，如 https://xxx.supabase.co">
+            <input id="cfgKey" placeholder="anon public key">
+            <div id="cfgError" style="display:none;color:#f87171;font-size:12px;margin-bottom:10px;background:rgba(248,113,113,0.1);padding:8px 10px;border-radius:8px;"></div>
+            <button class="btn" onclick="saveCfg()">✅ 连接并加载</button>
+            <button class="skip" onclick="skipCfg()">暂不连接，仅看示例</button>
+        </div>
+    </div>
+
+    <div class="top">
+        <div class="date-block">
+            <div class="time" id="timeNow">--:--</div>
+            <div>
+                <div class="date" id="dateNow">----年--月--日 星期-</div>
+                <div class="greet" id="greet">你好，今天也要加油</div>
+            </div>
+        </div>
+        <div class="sync-status"><span class="dot" id="syncDot"></span><span id="syncText">连接中...</span><span class="close-app" onclick="closeApp()" title="退出工作台">✕</span></div>
+    </div>
+
+    <div class="cols">
+        <div class="panel">
+            <h3>📅 本月安排 <span class="cnt" id="calCount"></span></h3>
+            <div class="cal-wrap">
+                <table class="cal"><thead><tr><th>一</th><th>二</th><th>三</th><th>四</th><th>五</th><th>六</th><th>日</th></tr></thead><tbody id="calBody"></tbody></table>
+            </div>
+            <div class="day-tasks" id="dayTasks">
+                <div class="dt-head">📋 <b id="dtDate">今天</b> 的任务</div>
+                <div class="dt-list" id="dtList"></div>
+            </div>
+        </div>
+        <div class="panel">
+            <h3>✅ 今日待办 <span class="cnt" id="todoCount"></span></h3>
+            <div class="todo-list" id="todoList"></div>
+        </div>
+        <div class="panel">
+            <h3>🚀 项目进度 <span class="cnt" id="projCount"></span></h3>
+            <div class="proj-list" id="projList"></div>
+        </div>
+    </div>
+
+    <div class="bottom">
+        <div class="stats" id="statsLine"></div>
+        <div class="hint" id="wallpaperHint">💡 提示：当前为壁纸模式，窗口默认置底；点击空白处可与桌面图标/文件交互</div>
+    </div>
+
+    <!-- 布局设置面板 -->
+    <button class="layout-fab" id="layoutFab" title="调整显示比例、位置与背景">⚙️</button>
+    <div id="layoutPanel">
+        <h3>⚙️ 显示布局 <button class="close" onclick="toggleLayoutPanel(false)">✕</button></h3>
+        <div class="row">
+            <label>整体缩放 <b id="scaleVal">100%</b></label>
+            <input type="range" id="scaleRange" min="50" max="130" value="100" oninput="updateLayout()">
+        </div>
+        <div class="row">
+            <label>左侧避让图标区 <b id="leftVal">280px</b></label>
+            <input type="range" id="leftRange" min="0" max="700" value="280" oninput="updateLayout()">
+        </div>
+        <div class="row">
+            <label>背景颜色</label>
+            <div class="bg-swatches" id="bgSwatches"></div>
+            <label style="margin-top:6px;">自定义颜色 <input type="color" id="bgCustom" value="#0f172a" onchange="setBgColor(this.value)" style="width:100%;height:30px;border:none;background:none;cursor:pointer;padding:0;"></label>
+            <label style="margin-top:8px;">背景色不透明度 <b id="bgOpacityVal">100%</b></label>
+            <input type="range" id="bgOpacity" min="20" max="100" value="100" oninput="updateLayout()">
+        </div>
+        <div class="row">
+            <label>背景图片</label>
+            <input type="file" id="bgImage" accept="image/*" onchange="setBgImage(this)" style="width:100%;font-size:12px;color:#e2e8f0;cursor:pointer;">
+            <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
+                <button class="reset" style="width:auto;flex-shrink:0;" onclick="clearBgImage()">清除图片</button>
+                <span id="bgImageName" style="font-size:11px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">未选择</span>
+            </div>
+        </div>
+        <div class="row">
+            <label>卡片透明度 <b id="panelOpacityVal">100%</b></label>
+            <input type="range" id="panelOpacity" min="10" max="100" value="100" oninput="updateLayout()">
+        </div>
+        <button class="reset" onclick="resetLayout()">↺ 恢复默认（缩放100% · 避让280px · 深蓝底）</button>
+        <button class="reset" style="margin-top:8px;background:#1e3a5f;color:#fff;" onclick="openCfgPanel()">🔗 重新配置数据源</button>
+        <div class="hint">调整即时生效并自动记忆。<br>当前为壁纸模式：窗口默认置底，空白处可直接点击桌面图标/文件。<br>📝 与 ⚙️ 两个按钮在壁纸模式下不可拖动，仅保留点击。<br>若 API Key 填错，点上方"重新配置数据源"即可修改。</div>
+    </div>
+
+    <!-- 记日志入口（始终显示；未连接数据源时点击会引导配置） -->
+    <button class="log-fab" id="logFab" title="记录工作日志">📝</button>
+    <div id="logModal">
+        <h3>📝 记一条工作日志 <button class="close" onclick="closeLogModal()">✕</button></h3>
+        <select id="logProj"><option value="">通用（不关联项目）</option></select>
+        <textarea id="logContent" placeholder="记录此刻的工作内容…（Ctrl+Enter 提交）"></textarea>
+        <button class="btn" onclick="submitLog()">✅ 保存日志</button>
+        <div class="tip" id="logTip">内容自动保存草稿，不怕丢失</div>
+    </div>
+
+    <!-- 待办详情弹窗（显示完整内容，并支持切换完成状态） -->
+    <div id="todoDetailModal" style="display:none;position:fixed;right:24px;bottom:166px;width:360px;max-width:94vw;background:#1e293b;border:1px solid #334155;border-radius:16px;padding:16px;z-index:95;box-shadow:0 16px 40px rgba(0,0,0,0.5);">
+        <h3 style="color:#fff;font-size:14.5px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;"><span>📋 待办详情</span><button class="close" onclick="closeTodoDetail()" style="background:none;border:none;color:#64748b;font-size:18px;cursor:pointer;">✕</button></h3>
+        <div id="todoDetailContent" style="color:#e2e8f0;font-size:13px;line-height:1.5;margin-bottom:12px;word-break:break-word;"></div>
+        <div style="display:flex;gap:8px;">
+            <button class="btn" id="todoDetailToggle" onclick="toggleTodoDetail()" style="flex:1;padding:9px;border:none;border-radius:9px;background:linear-gradient(135deg,#2563eb,#3b6df0);color:#fff;font-size:13.5px;cursor:pointer;font-weight:600;">标记完成</button>
+            <button class="btn" onclick="closeTodoDetail()" style="flex:1;padding:9px;border:none;border-radius:9px;background:#334155;color:#e2e8f0;font-size:13.5px;cursor:pointer;">关闭</button>
+        </div>
+    </div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ============================================================
+// 桌面概览版（壁纸模式）· 只读展示：日历 / 今日待办 / 项目进度
+// 数据源：与主工作台共享 localStorage 的 supabase_config
+// ============================================================
+let sb = null;
+let data = { projects: [], tasks: [], templates: [] };
+const CACHE_KEY = 'dashboard_cache_v1';
+
+function $(id) { return document.getElementById(id); }
+
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+function calcStatus(nodes) {
+    if (!nodes || !nodes.length) return 'pending';
+    const done = nodes.filter(n => n.status === 'done').length;
+    if (done === nodes.length) return 'done';
+    if (done > 0) return 'progress';
+    return 'pending';
+}
+
+function getProgress(nodes) {
+    if (!nodes || !nodes.length) return 0;
+    const done = nodes.filter(n => n.status === 'done').length;
+    return Math.round(done / nodes.length * 100);
+}
+
+function getTplName(tid) {
+    const t = data.templates.find(x => x.id === tid);
+    return t ? (t.name || tid) : (tid || '项目');
+}
+
+// ---------- 时间 ----------
+function pad(n) { return n < 10 ? '0' + n : n; }
+function tick() {
+    const now = new Date();
+    $('timeNow').textContent = pad(now.getHours()) + ':' + pad(now.getMinutes());
+    const wd = ['日','一','二','三','四','五','六'][now.getDay()];
+    $('dateNow').textContent = now.getFullYear() + '年' + (now.getMonth()+1) + '月' + now.getDate() + '日 星期' + wd;
+    const h = now.getHours();
+    $('greet').textContent = h < 6 ? '夜深了，注意休息' : h < 12 ? '早上好，开始今天的工作' : h < 14 ? '中午好' : h < 18 ? '下午好，加油' : '晚上好，复盘一下今天';
+}
+
+// ---------- 数据加载 ----------
+function getCfg() {
+    try { return JSON.parse(localStorage.getItem('supabase_config') || 'null'); } catch (e) { return null; }
+}
+
+function setSync(txt, ok) {
+    $('syncText').textContent = txt;
+    const dot = $('syncDot');
+    dot.className = 'dot' + (ok ? ' ok' : ok === false ? ' err' : '');
+}
+
+async function loadData() {
+    setSync('同步中...');
+    try {
+        const cfg = getCfg();
+        if (!cfg || !cfg.url || !cfg.anonKey) { setSync('未连接数据源', false); renderDemo(); return false; }
+        if (!sb) sb = window.supabase.createClient(cfg.url, cfg.anonKey);
+        const [tpl, proj, tasks, settings] = await Promise.all([
+            sb.from('templates').select('*'),
+            sb.from('projects').select('*'),
+            sb.from('tasks').select('*'),
+            sb.from('settings').select('*')
+        ]);
+        // 关键：检查查询错误——之前忽略了 error，失败被静默当成空数据
+        // settings 表可选（用于模板排序），失败不影响主流程
+        const qErr = [tpl.error, proj.error, tasks.error].filter(Boolean)[0];
+        if (qErr) throw new Error('查询失败: ' + (qErr.message || JSON.stringify(qErr)).slice(0, 120));
+        // 读取模板中心排序（settings.template_order）
+        const settingsData = settings.data || [];
+        const templateOrderSetting = settingsData.find(function(s) { return s.key === 'template_order'; });
+        data.templateOrder = [];
+        try {
+            const to = JSON.parse(templateOrderSetting.value);
+            if (Array.isArray(to)) data.templateOrder = to;
+        } catch (e) {}
+        // 若未设置或 settings 表不存在，退而使用 templates 返回顺序
+        if (!data.templateOrder.length && tpl.data) {
+            data.templateOrder = tpl.data.map(function(t) { return t.id; });
+        }
+        data.templates = (tpl.data || []).map(t => ({ id: t.id, name: t.name }));
+        data.projects = (proj.data || []).filter(p => p.status === 'active').map(p => ({
+            id: p.id, templateId: p.template_id, company: p.company, status: p.status,
+            tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null,
+            important: p.important || false, urgent: p.urgent || false
+        }));
+        data.tasks = (tasks.data || []).map(t => ({
+            id: t.id,
+            projectId: t.project_id || null,
+            nodeIndex: typeof t.node_index === 'number' ? t.node_index : null,
+            title: t.title,
+            dueDate: t.due_date || null,
+            completed: t.completed || false,
+            startDate: t.start_date || t.plan_date || t.due_date || null,
+            endDate: t.end_date || t.due_date || null
+        }));
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch (e) {}
+        render();
+        const hasAny = (data.projects && data.projects.length) || (data.tasks && data.tasks.length);
+        if (!hasAny) {
+            setSync('已连接，但云端暂无数据', false);
+            diagnoseCloud();
+            return false;
+        } else {
+            setSync('已同步 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false }), true);
+            return true;
+        }
+    } catch (e) {
+        console.error('加载失败', e);
+        setSync('同步失败：' + String(e.message || e).slice(0, 42), false);
+        try { const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); if (c) { data = c; render(); return false; } } catch (e2) {}
+        renderDemo();
+        return false;
+    }
+}
+
+// 无数据时展示示例数据（壁纸效果演示）
+function renderDemo() {
+    data = {
+        templates: [{ id: 't1', name: '环评报告' }, { id: 't2', name: '应急预案' }],
+        projects: [
+            { id: 'p1', templateId: 't1', company: '某化工公司', nodes: [{status:'done'},{status:'done'},{status:'progress'},{status:'pending'}] },
+            { id: 'p2', templateId: 't2', company: '某机械厂', nodes: [{status:'done'},{status:'progress'},{status:'pending'}] },
+            { id: 'p3', templateId: 't1', company: '某食品公司', nodes: [{status:'done'},{status:'done'},{status:'done'},{status:'done'}] }
+        ],
+        tasks: [
+            { id: 't1', title: '提交环评报告初稿', dueDate: new Date().toISOString().split('T')[0], completed: false },
+            { id: 't2', title: '跟进应急预案评审意见', dueDate: new Date().toISOString().split('T')[0], completed: false },
+            { id: 't3', title: '准备明天客户会议材料', dueDate: '', completed: false }
+        ]
+    };
+    render();
+}
+
+// ---------- 渲染 ----------
+function render() {
+    renderCalendar();
+    renderTodos();
+    renderProjects();
+    renderStats();
+}
+
+let _calSelected = null; // 当前选中的日期（YYYY-MM-DD），null = 今天
+
+function renderCalendar() {
+    const now = new Date();
+    const y = now.getFullYear(), m = now.getMonth();
+    const first = new Date(y, m, 1);
+    const startDow = (first.getDay() + 6) % 7; // 周一为一周起点
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const monthStart = y + '-' + pad(m + 1) + '-01';
+    const monthEnd = y + '-' + pad(m + 1) + '-' + pad(daysInMonth);
+    const todayStr = now.toISOString().split('T')[0];
+    if (!_calSelected) _calSelected = todayStr;
+    // 统计每月有任务的日期（日期格子只显示标记点，任务内容在下方列表）
+    const hasSet = {};
+    (data.tasks || []).forEach(function(t) {
+        const s = t.startDate || t.dueDate, e = t.endDate || t.dueDate || s;
+        if (!s) return;
+        const cs = s < monthStart ? monthStart : s;
+        const ce = e > monthEnd ? monthEnd : e;
+        if (cs > ce) return;
+        const d = new Date(cs);
+        const endD = new Date(ce);
+        while (d <= endD) {
+            const key = d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+            hasSet[key] = true;
+            d.setDate(d.getDate() + 1);
+        }
+    });
+    let html = '<tr>';
+    for (let i = 0; i < startDow; i++) html += '<td></td>';
+    const monthStr = y + '-' + pad(m + 1);
+    let count = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+        const ds = monthStr + '-' + pad(d);
+        const isToday = ds === todayStr;
+        const isSel = ds === _calSelected;
+        const has = !!hasSet[ds];
+        if (has) count++;
+        const cls = (isToday ? 'today' : '') + (has ? ' has' : '') + (isSel ? ' selected' : '');
+        html += `<td><span class="day ${cls}" onclick="selectCalDay('${ds}', this)">${d}</span></td>`;
+        if ((startDow + d) % 7 === 0 && d < daysInMonth) html += '</tr><tr>';
+    }
+    html += '</tr>';
+    $('calBody').innerHTML = html;
+    $('calCount').textContent = count ? count + ' 天有任务' : '本月暂无安排';
+    renderDayTasks();
+}
+
+function selectCalDay(ds, el) {
+    _calSelected = ds;
+    // 更新选中高亮
+    document.querySelectorAll('#calBody .day').forEach(function(d) { d.classList.remove('selected'); });
+    if (el) el.classList.add('selected');
+    renderDayTasks();
+}
+
+// 日历下方：显示选中日期的任务列表
+function renderDayTasks() {
+    const ds = _calSelected || new Date().toISOString().split('T')[0];
+    const d = new Date(ds);
+    const wd = ['日','一','二','三','四','五','六'][d.getDay()];
+    const label = (d.getMonth() + 1) + '月' + d.getDate() + '日 星期' + wd + (ds === new Date().toISOString().split('T')[0] ? '（今天）' : '');
+    $('dtDate').textContent = label;
+    // 收集该日期命中的任务（照搬工作台 startDate~endDate 规则）
+    const tasks = [];
+    (data.tasks || []).forEach(function(t) {
+        const s = t.startDate || t.dueDate, e = t.endDate || t.dueDate || s;
+        if (!s) return;
+        if (ds >= s && ds <= e) tasks.push(t);
+    });
+    tasks.sort(function(a, b) { return (a.completed === b.completed) ? 0 : (a.completed ? 1 : -1); });
+    if (!tasks.length) {
+        $('dtList').innerHTML = '<div class="dt-empty">当日没有任务安排</div>';
+        return;
+    }
+    $('dtList').innerHTML = tasks.map(function(t) {
+        const proj = data.projects.find(function(p) { return p.id === t.projectId; });
+        const pName = proj ? (proj.company + '-' + getTplName(proj.templateId)) : '';
+        const cls = (t.completed ? ' done' : '') + (!t.completed && t.dueDate && t.dueDate < ds ? ' over' : '');
+        return `<div class="dt-item${cls}"><span class="t">${t.completed ? '✅' : '⏳'} ${esc(t.title)}</span><span class="p">${esc(pName)}</span></div>`;
+    }).join('');
+}
+window.selectCalDay = selectCalDay;
+
+function renderTodos() {
+    const today = new Date().toISOString().split('T')[0];
+    const todos = data.tasks.filter(t => !t.completed);
+    todos.sort((a, b) => (a.dueDate || '9999') < (b.dueDate || '9999') ? -1 : 1);
+    const doneCount = data.tasks.filter(t => t.completed).length;
+    $('todoCount').textContent = todos.length + ' 项待办' + (doneCount ? ' · 已完成 ' + doneCount : '');
+    if (!todos.length) { $('todoList').innerHTML = '<div class="empty">🎉 今天没有待办，休息一下</div>'; return; }
+    $('todoList').innerHTML = todos.map(t => {
+        const due = t.dueDate || '';
+        const over = due && due < today;
+        const proj = t.projectId ? data.projects.find(p => p.id === t.projectId) : null;
+        const projTag = proj ? `<small style="margin-left:6px;padding:1px 6px;border-radius:4px;background:var(--item-bg);color:var(--txt2);font-size:11px;white-space:nowrap;">${esc(proj.company)}</small>` : '';
+        return `<div class="todo-item${t.completed ? ' done' : ''}">
+            <span class="chk" onclick="toggleTodo('${t.id}', event)"></span>
+            <span class="todo-text" onclick="showTodoDetail('${t.id}', event)" onmouseenter="showTodoTooltip('${t.id}', event)" onmouseleave="hideTodoTooltip()">${esc(t.title)}${projTag}</span>
+            <span class="due${over ? ' over' : ''}">${esc(due || '')}</span>
+        </div>`;
+    }).join('');
+}
+
+// ---------- 待办交互：完成/恢复、悬停提示、详情弹窗 ----------
+async function toggleTodo(id, ev) {
+    if (ev) ev.stopPropagation();
+    const t = data.tasks.find(x => x.id === id);
+    if (!t) return;
+    const nowCompleted = !t.completed;
+    const hasNode = t.projectId && typeof t.nodeIndex === 'number';
+    const prevEndDate = t.endDate || null;
+    // 乐观更新本地状态并立即重绘
+    t.completed = nowCompleted;
+    t.endDate = nowCompleted ? new Date().toISOString().split('T')[0] : (t.dueDate || prevEndDate);
+    // 若关联项目节点，同步更新本地节点状态（只改 nodes，不动项目生命周期 status）
+    const linkedProject = t.projectId ? data.projects.find(p => p.id === t.projectId) : null;
+    const linkedNode = linkedProject && typeof t.nodeIndex === 'number' ? linkedProject.nodes[t.nodeIndex] : null;
+    if (linkedNode) linkedNode.status = nowCompleted ? 'done' : 'progress';
+    renderTodos(); renderStats(); renderCalendar(); renderDayTasks(); renderProjects();
+    if (!sb) { showToast('未连接数据源，仅本地预览'); return; }
+    try {
+        // 1) 更新任务完成状态与结束日期，保持与主工作台字段一致
+        const today = new Date().toISOString().split('T')[0];
+        const taskUpdate = {
+            completed: nowCompleted,
+            end_date: nowCompleted ? today : (t.dueDate || t.endDate || null)
+        };
+        const { error: taskErr } = await sb.from('tasks').update(taskUpdate).eq('id', id);
+        if (taskErr) throw taskErr;
+        // 同步本地结束日期，避免后续加载时显示不一致
+        t.endDate = taskUpdate.end_date;
+        // 2) 若有关联项目节点，同步更新 projects.nodes（不影响工作台项目生命周期 status）
+        if (hasNode) {
+            let targetNodes;
+            if (linkedProject) {
+                targetNodes = linkedProject.nodes;
+            } else {
+                // 本地未加载（如已归档/搁置项目）：从云端取最新 nodes 再局部更新
+                const { data: pj, error: pjErr } = await sb.from('projects').select('nodes').eq('id', t.projectId).single();
+                if (pjErr) throw pjErr;
+                targetNodes = (pj && pj.nodes) ? pj.nodes : [];
+            }
+            const node = targetNodes[t.nodeIndex];
+            if (node) {
+                node.status = nowCompleted ? 'done' : 'progress';
+                const { error: projErr } = await sb.from('projects').update({ nodes: targetNodes }).eq('id', t.projectId);
+                if (projErr) throw projErr;
+            }
+        }
+        setSync('已更新 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false }), true);
+        showToast(nowCompleted ? '✅ 已完成' : '↩️ 已恢复待办');
+        try { localStorage.setItem(CACHE_KEY, JSON.stringify(data)); } catch (e) {}
+    } catch (e) {
+        console.error('更新任务失败', e);
+        // 失败回滚
+        t.completed = !nowCompleted;
+        t.endDate = prevEndDate;
+        if (linkedNode) linkedNode.status = !nowCompleted ? 'done' : 'progress';
+        renderTodos(); renderStats(); renderCalendar(); renderDayTasks(); renderProjects();
+        showToast('同步失败：' + String(e.message || e).slice(0, 40));
+    }
+}
+window.toggleTodo = toggleTodo;
+
+let _todoDetailId = null;
+function showTodoDetail(id, ev) {
+    if (ev) ev.stopPropagation();
+    const t = data.tasks.find(x => x.id === id);
+    if (!t) return;
+    _todoDetailId = id;
+    const proj = data.projects.find(p => p.id === t.projectId);
+    const projName = proj ? (proj.company + '-' + getTplName(proj.templateId)) : '通用';
+    const due = t.dueDate || '无截止日期';
+    $('todoDetailContent').innerHTML =
+        '<div style="margin-bottom:8px;"><b style="color:#94a3b8;">内容：</b>' + esc(t.title) + '</div>' +
+        '<div style="margin-bottom:8px;"><b style="color:#94a3b8;">截止：</b>' + esc(due) + '</div>' +
+        '<div style="margin-bottom:8px;"><b style="color:#94a3b8;">项目：</b>' + esc(projName) + '</div>' +
+        '<div><b style="color:#94a3b8;">状态：</b>' + (t.completed ? '已完成' : '待办') + '</div>';
+    $('todoDetailToggle').textContent = t.completed ? '↩️ 恢复为待办' : '✅ 标记完成';
+    $('todoDetailModal').style.display = 'block';
+}
+function closeTodoDetail() { $('todoDetailModal').style.display = 'none'; _todoDetailId = null; }
+function toggleTodoDetail() { if (_todoDetailId) toggleTodo(_todoDetailId); closeTodoDetail(); }
+window.showTodoDetail = showTodoDetail;
+window.closeTodoDetail = closeTodoDetail;
+window.toggleTodoDetail = toggleTodoDetail;
+
+function showTodoTooltip(id, ev) {
+    const t = data.tasks.find(x => x.id === id);
+    if (!t || !t.title) return;
+    let tp = document.getElementById('todoTooltip');
+    if (!tp) {
+        tp = document.createElement('div');
+        tp.id = 'todoTooltip';
+        tp.className = 'todo-tooltip';
+        document.body.appendChild(tp);
+    }
+    const proj = t.projectId ? data.projects.find(p => p.id === t.projectId) : null;
+    const projName = proj ? (proj.company + '-' + getTplName(proj.templateId)) : '';
+    tp.textContent = (projName ? '【' + projName + '】\n' : '') + t.title;
+    const rect = (ev && ev.target) ? ev.target.getBoundingClientRect() : { left: 0, bottom: 0 };
+    tp.style.left = Math.max(8, Math.min(rect.left, window.innerWidth - 340)) + 'px';
+    tp.style.top = (rect.bottom + 6) + 'px';
+    tp.style.opacity = '1';
+}
+function hideTodoTooltip() {
+    const tp = document.getElementById('todoTooltip');
+    if (tp) tp.style.opacity = '0';
+}
+window.showTodoTooltip = showTodoTooltip;
+window.hideTodoTooltip = hideTodoTooltip;
+
+function priorityWeight(p) {
+    if (!p) return -1;
+    // 重要且紧急 > 重要 > 紧急 > 普通
+    if (p.important && p.urgent) return 3;
+    if (p.important) return 2;
+    if (p.urgent) return 1;
+    return 0;
+}
+function renderPriorityTag(p) {
+    if (!p) return '';
+    if (p.important && p.urgent) return '<span class="priority-tag both" title="重要且紧急">🔥</span>';
+    if (p.important) return '<span class="priority-tag imp" title="重要">⭐</span>';
+    if (p.urgent) return '<span class="priority-tag urg" title="紧急">⚡</span>';
+    return '';
+}
+function sortProjectsDashboard(list) {
+    const order = data.templateOrder || [];
+    const idxOf = function(id) {
+        const i = order.indexOf(id);
+        return i === -1 ? Infinity : i;
+    };
+    return list.slice().sort(function(a, b) {
+        const pa = priorityWeight(a), pb = priorityWeight(b);
+        if (pa !== pb) return pb - pa; // 重要/紧急优先
+        const ia = idxOf(a.templateId), ib = idxOf(b.templateId);
+        if (ia !== ib) return ia - ib; // 按工作台模板中心顺序
+        return (a.company || '').localeCompare(b.company || '', 'zh-CN'); // 同模板按公司名稳定排序
+    });
+}
+function renderProjects() {
+    const all = data.projects.filter(function(p) { return calcStatus(p.nodes) !== 'done'; });
+    const sorted = sortProjectsDashboard(all);
+    const prog = sorted.filter(function(p) { return calcStatus(p.nodes) === 'progress'; });
+    const pend = sorted.filter(function(p) { return calcStatus(p.nodes) === 'pending'; });
+    const doneCount = data.projects.filter(function(p) { return calcStatus(p.nodes) === 'done'; }).length;
+    const cntParts = [];
+    if (prog.length) cntParts.push(prog.length + ' 进行中');
+    if (pend.length) cntParts.push(pend.length + ' 未开始');
+    if (doneCount) cntParts.push('已完成 ' + doneCount);
+    $('projCount').textContent = cntParts.join(' · ');
+    if (!all.length) { $('projList').innerHTML = '<div class="empty">暂无未完成项目</div>'; return; }
+    $('projList').innerHTML = prog.concat(pend).slice(0, 15).map(function(p) {
+        const pct = getProgress(p.nodes);
+        const st = calcStatus(p.nodes);
+        const tag = st === 'progress'
+            ? '<span class="st-tag prog">进行中</span>'
+            : '<span class="st-tag pend">未开始</span>';
+        const priTag = renderPriorityTag(p);
+        return `<div class="proj-item ${st}">
+            <div class="row1">
+                <span class="name">${esc(getTplName(p.templateId))}</span>
+                ${priTag}
+                <span class="company">${esc(p.company)}</span>
+                ${tag}
+                <span class="pct">${pct}%</span>
+            </div>
+            <div class="bar"><i style="width:${pct}%"></i></div>
+        </div>`;
+    }).join('');
+}
+
+function renderStats() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const done = data.projects.filter(p => calcStatus(p.nodes) === 'done' && p.doneDate);
+    const thisMonth = done.filter(p => { const d = new Date(p.doneDate); return d.getFullYear() === y && d.getMonth() === now.getMonth(); }).length;
+    const thisYear = done.filter(p => new Date(p.doneDate).getFullYear() === y).length;
+    const activeN = data.projects.filter(p => calcStatus(p.nodes) === 'progress').length;
+    $('statsLine').innerHTML = `本月完成 <b>${thisMonth}</b> 个 · 本年完成 <b>${thisYear}</b> 个 · 进行中 <b>${activeN}</b> 个 · 待办 <b>${data.tasks.filter(t=>!t.completed).length}</b> 项`;
+}
+
+// ---------- 配置 ----------
+function canUsePyApi() { return typeof window.pywebview !== 'undefined' && window.pywebview && window.pywebview.api; }
+function raiseForInput() {
+    // 壁纸模式下窗口置底且不激活，input 无法获得焦点；打开配置面板时临时提升窗口
+    if (WIDGET && canUsePyApi()) window.pywebview.api.raise_window();
+}
+function restoreBottom() {
+    if (WIDGET && canUsePyApi()) window.pywebview.api.send_to_bottom();
+}
+function closeApp() {
+    if (canUsePyApi() && window.pywebview.api.exit_app) window.pywebview.api.exit_app();
+    else window.close();
+}
+function openCfgPanel() {
+    const cfg = getCfg();
+    if (cfg && cfg.url) $('cfgUrl').value = cfg.url;
+    if (cfg && cfg.anonKey) $('cfgKey').value = cfg.anonKey;
+    $('cfgError').style.display = 'none';
+    $('cfgError').textContent = '';
+    // 直接隐藏设置面板，避免 toggleLayoutPanel 先退出输入模式再重新进入的闪烁
+    document.getElementById('layoutPanel').style.display = 'none';
+    $('configPanel').style.display = 'flex';
+    raiseForInput();
+}
+async function saveCfg() {
+    const errEl = $('cfgError');
+    errEl.style.display = 'none';
+    errEl.textContent = '';
+    const url = $('cfgUrl').value.trim();
+    const key = $('cfgKey').value.trim();
+    if (!url || !key) { errEl.textContent = '请填写完整的 URL 和 Key'; errEl.style.display = 'block'; return; }
+    if (!/^https?:\/\//.test(url)) { errEl.textContent = 'URL 需以 http:// 或 https:// 开头'; errEl.style.display = 'block'; return; }
+
+    const btn = document.querySelector('#configPanel .btn');
+    const oldText = btn.textContent;
+    btn.textContent = '⏳ 连接中…';
+    btn.disabled = true;
+    try {
+        localStorage.setItem('supabase_config', JSON.stringify({ url, anonKey: key }));
+        sb = null;
+        const ok = await loadData();
+        if (ok) {
+            $('configPanel').style.display = 'none';
+            restoreBottom();
+            showToast('✅ 已连接并加载数据');
+        } else {
+            // 加载报错但配置已保存，保持面板打开显示状态文本
+            errEl.textContent = '配置已保存，但加载数据失败：' + $('syncText').textContent + '。请检查 URL/Key 或网络。';
+            errEl.style.display = 'block';
+        }
+    } catch (e) {
+        console.error('saveCfg 异常', e);
+        errEl.textContent = '连接异常：' + String(e.message || e).slice(0, 120);
+        errEl.style.display = 'block';
+    } finally {
+        btn.textContent = oldText;
+        btn.disabled = false;
+    }
+}
+function skipCfg() {
+    $('configPanel').style.display = 'none';
+    setSync('未连接（示例数据）', false);
+    renderDemo();
+    restoreBottom();
+}
+window.saveCfg = saveCfg;
+window.skipCfg = skipCfg;
+window.openCfgPanel = openCfgPanel;
+window.closeApp = closeApp;
+
+// ---------- 布局调整（缩放 / 左侧避让 / 背景颜色 / 按钮拖拽记忆） ----------
+const LAYOUT_KEY = 'dashboard_layout';
+const BG_PRESETS = [
+    { name: '深蓝', color: '#0f172a' },
+    { name: '纯黑', color: '#000000' },
+    { name: '墨绿', color: '#0b1f1a' },
+    { name: '酒红', color: '#2a1215' },
+    { name: '深灰', color: '#111827' }
+];
+let layout = { scale: 100, left: 280, bg: '#0f172a', opacity: 100, fabPos: {}, panelOpacity: 100, bgImage: null, bgImageName: null };
+try { Object.assign(layout, JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}')); } catch (e) {}
+if (!layout.fabPos || typeof layout.fabPos !== 'object') layout.fabPos = {};
+// URL 参数可覆盖：?scale=85&left=300
+(function() {
+    const p = new URLSearchParams(location.search);
+    if (p.get('scale')) layout.scale = Math.min(130, Math.max(50, parseInt(p.get('scale')) || 100));
+    if (p.get('left') !== null) layout.left = Math.min(700, Math.max(0, parseInt(p.get('left')) || 0));
+})();
+// 透明置顶窗口模式：?widget=1 或 launcher 注入 window.__WIDGET__ = true 或存在 window.pywebview 时启用
+let WIDGET = (window.__WIDGET__ === true) || (typeof window.pywebview !== 'undefined') || new URLSearchParams(location.search).get('widget') === '1';
+const WALLPAPER_VER = '4.0.0';
+window.WALLPAPER_VER = WALLPAPER_VER;
+function updateWallpaperHint() {
+    const el = document.getElementById('wallpaperHint');
+    if (!el) return;
+    if (WIDGET) {
+        el.textContent = '💡 壁纸看板 v' + WALLPAPER_VER + ' · 已置底常驻；空白处点穿到桌面；按 F8 切回普通窗口';
+    } else {
+        el.textContent = '💡 提示：用 Lively Wallpaper / 浏览器「创建快捷方式」可将其固定为桌面壁纸常驻显示';
+    }
+}
+function enableWidgetMode() {
+    if (!document.body.classList.contains('widget')) {
+        WIDGET = true;
+        document.body.classList.add('widget');
+        applyLayout();
+        updateWallpaperHint();
+    }
+}
+if (WIDGET) document.body.classList.add('widget');
+updateWallpaperHint();
+// pywebview 注入时机可能略晚于脚本执行，监听就绪事件补激活
+window.addEventListener('pywebviewready', enableWidgetMode);
+
+// ===== 壁纸看板 v4：点击穿透区域采集 + 去抖请求 =====
+// v4 修复：不再按元素逐个挖洞，而是把所有可交互元素合并成一个整体包围盒。
+// 这样可消除：右侧按钮被裁、拖动后区域错位、面板之间/边缘出现锯齿或"抠图"感。
+// 顶栏/底栏在壁纸模式下已隐藏，不产生大块灰底。
+window.__getInteractiveRects = function () {
+    var sel = '.panel, .log-fab, .layout-fab, #logModal, #configPanel, #layoutPanel, #todoDetailModal, .todo-tooltip';
+    var els = document.querySelectorAll(sel);
+    var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    var has = false;
+    for (var i = 0; i < els.length; i++) {
+        var el = els[i];
+        var cs = getComputedStyle(el);
+        if (cs.display === 'none' || cs.visibility === 'hidden' || el.offsetWidth === 0 || el.offsetHeight === 0) continue;
+        var r = el.getBoundingClientRect();
+        if (r.width < 1 || r.height < 1) continue;
+        has = true;
+        minX = Math.min(minX, r.left);
+        minY = Math.min(minY, r.top);
+        maxX = Math.max(maxX, r.right);
+        maxY = Math.max(maxY, r.bottom);
+    }
+    if (!has) return { dpr: window.devicePixelRatio || 1, rects: [] };
+    // 留少量内边距，避免边框/阴影/缩放导致边缘被裁；同时限制在视口内，防止贴边元素溢出窗口。
+    var pad = 4;
+    minX = Math.max(0, minX - pad);
+    minY = Math.max(0, minY - pad);
+    maxX = Math.min(window.innerWidth, maxX + pad);
+    maxY = Math.min(window.innerHeight, maxY + pad);
+    return {
+        dpr: window.devicePixelRatio || 1,
+        rects: [{ x: minX, y: minY, w: maxX - minX, h: maxY - minY }]
+    };
+};
+
+// 向启动器请求重新计算点击穿透区域（去抖 250ms），避免连续拖动左侧避让滑块时卡顿
+var __regionTimer = null;
+window.__requestRegionUpdate = function () {
+    if (!WIDGET || !window.pywebview || !window.pywebview.api || !window.pywebview.api.request_regions) return;
+    if (__regionTimer) clearTimeout(__regionTimer);
+    __regionTimer = setTimeout(function () {
+        try { window.pywebview.api.request_regions(); } catch (e) {}
+    }, 250);
+};
+
+// F8：在壁纸模式 / 普通窗口之间切换（启动器也装了全局热键，双保险）
+document.addEventListener('keydown', function (e) {
+    if (e.key === 'F8') {
+        e.preventDefault();
+        if (window.pywebview && window.pywebview.api && window.pywebview.api.toggle_wallpaper_mode) {
+            window.pywebview.api.toggle_wallpaper_mode();
+        }
+    }
+});
+
+function hexToRgba(hex, a) {
+    hex = (hex || '#0f172a').replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(function(c) { return c + c; }).join('');
+    const n = parseInt(hex, 16);
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+function shadeColor(hex, amt) {
+    hex = (hex || '#0f172a').replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(function(c) { return c + c; }).join('');
+    let r = parseInt(hex.substring(0, 2), 16),
+        g = parseInt(hex.substring(2, 4), 16),
+        b = parseInt(hex.substring(4, 6), 16);
+    r = Math.min(255, r + amt); g = Math.min(255, g + amt); b = Math.min(255, b + amt);
+    return '#' + [r, g, b].map(function(x) { return x.toString(16).padStart(2, '0'); }).join('');
+}
+
+function isLightColor(hex) {
+    hex = (hex || '#0f172a').replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(function(c) { return c + c; }).join('');
+    const r = parseInt(hex.substring(0, 2), 16),
+        g = parseInt(hex.substring(2, 4), 16),
+        b = parseInt(hex.substring(4, 6), 16);
+    return (0.299 * r + 0.587 * g + 0.114 * b) > 150;
+}
+
+function applyLayout() {
+    document.body.style.zoom = (layout.scale / 100);
+    // 左侧避让图标区：壁纸模式下由 body padding-left 整体右移内容，
+    // 左侧透明空白区仍保持 pointer-events:none，可穿透点击桌面图标。
+    document.body.style.paddingLeft = ((34 + layout.left) + 'px');
+    const o = (layout.opacity || 100) / 100;
+    // 背景图片层
+    const bgLayer = document.getElementById('bgLayer');
+    if (bgLayer) {
+        bgLayer.style.backgroundImage = layout.bgImage ? 'url(' + layout.bgImage + ')' : 'none';
+    }
+    if (WIDGET) {
+        document.body.style.background = 'transparent';
+    } else {
+        document.body.style.background = 'linear-gradient(135deg,' + hexToRgba(layout.bg, o) + ' 0%,' +
+            hexToRgba(shadeColor(layout.bg, 15), o) + ' 55%,' + hexToRgba(layout.bg, o) + ' 100%)';
+    }
+    // 根据背景亮度切换深浅主题，让卡片/文字与背景协调
+    const light = isLightColor(layout.bg);
+    const rs = document.documentElement.style;
+    const po = (layout.panelOpacity || 100) / 100;
+    if (light) {
+        rs.setProperty('--txt', '#1e293b');
+        rs.setProperty('--txt2', '#475569');
+        rs.setProperty('--txt3', '#64748b');
+        rs.setProperty('--panel-bg', hexToRgba('#ffffff', 0.72 * po));
+        rs.setProperty('--panel-border', 'rgba(30,41,59,0.15)');
+        rs.setProperty('--item-bg', hexToRgba('#1e293b', 0.07 * po));
+        rs.setProperty('--bar-bg', 'rgba(30,41,59,0.12)');
+        rs.setProperty('--accent', '#b45309');
+        rs.setProperty('--dt-border', 'rgba(30,41,59,0.15)');
+    } else {
+        rs.setProperty('--txt', '#e2e8f0');
+        rs.setProperty('--txt2', '#94a3b8');
+        rs.setProperty('--txt3', '#64748b');
+        rs.setProperty('--panel-bg', hexToRgba('#1e293b', 0.55 * po));
+        rs.setProperty('--panel-border', 'rgba(148,163,184,0.12)');
+        rs.setProperty('--item-bg', hexToRgba('#0f172a', 0.35 * po));
+        rs.setProperty('--bar-bg', '#1e293b');
+        rs.setProperty('--accent', '#fbbf24');
+        rs.setProperty('--dt-border', 'rgba(148,163,184,0.15)');
+    }
+    // 应用按钮记忆位置
+    ['logFab', 'layoutFab'].forEach(function(id) {
+        const el = document.getElementById(id);
+        const pos = layout.fabPos[id];
+        if (el) {
+            if (pos && pos.right !== undefined) {
+                el.style.left = 'auto'; el.style.top = 'auto';
+                el.style.right = pos.right + 'px'; el.style.bottom = pos.bottom + 'px';
+            } else {
+                el.style.right = ''; el.style.bottom = ''; el.style.left = ''; el.style.top = '';
+            }
+        }
+    });
+    try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch (e) {}
+    // 壁纸模式下布局改变后通知启动器更新镂空区域
+    __requestRegionUpdate();
+}
+applyLayout();
+
+function syncLayoutUI() {
+    const s = document.getElementById('scaleRange');
+    const l = document.getElementById('leftRange');
+    const op = document.getElementById('bgOpacity');
+    const po = document.getElementById('panelOpacity');
+    if (s) { s.value = layout.scale; document.getElementById('scaleVal').textContent = layout.scale + '%'; }
+    if (l) { l.value = layout.left; document.getElementById('leftVal').textContent = layout.left + 'px'; }
+    if (op) { op.value = layout.opacity; document.getElementById('bgOpacityVal').textContent = layout.opacity + '%'; }
+    if (po) { po.value = layout.panelOpacity || 100; document.getElementById('panelOpacityVal').textContent = (layout.panelOpacity || 100) + '%'; }
+    const sw = document.getElementById('bgSwatches');
+    if (sw) {
+        sw.innerHTML = BG_PRESETS.map(function(p) {
+            return '<span class="sw ' + (layout.bg === p.color ? 'active' : '') + '" style="background:' + p.color +
+                ';" title="' + p.name + '" onclick="setBgColor(\'' + p.color + '\')"></span>';
+        }).join('');
+    }
+    const bc = document.getElementById('bgCustom');
+    if (bc) bc.value = /^#[0-9a-fA-F]{6}$/.test(layout.bg) ? layout.bg : '#0f172a';
+    const imgName = document.getElementById('bgImageName');
+    if (imgName) imgName.textContent = layout.bgImageName || '未选择';
+    const bgInput = document.getElementById('bgImage');
+    if (bgInput) bgInput.value = '';
+}
+
+function updateLayout() {
+    layout.scale = parseInt(document.getElementById('scaleRange').value);
+    layout.left = parseInt(document.getElementById('leftRange').value);
+    layout.opacity = parseInt(document.getElementById('bgOpacity').value);
+    layout.panelOpacity = parseInt(document.getElementById('panelOpacity').value);
+    document.getElementById('scaleVal').textContent = layout.scale + '%';
+    document.getElementById('leftVal').textContent = layout.left + 'px';
+    document.getElementById('bgOpacityVal').textContent = layout.opacity + '%';
+    document.getElementById('panelOpacityVal').textContent = layout.panelOpacity + '%';
+    applyLayout();
+}
+
+function setBgColor(color) {
+    layout.bg = color;
+    syncLayoutUI();
+    applyLayout();
+}
+
+function toggleLayoutPanel(force) {
+    const p = document.getElementById('layoutPanel');
+    const show = force === undefined ? (p.style.display !== 'block') : force;
+    p.style.display = show ? 'block' : 'none';
+    if (show) syncLayoutUI();
+    // 壁纸模式下打开设置面板需要临时切为普通窗口，否则面板在桌面图标下方无法点击/关闭
+    if (WIDGET && canUsePyApi()) {
+        if (show) window.pywebview.api.enter_input_mode();
+        else window.pywebview.api.exit_input_mode();
+    }
+    __requestRegionUpdate();
+}
+
+function resetLayout() {
+    layout = { scale: 100, left: 280, bg: '#0f172a', opacity: 100, fabPos: layout.fabPos || {}, panelOpacity: 100, bgImage: null, bgImageName: null };
+    applyLayout();
+    syncLayoutUI();
+}
+
+function setBgImage(input) {
+    const file = input.files[0];
+    if (!file) return;
+    if (file.size > 3 * 1024 * 1024) { alert('图片过大（超过 3MB），请选择更小的图片或压缩后再试'); input.value = ''; return; }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        layout.bgImage = e.target.result;
+        layout.bgImageName = file.name;
+        applyLayout();
+        syncLayoutUI();
+        showToast('✅ 背景图片已应用');
+    };
+    reader.onerror = function() { showToast('读取图片失败'); };
+    reader.readAsDataURL(file);
+}
+function clearBgImage() {
+    layout.bgImage = null;
+    layout.bgImageName = null;
+    applyLayout();
+    syncLayoutUI();
+    showToast('已恢复纯色背景');
+}
+
+// ---------- 按钮拖拽（📝 与 ⚙️，位置自动记忆） ----------
+// 小部件模式下按钮不可拖动，避免和窗口拖动混淆；壁纸/Lively 模式下仍可拖动
+function makeDraggable(id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (WIDGET) {
+        el.style.cursor = 'pointer';
+        return;  // widget 模式下只响应点击
+    }
+    el._moved = false;
+    let startX = 0, startY = 0, origRight = 0, origBottom = 0, dragging = false;
+    el.addEventListener('pointerdown', function(e) {
+        dragging = true; el._moved = false;
+        startX = e.clientX; startY = e.clientY;
+        const r = el.getBoundingClientRect();
+        origRight = window.innerWidth - r.right;
+        origBottom = window.innerHeight - r.bottom;
+        try { el.setPointerCapture(e.pointerId); } catch (err) {}
+        el.classList.add('dragging');
+    });
+    el.addEventListener('pointermove', function(e) {
+        if (!dragging) return;
+        const dx = e.clientX - startX, dy = e.clientY - startY;
+        if (Math.abs(dx) > 3 || Math.abs(dy) > 3) el._moved = true;
+        if (el._moved) {
+            el.style.left = 'auto'; el.style.top = 'auto';
+            el.style.right = Math.max(4, origRight - dx) + 'px';
+            el.style.bottom = Math.max(4, origBottom - dy) + 'px';
+        }
+    });
+    el.addEventListener('pointerup', function() {
+        if (!dragging) return;
+        dragging = false;
+        el.classList.remove('dragging');
+        if (el._moved) {
+            const r = el.getBoundingClientRect();
+            layout.fabPos[id] = { right: window.innerWidth - r.right, bottom: window.innerHeight - r.bottom };
+            try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(layout)); } catch (err) {}
+            showToast('按钮位置已保存');
+        }
+    });
+}
+makeDraggable('logFab');
+makeDraggable('layoutFab');
+// 点击与拖拽区分：拖拽后抑制 click
+$('logFab').addEventListener('click', function() { if (!this._moved) openLogModal(); });
+$('layoutFab').addEventListener('click', function() { if (!this._moved) toggleLayoutPanel(); });
+
+window.setBgColor = setBgColor;
+window.toggleLayoutPanel = toggleLayoutPanel;
+window.updateLayout = updateLayout;
+window.resetLayout = resetLayout;
+window.setBgImage = setBgImage;
+window.clearBgImage = clearBgImage;
+
+// 云端数据诊断：统计各表记录数，帮助定位"已连接但无数据"的原因
+async function diagnoseCloud() {
+    try {
+        const tables = ['projects', 'tasks', 'work_logs', 'templates', 'settlements', 'settings'];
+        const parts = [];
+        for (const t of tables) {
+            try {
+                const { count, error } = await sb.from(t).select('*', { count: 'exact', head: true });
+                if (error) parts.push(t + '=err:' + String(error.message || '').slice(0, 34));
+                else parts.push(t + '=' + (count !== null ? count : 0));
+            } catch (e) { parts.push(t + '=err:' + String(e.message || e).slice(0, 34)); }
+        }
+        showToast('🔍 云端诊断：' + parts.join('  '));
+        console.log('🔍 云端诊断:', parts.join(' | '));
+    } catch (e) { console.warn('诊断失败', e); }
+}
+
+// ---------- 记日志（桌面直接填写，写入 Supabase work_logs） ----------
+const LOG_DRAFT_KEY = 'dashboard_log_draft';
+
+function openLogModal() {
+    // 未连接数据源时，引导先配置
+    if (!sb) {
+        alert('尚未连接数据源。\n请先在右上角配置 Supabase（URL + anon Key），连接后才能保存日志。');
+        const cfg = getCfg();
+        if (!cfg || !cfg.url) $('configPanel').style.display = 'flex';
+        return;
+    }
+    const sel = $('logProj');
+    if (sel.options.length <= 1) {
+        sel.innerHTML = '<option value="">通用（不关联项目）</option>' + data.projects.map(p =>
+            `<option value="${p.id}">${esc(p.company)}-${esc(getTplName(p.templateId))}</option>`).join('');
+    }
+    try {
+        const d = JSON.parse(localStorage.getItem(LOG_DRAFT_KEY) || 'null');
+        if (d && d.content) {
+            $('logContent').value = d.content;
+            if (d.proj && data.projects.some(p => p.id === d.proj)) sel.value = d.proj;
+            $('logTip').textContent = '已恢复上次草稿，继续编辑吧';
+        }
+    } catch (e) {}
+    $('logModal').style.display = 'block';
+    $('logContent').focus();
+}
+
+function closeLogModal() {
+    $('logModal').style.display = 'none';
+    // 自动保存草稿
+    const content = $('logContent').value.trim();
+    if (content) localStorage.setItem(LOG_DRAFT_KEY, JSON.stringify({ proj: $('logProj').value, content }));
+    else localStorage.removeItem(LOG_DRAFT_KEY);
+}
+
+async function submitLog() {
+    const content = $('logContent').value.trim();
+    if (!content) { alert('请填写日志内容'); return; }
+    if (!sb) { alert('未连接数据源，无法保存'); return; }
+    try {
+        const cfg = getCfg();
+        const pid = $('logProj').value || null;
+        const date = new Date().toISOString().split('T')[0];
+        // 生成本地 id（与主工作台 id_ 前缀一致）
+        const id = 'id_' + Date.now().toString(36) + Math.floor(Math.random() * 1000).toString(36);
+        const { error } = await sb.from('work_logs').insert({
+            id: id, date: date, type: 'daily', project_id: pid, content: content
+        });
+        if (error) throw error;
+        localStorage.removeItem(LOG_DRAFT_KEY);
+        $('logContent').value = '';
+        closeLogModal();
+        $('logTip').textContent = '内容自动保存草稿，不怕丢失';
+        setSync('日志已保存 ' + new Date().toLocaleTimeString('zh-CN', { hour12: false }), true);
+        showToast('✅ 日志已保存');
+    } catch (e) {
+        console.error('保存日志失败', e);
+        alert('保存失败：' + (e.message || e));
+    }
+}
+
+// 桌面悬浮提示条
+function showToast(msg) {
+    let t = document.getElementById('dashToast');
+    if (!t) {
+        t = document.createElement('div');
+        t.id = 'dashToast';
+        t.style.cssText = 'position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:#1e293b;border:1px solid #334155;color:#e2e8f0;padding:9px 18px;border-radius:10px;font-size:13px;z-index:200;box-shadow:0 8px 24px rgba(0,0,0,0.4);opacity:0;transition:opacity 0.3s;';
+        document.body.appendChild(t);
+    }
+    t.textContent = msg;
+    t.style.opacity = '1';
+    clearTimeout(t._h);
+    t._h = setTimeout(() => { t.style.opacity = '0'; }, 2200);
+}
+
+$('logContent').addEventListener('keydown', function(e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); submitLog(); } });
+window.openLogModal = openLogModal;
+window.closeLogModal = closeLogModal;
+window.submitLog = submitLog;
+
+// ---------- 启动 ----------
+async function init() {
+    tick();
+    setInterval(tick, 30000);
+    let cfg = getCfg();
+    // 若本地没有配置，尝试从启动器配置文件读取
+    if ((!cfg || !cfg.url || !cfg.anonKey) && canUsePyApi() && window.pywebview.api.get_config) {
+        try {
+            const fileCfg = await window.pywebview.api.get_config();
+            if (fileCfg && fileCfg.url && fileCfg.anonKey) {
+                localStorage.setItem('supabase_config', JSON.stringify(fileCfg));
+                cfg = fileCfg;
+                showToast('已从配置文件加载 Supabase 配置');
+            }
+        } catch (e) {
+            console.error('读取配置文件失败', e);
+        }
+    }
+    if (!cfg || !cfg.url || !cfg.anonKey) {
+        // 有缓存则先用缓存渲染，否则显示配置面板
+        try {
+            const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+            if (c && c.projects && c.projects.length) { data = c; setSync('显示缓存（未连接）', false); render(); }
+        } catch (e) {}
+        const hasData = data.projects.length > 0;
+        if (!hasData) openCfgPanel();
+    }
+    loadData();
+    setInterval(loadData, 30000);
+}
+init();
+</script>
+</body>
+</html>
