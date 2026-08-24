@@ -871,8 +871,10 @@ async function loadFromSupabase() {
                     ]);
                     if (!pjRes2.error && pjRes2.data) {
                         const allP = pjRes2.data || [];
-                        appData.projects = allP.filter(p => p.status === 'active').map(p => ({
-                            id: p.id, templateId: p.template_id, company: p.company, status: p.status,
+                        appData.projects = allP.filter(p => p.status === 'active' || p.status === 'done').map(p => ({
+                            id: p.id, templateId: p.template_id, company: p.company,
+                            // 兼容旧数据：之前 sync 会把 done 项目强制写成 active，若 done_date 存在则恢复为 done
+                            status: (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active'),
                             tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null,
                             important: p.important || false, urgent: p.urgent || false,
                             archived: false, shelved: false, terminated: false
@@ -1024,12 +1026,13 @@ async function loadFromSupabase() {
         const allProjects = projectsRes.data || [];
         console.log(`🔵 从 Supabase 获取到 ${allProjects.length} 个项目记录`);
 
-        // 分离活跃、归档、搁置、终止项目
-        let activeProjects = allProjects.filter(p => p.status === 'active').map(p => ({
+        // 分离活跃、归档、搁置、终止项目（活跃项目包含未归档的 active 和 done）
+        let activeProjects = allProjects.filter(p => p.status === 'active' || p.status === 'done').map(p => ({
             id: p.id,
             templateId: p.template_id,
             company: p.company,
-            status: p.status,
+            // 兼容旧数据：之前 sync 会把 done 项目强制写成 active，若 done_date 存在则恢复为 done
+            status: (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active'),
             tag: p.tag || '',
             nodes: p.nodes || [],
             doneDate: p.done_date || null,
@@ -1441,7 +1444,9 @@ async function syncToSupabase(createSnapshotFlag = false) {
 
         const projectsData = [];
         appData.projects.forEach(p => {
-            projectsData.push(mapProject({ ...p, status: 'active', archived_at: null, shelved_at: null,
+            // 保留项目真实完成状态；活跃项目可能是 active 或 done（已完成未归档）
+            const realStatus = (p.status === 'done' || calcStatus(p.nodes) === 'done') ? 'done' : (p.status || 'active');
+            projectsData.push(mapProject({ ...p, status: realStatus, archived_at: null, shelved_at: null,
                 terminated_at: null, reason: null }));
         });
         appData.archived.forEach(item => {
