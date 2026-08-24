@@ -3996,7 +3996,7 @@ function renderLogs(mc) {
               <button class="btn btn-primary" style="margin-top:8px;" onclick="addWorkLog()">保存日志</button>
               <div style="margin-top:16px;flex:1;overflow-y:auto;">
                 <h4 style="color:var(--primary);font-size:14px;">历史日志</h4>
-                ${appData.workLogs.slice().reverse().map(l => {
+                ${appData.workLogs.slice().sort((a, b) => b.date.localeCompare(a.date)).map(l => {
                     const projName = l.projectId ? getProjectName(l.projectId) : '无关联';
                     return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;">
                         <span>${l.date} <span style="color:var(--primary);font-weight:500;">[${projName}]</span> ${esc(l.content)}</span>
