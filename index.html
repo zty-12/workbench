@@ -1,4 +1,7 @@
 <!DOCTYPE html>
+<!-- v2-fixed (fix_project_deletion_v1): 修复 syncToSupabase 清理逻辑误删云端项目/任务的问题
+     · 在清理前增加「安全合并」步骤：先把云端有但本地没有的项目/任务合并到本地
+     · 防止本地数据过期（如 dashboard 修改了 tasks 后工作台尚未拉取）导致清理误删 -->
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -1494,6 +1497,8 @@ async function syncToSupabase(createSnapshotFlag = false) {
         let settlementsData = appData.settlements.map(mapSettlement);
 
         tasksData = tasksData.filter(t => projectIds.has(t.project_id));
+        // 过滤掉指向已不存在项目的日志，避免违反 work_logs.project_id 外键约束
+        workLogsData = workLogsData.filter(w => !w.project_id || projectIds.has(w.project_id));
         settlementsData = settlementsData.filter(s => projectIds.has(s.project_id));
 
         // 结算记录按 project_id 去重：数据库对 project_id 有唯一约束（一个项目一条结算），
@@ -1529,7 +1534,78 @@ async function syncToSupabase(createSnapshotFlag = false) {
             { key: 'template_order', value: JSON.stringify(appData.templates.map(t => t.id)) }
         ];
 
-        // 清理云端多余数据（保持原逻辑）
+        // ===== 安全合并：清理前先把云端有但本地没有的项目合并到本地 =====
+        // 防止本地数据过期（如 dashboard 修改了 tasks 后工作台尚未拉取）导致
+        // 清理逻辑误删云端中实际仍需要的项目/任务
+        try {
+            const { data: cloudProjectsFull, error: mergeFetchErr } = await supabaseClient
+                .from('projects')
+                .select('*');
+            if (!mergeFetchErr && cloudProjectsFull) {
+                const localPidSet = new Set(projectsData.map(p => p.id));
+                const missingProjects = cloudProjectsFull.filter(p => !localPidSet.has(p.id));
+                if (missingProjects.length > 0) {
+                    console.log(`🔒 [安全合并] 发现 ${missingProjects.length} 个云端项目不在本地数据中，先合并再清理...`);
+                    missingProjects.forEach(p => {
+                        const mapped = {
+                            id: p.id, templateId: p.template_id, company: p.company,
+                            status: p.status || 'active',
+                            tag: p.tag || '', nodes: p.nodes || [],
+                            doneDate: p.done_date || null,
+                            important: p.important || false, urgent: p.urgent || false
+                        };
+                        if (p.status === 'archived') {
+                            appData.archived.push({ projectData: mapped, archivedAt: p.archived_at || null });
+                        } else if (p.status === 'shelved') {
+                            appData.shelved.push({ projectData: mapped, shelvedAt: p.shelved_at || null });
+                        } else if (p.status === 'terminated') {
+                            appData.terminated.push({ projectData: mapped, terminatedAt: p.terminated_at || null, reason: p.reason || '' });
+                        } else {
+                            appData.projects.push({ ...mapped, archived: false, shelved: false, terminated: false });
+                        }
+                        // 同步加入 projectsData，避免清理逻辑误删
+                        projectsData.push(mapProject({
+                            ...mapped,
+                            archived_at: p.archived_at || null,
+                            shelved_at: p.shelved_at || null,
+                            terminated_at: p.terminated_at || null,
+                            reason: p.reason || null,
+                            created_at: p.created_at || new Date().toISOString()
+                        }));
+                    });
+                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+                    console.log(`✅ [安全合并] 已合并 ${missingProjects.length} 个云端项目到本地`);
+                }
+            }
+        } catch (err) { console.warn('⚠️ [安全合并] 项目合并异常:', err); }
+
+        // 同理：安全合并云端有但本地没有的任务
+        try {
+            const { data: cloudTasksFull, error: taskMergeErr } = await supabaseClient.from('tasks').select('*');
+            if (!taskMergeErr && cloudTasksFull) {
+                const localTidSet = new Set((appData.tasks || []).map(t => t.id).filter(Boolean));
+                const missingTasks = cloudTasksFull.filter(t => !localTidSet.has(t.id));
+                if (missingTasks.length > 0) {
+                    console.log(`🔒 [安全合并] 发现 ${missingTasks.length} 个云端任务不在本地，先合并...`);
+                    missingTasks.forEach(t => {
+                        appData.tasks.push({
+                            id: t.id, projectId: t.project_id, nodeIndex: t.node_index,
+                            title: t.title || '', dueDate: t.due_date || null,
+                            completed: t.completed || false,
+                            weekLabel: t.week_label || '', monthLabel: t.month_label || '',
+                            planDate: t.plan_date || null,
+                            startDate: t.start_date || t.plan_date || t.due_date || null,
+                            endDate: t.end_date || t.due_date || null,
+                            completedDate: t.completed_date || null
+                        });
+                    });
+                    console.log(`✅ [安全合并] 已合并 ${missingTasks.length} 个云端任务到本地`);
+                }
+            }
+        } catch (err) { console.warn('⚠️ [安全合并] 任务合并异常:', err); }
+
+        // 清理云端多余数据（仅删除本地确实不存在的项目——经过安全合并后此列表应为空，
+        // 除非本地确实没有该项目的任何记录，即用户在本地真正删除了该项目）
         try {
             const { data: cloudProjects, error: fetchError } = await supabaseClient
                 .from('projects')
@@ -1558,12 +1634,21 @@ async function syncToSupabase(createSnapshotFlag = false) {
                     await supabaseClient.from('settlements').delete().in('id', sectIds);
                     console.log(`✅ 已删除 ${sectIds.length} 个关联结算记录`);
                 }
+                const { data: logsToDelete, error: logsQueryErr } = await supabaseClient
+                    .from('work_logs')
+                    .select('id')
+                    .in('project_id', idsToDelete);
+                if (!logsQueryErr && logsToDelete && logsToDelete.length > 0) {
+                    const logIds = logsToDelete.map(w => w.id);
+                    await supabaseClient.from('work_logs').delete().in('id', logIds);
+                    console.log(`✅ 已删除 ${logIds.length} 个关联工作日志`);
+                }
                 await supabaseClient.from('projects').delete().in('id', idsToDelete);
                 console.log(`✅ 已删除 ${idsToDelete.length} 个多余项目`);
             }
         } catch (err) { console.warn('⚠️ 清理多余数据过程出错:', err); }
 
-        // ===== 清理云端多余任务（工作台删除的任务需同步删除，否则 dashboard 等入口仍会显示）=====
+        // ===== 清理云端多余任务（经过安全合并后此列表应为空，除非用户在本地真正删除了任务）=====
         try {
             const localTaskIds = new Set((appData.tasks || []).map(t => t.id).filter(Boolean));
             const { data: cloudTasks, error: tasksFetchErr } = await supabaseClient.from('tasks').select('id');
@@ -2432,9 +2517,19 @@ function renderHome(mc) {
         function completeAllNodes(pid) {
             const p = appData.projects.find(pr => pr.id === pid);
             if (!p) return;
-            p.nodes.forEach(n => n.status = 'done');
+            const today = new Date().toISOString().split('T')[0];
+            p.nodes.forEach((n, idx) => {
+                n.status = 'done';
+                // 同步更新关联 task，确保日历视图等基于 tasks 渲染的地方能立即反映完成状态
+                const t = appData.tasks.find(task => task.projectId === pid && task.nodeIndex === idx);
+                if (t) {
+                    t.completed = true;
+                    t.completedDate = today;
+                    t.endDate = today;
+                }
+            });
             p.status = 'done';
-            p.doneDate = new Date().toISOString().split('T')[0];
+            p.doneDate = today;
             saveData();
             syncSettlementsWithProjects();
             renderHome(document.getElementById('mainContent'));
@@ -2445,6 +2540,20 @@ function renderHome(mc) {
             if (!p) return;
             const n = p.nodes[i];
             n.status = n.status === 'pending' ? 'progress' : n.status === 'progress' ? 'done' : 'pending';
+            // 同步更新关联 task，确保日历视图等基于 tasks 渲染的地方能立即反映状态变化
+            const t = appData.tasks.find(task => task.projectId === pid && task.nodeIndex === i);
+            if (t) {
+                const today = new Date().toISOString().split('T')[0];
+                if (n.status === 'done') {
+                    t.completed = true;
+                    t.completedDate = today;
+                    t.endDate = today;
+                } else {
+                    t.completed = false;
+                    t.completedDate = null;
+                    t.endDate = t.dueDate || t.planDate || null;
+                }
+            }
             p.status = calcStatus(p.nodes);
             if (p.status === 'done') p.doneDate = new Date().toISOString().split('T')[0];
             saveData();
