@@ -1,7 +1,4 @@
 <!DOCTYPE html>
-<!-- v2-fixed (fix_project_deletion_v1): 修复 syncToSupabase 清理逻辑误删云端项目/任务的问题
-     · 在清理前增加「安全合并」步骤：先把云端有但本地没有的项目/任务合并到本地
-     · 防止本地数据过期（如 dashboard 修改了 tasks 后工作台尚未拉取）导致清理误删 -->
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
@@ -629,6 +626,11 @@ function getProjectName(projectId) {
 	let _uploading = false;              // 上传锁
 	let _disableAutoUpload = false;      // 禁止自动上传（用于同步/加载时）
 	let _pendingUpload = false;          // 本地有待上传的修改（用于自动同步上传优先）
+        // 【sync-rewrite】本地优先 / 版本化同步 新增状态位
+        let _lastPulledAt = null;            // 最近一次成功拉取的快照时间，用于判断是否已是最新
+        let _lastSyncedVersion = null;       // 最近一次同步（上传或拉取）的版本标识
+        let _lastUploadedAt = 0;             // 最近一次成功上传的时间戳
+        const UPLOAD_DEBOUNCE_MS = 3000;     // 频繁操作后，静默 3 秒才上传一次（以最后一次数据为准）
         let calViewMode = 'month';
         let calFilterProject = 'all';
         let calFilterStatus = 'all';
@@ -756,6 +758,9 @@ function getProjectName(projectId) {
         // 避免连续点击/输入造成多次上传和数据竞争
         let autoUploadTimer = null;
 
+        // 【sync-rewrite】本地优先 + 防抖上传
+        // 设计：任何本地修改先写 localStorage（本地缓存），再按“最后一次操作后静默 N 秒”
+        // 防抖上传一次；force=true 时立即上传。上传即生成一个版本快照。
         function scheduleAutoUpload() {
             const syncOn = autoUploadEnabled || autoSyncEnabled;
             if (!syncOn || _disableAutoUpload || !supabaseClient || !getSupabaseConfig()) {
@@ -763,39 +768,39 @@ function getProjectName(projectId) {
                 return;
             }
             updateSyncStatus('待上传...', 'syncing');
-            clearTimeout(autoUploadTimer);
+            if (autoUploadTimer) clearTimeout(autoUploadTimer);
             autoUploadTimer = setTimeout(function() {
                 autoUploadTimer = null;
                 syncToSupabase(true).catch(function(err) {
                     console.error('自动上传失败', err);
                     updateSyncStatus('上传失败', 'error');
                 });
-            }, 2000);
+            }, UPLOAD_DEBOUNCE_MS);
         }
 
         function saveData(force = false) {
             ensureColors();
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));   // 1) 永远先写本地缓存
             updateBadges();
             // 标记本地有待上传的修改（加载/同步过程中产生的写入不标记，避免误触发上传）
             if (!_disableAutoUpload) _pendingUpload = true;
             // 自动上传或自动同步开启时，本地修改都应上传（避免 30s 同步把未上传的修改覆盖回去）
             const shouldUpload = (force || autoUploadEnabled || autoSyncEnabled) && !_disableAutoUpload && supabaseClient && getSupabaseConfig();
-        if (shouldUpload) {
-            if (force) {
-                // 强制保存（手动上传/关键操作）立即上传，不走防抖，并生成版本快照
-                syncToSupabase(true).catch(err => {
-                    console.error('自动上传失败', err);
-                    updateSyncStatus('上传失败', 'error');
-                });
-            } else {
-            // 频繁操作走防抖，最后一次操作后 2 秒才上传一次
-            scheduleAutoUpload();
+            if (shouldUpload) {
+                if (force) {
+                    // 强制保存（手动上传/关键操作）立即上传，不走防抖，并生成版本快照
+                    syncToSupabase(true).catch(err => {
+                        console.error('自动上传失败', err);
+                        updateSyncStatus('上传失败', 'error');
+                    });
+                } else {
+                    // 频繁操作走防抖：最后一次操作后静默 UPLOAD_DEBOUNCE_MS 才上传一次
+                    scheduleAutoUpload();
+                }
+            } else if (!autoUploadEnabled) {
+                updateSyncStatus('本地缓存', '');
+            }
         }
-    } else if (!autoUploadEnabled) {
-        updateSyncStatus('本地缓存', '');
-    }
-}
         // ---------- Supabase 配置 ----------
         function getSupabaseConfig() {
             try { const raw = localStorage.getItem('supabase_config'); if (raw) return JSON.parse(raw); } catch (e) {}
@@ -827,427 +832,201 @@ function getProjectName(projectId) {
 
         // ---------- 从 Supabase 加载 ----------
 async function loadFromSupabase() {
+    // 【sync-rewrite】统一入口：安全拉取云端最新数据（只读采用快照，绝不删除本地/云端项目）
+    return pullLatest();
+}
+
+// 【sync-rewrite】安全拉取：采用云端最新版本快照整体覆盖本地（快照本身是完整有效状态，
+// 因此不会“丢失”任何项目）；本地若有未上传修改则跳过拉取（交由上传逻辑处理，避免覆盖）；
+// 拉取后合并云端 tasks/work_logs 表以吸收 dashboard 等入口的修改（完成态粘性 + 墓碑，不删项目）。
+async function pullLatest() {
     if (!supabaseClient) throw new Error('Supabase 未初始化');
     _disableAutoUpload = true;
     try {
-        console.log('🔵 开始从 Supabase 加载数据...');
+        console.log('开始从云端拉取最新数据...');
+
+        // 本地有待上传修改时，不覆盖本地（避免丢失本地编辑）；上传逻辑会在 30s 定时器里先上传
+        if (_pendingUpload) {
+            console.log('本地有待上传修改，跳过拉取（先上传本地修改）');
+            return;
+        }
 
         // 连接测试
         try {
             const { error } = await supabaseClient.from('companies').select('count', { count: 'exact', head: true });
-            if (error) { console.error('❌ 连接测试失败:', error); throw error; }
-            console.log('✅ 连接测试通过');
+            if (error) { console.error('连接测试失败:', error); throw error; }
         } catch (e) {
-            console.error('❌ 连接测试异常:', e);
+            console.error('连接测试异常:', e);
             throw e;
         }
 
-        // 优先使用版本快照（若 snapshots 表存在且有记录），否则回退到旧版分表同步
+        // 优先读取最新版本快照（完整状态，采用它整体覆盖本地）
+        let snap = null;
         try {
-            const snapshotLoaded = await loadLatestSnapshot();
-            if (snapshotLoaded) {
-                console.log('✅ 已使用最新版本快照，并从云端 work_logs 合并最新工作日志');
-                // 工作日志以云端 work_logs 表为准：dashboard 等外部入口也直接写入该表，
-                // 而快照仅包含工作台上传时的本地日志，因此需单独拉取最新日志合并进来
-                try {
-                    const { data: wlData, error: wlErr } = await supabaseClient.from('work_logs').select('*');
-                    if (!wlErr && wlData) {
-                        appData.workLogs = (wlData || []).map(w => ({
-                            id: w.id,
-                            date: w.date,
-                            type: w.type || 'daily',
-                            projectId: w.project_id || null,
-                            content: w.content || ''
-                        }));
-                    } else if (wlErr) {
-                        console.warn('⚠️ 合并云端工作日志失败:', wlErr.message);
-                    }
-                } catch (e2) {
-                    console.warn('⚠️ 合并云端工作日志异常:', e2);
+            const { data, error } = await supabaseClient
+                .from('snapshots')
+                .select('id, created_at, payload, version, device, comment')
+                .order('created_at', { ascending: false })
+                .limit(1);
+            if (error) {
+                if (error.code === '42P01' || (error.message && error.message.includes('snapshots') && error.message.includes('does not exist'))) {
+                    console.warn('snapshots 表不存在，无法采用版本快照');
+                } else if (error.code === '42501' || (error.message && error.message.includes('permission denied'))) {
+                    console.warn('snapshots 表权限不足:', error.message);
+                } else {
+                    throw error;
                 }
-                // 项目与任务以云端表为准合并：dashboard 会直接修改 projects.nodes / tasks.completed，
-                // 若不合并，快照中的旧数据会把 dashboard 的修改覆盖回去，导致工作台看不到变化。
-                try {
-                    const [pjRes2, tkRes2] = await Promise.all([
-                        supabaseClient.from('projects').select('*'),
-                        supabaseClient.from('tasks').select('*')
-                    ]);
-                    if (!pjRes2.error && pjRes2.data) {
-                        const allP = pjRes2.data || [];
-                        appData.projects = allP.filter(p => p.status === 'active' || p.status === 'done').map(p => {
-                            // 兼容旧数据：之前 sync 会把 done 项目强制写成 active，若 done_date 存在则恢复为 done
-                            let status = (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active');
-                            const nodes = p.nodes || [];
-                            // 若节点全部完成但状态未标记为 done，也统一恢复（防止云端缺失 done_date 时图表清零）
-                            if (status !== 'done' && nodes.length > 0 && nodes.every(n => n.status === 'done')) status = 'done';
-                            let doneDate = p.done_date || null;
-                            // 已完成项目必须保留完成日期；若云端没有 done_date，用 updated_at 或今天兜底
-                            if (status === 'done' && !doneDate) {
-                                doneDate = p.updated_at ? p.updated_at.split('T')[0] : new Date().toISOString().split('T')[0];
-                            }
-                            return {
-                                id: p.id, templateId: p.template_id, company: p.company,
-                                status: status,
-                                tag: p.tag || '', nodes: nodes, doneDate: doneDate,
-                                important: p.important || false, urgent: p.urgent || false,
-                                archived: false, shelved: false, terminated: false
-                            };
-                        });
-                        appData.archived = allP.filter(p => p.status === 'archived').map(p => ({
-                            projectData: {
-                                id: p.id, templateId: p.template_id, company: p.company, status: p.status,
-                                tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null,
-                                important: p.important || false, urgent: p.urgent || false
-                            }, archivedAt: p.archived_at || null
-                        }));
-                        appData.shelved = allP.filter(p => p.status === 'shelved').map(p => ({
-                            projectData: {
-                                id: p.id, templateId: p.template_id, company: p.company, status: p.status,
-                                tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null,
-                                important: p.important || false, urgent: p.urgent || false
-                            }, shelvedAt: p.shelved_at || null
-                        }));
-                        appData.terminated = allP.filter(p => p.status === 'terminated').map(p => ({
-                            projectData: {
-                                id: p.id, templateId: p.template_id, company: p.company, status: p.status,
-                                tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null,
-                                important: p.important || false, urgent: p.urgent || false
-                            }, terminatedAt: p.terminated_at || null, reason: p.reason || ''
-                        }));
-                    }
-                    if (!tkRes2.error && tkRes2.data) {
-                        let tasks = tkRes2.data.map(t => ({
-                            id: t.id, projectId: t.project_id, nodeIndex: t.node_index, title: t.title,
-                            dueDate: t.due_date || null, completed: t.completed || false,
-                            weekLabel: t.week_label || '', monthLabel: t.month_label || '',
-                            planDate: t.plan_date || null,
-                            startDate: t.start_date || t.plan_date || t.due_date || null,
-                            endDate: t.end_date || t.due_date || null,
-                            completedDate: t.completed_date || null
-                        }));
-                        const localTaskOrder = localStorage.getItem('task_order');
-                        if (localTaskOrder) {
-                            try {
-                                const orderIds = JSON.parse(localTaskOrder);
-                                if (Array.isArray(orderIds) && orderIds.length > 0) {
-                                    const ordered = [];
-                                    orderIds.forEach(id => { const f = tasks.find(t => t.id === id); if (f) ordered.push(f); });
-                                    tasks.forEach(t => { if (!ordered.find(o => o.id === t.id)) ordered.push(t); });
-                                    tasks = ordered;
-                                }
-                            } catch (e) {}
-                        }
-                        appData.tasks = tasks;
-                    }
-                    // 合并完成后持久化到本地缓存，避免刷新页面后丢失 dashboard 等外部入口的更新
-                    ensureColors();
-                    syncSettlementsWithProjects();
-                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
-                } catch (e3) {
-                    console.warn('⚠️ 合并云端项目/任务失败:', e3);
-                }
-                return;
+            } else if (data && data.length > 0) {
+                snap = data[0];
             }
         } catch (e) {
-            console.warn('⚠️ 快照加载异常，尝试旧版分表同步:', e);
+            console.warn('读取最新快照失败，改用分表拉取兜底:', e);
         }
 
-        // 并行查询所有表
-        const queries = [
-            supabaseClient.from('companies').select('*'),
-            supabaseClient.from('templates').select('*'),
-            supabaseClient.from('projects').select('*'),
-            supabaseClient.from('tasks').select('*'),
-            supabaseClient.from('work_logs').select('*'),
-            supabaseClient.from('settlements').select('*'),
-            supabaseClient.from('data_reports').select('*'),
-            supabaseClient.from('report_templates').select('*'),
-            supabaseClient.from('commission_templates').select('*'),
-            supabaseClient.from('settings').select('*'),
-        ];
-
-        const results = await Promise.allSettled(queries);
-        const [companiesRes, templatesRes, projectsRes, tasksRes, workLogsRes, settlementsRes, dataReportsRes,
-            reportTemplatesRes, commissionTemplatesRes, settingsRes
-        ] = results.map(r => r.status === 'fulfilled' ? r.value : { error: new Error('查询失败'), data: [] });
-
-        // 处理错误日志（保持原样）
-        if (companiesRes.error) console.warn('⚠️ companies 表查询失败:', companiesRes.error);
-        if (templatesRes.error) console.warn('⚠️ templates 表查询失败:', templatesRes.error);
-        if (projectsRes.error) console.warn('⚠️ projects 表查询失败:', projectsRes.error);
-        if (tasksRes.error) console.warn('⚠️ tasks 表查询失败:', tasksRes.error);
-        if (workLogsRes.error) console.warn('⚠️ workLogs 表查询失败:', workLogsRes.error);
-        if (settlementsRes.error) console.warn('⚠️ settlements 表查询失败:', settlementsRes.error);
-        if (dataReportsRes.error) console.warn('⚠️ dataReports 表查询失败:', dataReportsRes.error);
-        if (reportTemplatesRes.error) console.warn('⚠️ reportTemplates 表查询失败:', reportTemplatesRes.error);
-        if (commissionTemplatesRes.error) console.warn('⚠️ commissionTemplates 表查询失败:', commissionTemplatesRes.error);
-        if (settingsRes.error) console.warn('⚠️ settings 表查询失败:', settingsRes.error);
-
-        // 判断是否全部失败
-        const allFailed = [companiesRes, templatesRes, projectsRes, tasksRes, workLogsRes, settlementsRes,
-            dataReportsRes, reportTemplatesRes, commissionTemplatesRes, settingsRes
-        ].every(r => r.error);
-        if (allFailed) {
-            throw new Error('所有表查询均失败，请检查网络和权限');
-        }
-
-        // ===== 读取公司顺序和模板顺序（从 settings） =====
-        const settingsData = settingsRes.data || [];
-        const companyOrderSetting = settingsData.find(s => s.key === 'company_order');
-        const templateOrderSetting = settingsData.find(s => s.key === 'template_order');
-        let companyOrder = companyOrderSetting ? JSON.parse(companyOrderSetting.value) : null;
-        let templateOrder = templateOrderSetting ? JSON.parse(templateOrderSetting.value) : null;
-
-        // ===== 加载公司列表并应用顺序 =====
-        let cloudCompanies = companiesRes.data?.map(c => c.name) || [];
-        if (companyOrder && Array.isArray(companyOrder) && companyOrder.length > 0) {
-            // 只保留存在的公司
-            const validCompanies = companyOrder.filter(name => cloudCompanies.includes(name));
-            // 补充未在顺序中的公司（新增的或遗漏的）
-            const ordered = [...validCompanies];
-            cloudCompanies.forEach(name => {
-                if (!ordered.includes(name)) ordered.push(name);
-            });
-            appData.companies = ordered;
+        if (snap && snap.payload) {
+            // 采用最新快照整体覆盖本地（快照是某次完整上传产生的有效状态，绝不会缺项目）
+            applySnapshotPayload(snap.payload);
+            _lastPulledAt = snap.created_at;
+            _lastSyncedVersion = snap.version || snap.id;
+            console.log('已采用最新版本快照:', snap.created_at);
         } else {
-            appData.companies = cloudCompanies;
+            // 兜底：快照不可用，从分表拉取（只读采用，绝不删除）
+            await pullFromTablesFallback();
         }
 
-        // ===== 加载模板列表并应用顺序 =====
-        let cloudTemplates = templatesRes.data?.map(t => ({
-            id: t.id,
-            name: t.name,
-            nodes: t.nodes || [],
-            tags: t.tags || [],
-            settlementByTag: t.settlement_by_tag || {}
-        })) || [];
-        if (templateOrder && Array.isArray(templateOrder) && templateOrder.length > 0) {
-            const ordered = [];
-            templateOrder.forEach(id => {
-                const found = cloudTemplates.find(t => t.id === id);
-                if (found) ordered.push(found);
-            });
-            // 补充未在顺序中的模板（新增的）
-            cloudTemplates.forEach(t => {
-                if (!ordered.find(o => o.id === t.id)) ordered.push(t);
-            });
-            appData.templates = ordered;
-        } else {
-            appData.templates = cloudTemplates;
+        // 合并云端 tasks / work_logs，吸收 dashboard 等入口的修改（完成态粘性 + 墓碑，不删项目）
+        await mergeCloudDelta();
+
+        // 墓碑：本地已删除的任务/日志不应从云端复活
+        if (appData._deletedTaskIds && appData._deletedTaskIds.length) {
+            appData.tasks = appData.tasks.filter(t => appData._deletedTaskIds.indexOf(t.id) === -1);
+        }
+        if (appData._deletedWorkLogIds && appData._deletedWorkLogIds.length) {
+            appData.workLogs = appData.workLogs.filter(w => appData._deletedWorkLogIds.indexOf(w.id) === -1);
         }
 
-        // ===== 加载项目（保持原有逻辑） =====
-        const allProjects = projectsRes.data || [];
-        console.log(`🔵 从 Supabase 获取到 ${allProjects.length} 个项目记录`);
-
-        // 分离活跃、归档、搁置、终止项目（活跃项目包含未归档的 active 和 done）
-        let activeProjects = allProjects.filter(p => p.status === 'active' || p.status === 'done').map(p => {
-            // 兼容旧数据：之前 sync 会把 done 项目强制写成 active，若 done_date 存在则恢复为 done
-            let status = (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active');
-            const nodes = p.nodes || [];
-            // 若节点全部完成但状态未标记为 done，也统一恢复（防止云端缺失 done_date 时图表清零）
-            if (status !== 'done' && nodes.length > 0 && nodes.every(n => n.status === 'done')) status = 'done';
-            let doneDate = p.done_date || null;
-            // 已完成项目必须保留完成日期；若云端没有 done_date，用 updated_at 或今天兜底
-            if (status === 'done' && !doneDate) {
-                doneDate = p.updated_at ? p.updated_at.split('T')[0] : new Date().toISOString().split('T')[0];
-            }
-            return {
-                id: p.id,
-                templateId: p.template_id,
-                company: p.company,
-                status: status,
-                tag: p.tag || '',
-                nodes: nodes,
-                doneDate: doneDate,
-                important: p.important || false,
-                urgent: p.urgent || false,
-                archived: false,
-                shelved: false,
-                terminated: false
-            };
-        });
-
-        // 尝试保持本地项目顺序（如果本地有顺序记录，则应用）
-        const localProjectOrder = localStorage.getItem('project_order');
-        if (localProjectOrder) {
-            try {
-                const orderIds = JSON.parse(localProjectOrder);
-                if (Array.isArray(orderIds) && orderIds.length > 0) {
-                    const ordered = [];
-                    orderIds.forEach(id => {
-                        const found = activeProjects.find(p => p.id === id);
-                        if (found) ordered.push(found);
-                    });
-                    activeProjects.forEach(p => {
-                        if (!ordered.find(o => o.id === p.id)) ordered.push(p);
-                    });
-                    activeProjects = ordered;
-                }
-            } catch (e) {}
-        }
-
-        appData.projects = activeProjects;
-
-        // 归档项目
-        appData.archived = allProjects.filter(p => p.status === 'archived').map(p => ({
-            projectData: {
-                id: p.id,
-                templateId: p.template_id,
-                company: p.company,
-                status: p.status,
-                tag: p.tag || '',
-                nodes: p.nodes || [],
-                doneDate: p.done_date || null,
-                important: p.important || false,
-                urgent: p.urgent || false
-            },
-            archivedAt: p.archived_at || null
-        }));
-
-        // 搁置项目
-        appData.shelved = allProjects.filter(p => p.status === 'shelved').map(p => ({
-            projectData: {
-                id: p.id,
-                templateId: p.template_id,
-                company: p.company,
-                status: p.status,
-                tag: p.tag || '',
-                nodes: p.nodes || [],
-                doneDate: p.done_date || null,
-                important: p.important || false,
-                urgent: p.urgent || false
-            },
-            shelvedAt: p.shelved_at || null
-        }));
-
-        // 终止项目
-        appData.terminated = allProjects.filter(p => p.status === 'terminated').map(p => ({
-            projectData: {
-                id: p.id,
-                templateId: p.template_id,
-                company: p.company,
-                status: p.status,
-                tag: p.tag || '',
-                nodes: p.nodes || [],
-                doneDate: p.done_date || null,
-                important: p.important || false,
-                urgent: p.urgent || false
-            },
-            terminatedAt: p.terminated_at || null,
-            reason: p.reason || ''
-        }));
-
-        // ===== 加载任务 =====
-        let tasks = tasksRes.data?.map(t => ({
-            id: t.id,
-            projectId: t.project_id,
-            nodeIndex: t.node_index,
-            title: t.title,
-            dueDate: t.due_date || null,
-            completed: t.completed || false,
-            weekLabel: t.week_label || '',
-            monthLabel: t.month_label || '',
-            planDate: t.plan_date || null,
-            startDate: t.start_date || t.plan_date || t.due_date || null,
-            endDate: t.end_date || t.due_date || null,
-            completedDate: t.completed_date || null
-        })) || [];
-        // 保持本地任务顺序（如果本地有存储）
-        const localTaskOrder = localStorage.getItem('task_order');
-        if (localTaskOrder) {
-            try {
-                const orderIds = JSON.parse(localTaskOrder);
-                if (Array.isArray(orderIds) && orderIds.length > 0) {
-                    const ordered = [];
-                    orderIds.forEach(id => {
-                        const found = tasks.find(t => t.id === id);
-                        if (found) ordered.push(found);
-                    });
-                    tasks.forEach(t => {
-                        if (!ordered.find(o => o.id === t.id)) ordered.push(t);
-                    });
-                    tasks = ordered;
-                }
-            } catch (e) {}
-        }
-        appData.tasks = tasks;
-
-        // ===== 加载工作日志 =====
-        let logs = workLogsRes.data?.map(w => ({
-            id: w.id,
-            date: w.date,
-            type: w.type || 'daily',
-            projectId: w.project_id || null,
-            content: w.content || ''
-        })) || [];
-        appData.workLogs = logs;
-
-        // ===== 加载结算记录 =====
-        let settlements = settlementsRes.data?.map(s => ({
-            id: s.id,
-            projectId: s.project_id,
-            company: s.company,
-            projectName: s.project_name,
-            tag: s.tag || '',
-            doneDate: s.done_date || null,
-            totalCommission: s.total_commission || 0,
-            settledAmount: s.settled_amount || 0,
-            installments: s.installments || [],
-            note: s.note || '',
-            fullySettled: s.fully_settled || false,
-            _manual: s._manual || false
-        })) || [];
-        appData.settlements = settlements;
-
-        // ===== 加载数据报告 =====
-        const execMap = {},
-            envMap = {};
-        (dataReportsRes.data || []).forEach(row => {
-            if (row.execution) execMap[row.year] = row.execution;
-            if (row.environmental) envMap[row.year] = row.environmental;
-        });
-        appData.dataReports.execution = execMap;
-        appData.dataReports.environmental = envMap;
-
-        // ===== 加载报告模板 =====
-        const rtMap = {};
-        (reportTemplatesRes.data || []).forEach(row => { rtMap[row.type] = row.fields; });
-        appData.reportTemplates = rtMap;
-
-        // ===== 加载提成模板 =====
-        const ctMap = {};
-        (commissionTemplatesRes.data || []).forEach(row => {
-            ctMap[row.key] = { total: row.total, ratios: row.ratios };
-        });
-        appData.commissionTemplates = ctMap;
-
-        // ===== 加载知识库链接（从 settings） =====
-        const knowledgeSetting = settingsData.find(s => s.key === 'knowledgeUrl');
-        if (knowledgeSetting) appData.knowledgeUrl = knowledgeSetting.value || '';
-
-        // ===== 其他初始化 =====
         ensureColors();
         syncSettlementsWithProjects();
-
-        // 更新 id 计数器
-        let maxId = 0;
-        [...appData.projects, ...appData.templates, ...appData.tasks, ...appData.workLogs, ...appData.settlements]
-        .forEach(item => {
-            if (item.id && item.id.startsWith('id_')) {
-                const num = parseInt(item.id.substring(3));
-                if (!isNaN(num) && num > maxId) maxId = num;
-            }
-        });
-        appData._idCounter = maxId;
-
-        // 保存到本地
         localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-        console.log('✅ 数据加载完成，共加载项目:', appData.projects.length);
+        console.log('拉取完成，共加载项目:', appData.projects.length);
     } finally {
         _disableAutoUpload = false;
     }
 }
+
+// 【sync-rewrite】兜底：快照不可用时，从分表只读拉取（采用云端数据，不删除）
+async function pullFromTablesFallback() {
+    const queries = [
+        supabaseClient.from('companies').select('*'),
+        supabaseClient.from('templates').select('*'),
+        supabaseClient.from('projects').select('*'),
+        supabaseClient.from('tasks').select('*'),
+        supabaseClient.from('work_logs').select('*'),
+        supabaseClient.from('settlements').select('*'),
+        supabaseClient.from('data_reports').select('*'),
+        supabaseClient.from('report_templates').select('*'),
+        supabaseClient.from('commission_templates').select('*'),
+        supabaseClient.from('settings').select('*')
+    ];
+    const results = await Promise.allSettled(queries);
+    const [companiesRes, templatesRes, projectsRes, tasksRes, workLogsRes, settlementsRes, dataReportsRes, reportTemplatesRes, commissionTemplatesRes, settingsRes] =
+        results.map(r => r.status === 'fulfilled' ? r.value : { error: new Error('查询失败'), data: [] });
+    const settingsData = settingsRes.data || [];
+    const companyOrderSetting = settingsData.find(s => s.key === 'company_order');
+    const templateOrderSetting = settingsData.find(s => s.key === 'template_order');
+    let companyOrder = companyOrderSetting ? JSON.parse(companyOrderSetting.value) : null;
+    let templateOrder = templateOrderSetting ? JSON.parse(templateOrderSetting.value) : null;
+
+    let cloudCompanies = companiesRes.data ? companiesRes.data.map(c => c.name) : [];
+    if (companyOrder && Array.isArray(companyOrder) && companyOrder.length > 0) {
+        const ordered = companyOrder.filter(name => cloudCompanies.includes(name));
+        cloudCompanies.forEach(name => { if (!ordered.includes(name)) ordered.push(name); });
+        appData.companies = ordered;
+    } else { appData.companies = cloudCompanies; }
+
+    let cloudTemplates = templatesRes.data ? templatesRes.data.map(t => ({ id: t.id, name: t.name, nodes: t.nodes || [], tags: t.tags || [], settlementByTag: t.settlement_by_tag || {} })) : [];
+    if (templateOrder && Array.isArray(templateOrder) && templateOrder.length > 0) {
+        const ordered = [];
+        templateOrder.forEach(id => { const f = cloudTemplates.find(t => t.id === id); if (f) ordered.push(f); });
+        cloudTemplates.forEach(t => { if (!ordered.find(o => o.id === t.id)) ordered.push(t); });
+        appData.templates = ordered;
+    } else { appData.templates = cloudTemplates; }
+
+    const allProjects = projectsRes.data || [];
+    const activeProjects = allProjects.filter(p => p.status === 'active' || p.status === 'done').map(p => {
+        let status = (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active');
+        const nodes = p.nodes || [];
+        if (status !== 'done' && nodes.length > 0 && nodes.every(n => n.status === 'done')) status = 'done';
+        let doneDate = p.done_date || null;
+        if (status === 'done' && !doneDate) doneDate = p.updated_at ? p.updated_at.split('T')[0] : new Date().toISOString().split('T')[0];
+        return { id: p.id, templateId: p.template_id, company: p.company, status: status, tag: p.tag || '', nodes: nodes, doneDate: doneDate, important: p.important || false, urgent: p.urgent || false, archived: false, shelved: false, terminated: false };
+    });
+    appData.projects = activeProjects;
+    appData.archived = allProjects.filter(p => p.status === 'archived').map(p => ({ projectData: { id: p.id, templateId: p.template_id, company: p.company, status: p.status, tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null, important: p.important || false, urgent: p.urgent || false }, archivedAt: p.archived_at || null }));
+    appData.shelved = allProjects.filter(p => p.status === 'shelved').map(p => ({ projectData: { id: p.id, templateId: p.template_id, company: p.company, status: p.status, tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null, important: p.important || false, urgent: p.urgent || false }, shelvedAt: p.shelved_at || null }));
+    appData.terminated = allProjects.filter(p => p.status === 'terminated').map(p => ({ projectData: { id: p.id, templateId: p.template_id, company: p.company, status: p.status, tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null, important: p.important || false, urgent: p.urgent || false }, terminatedAt: p.terminated_at || null, reason: p.reason || '' }));
+
+    appData.tasks = tasksRes.data ? tasksRes.data.map(t => ({ id: t.id, projectId: t.project_id, nodeIndex: t.node_index, title: t.title, dueDate: t.due_date || null, completed: t.completed || false, weekLabel: t.week_label || '', monthLabel: t.month_label || '', planDate: t.plan_date || null, startDate: t.start_date || t.plan_date || t.due_date || null, endDate: t.end_date || t.due_date || null, completedDate: t.completed_date || null })) : [];
+    appData.workLogs = workLogsRes.data ? workLogsRes.data.map(w => ({ id: w.id, date: w.date, type: w.type || 'daily', projectId: w.project_id || null, content: w.content || '' })) : [];
+    appData.settlements = settlementsRes.data ? settlementsRes.data.map(s => ({ id: s.id, projectId: s.project_id, company: s.company, projectName: s.project_name, tag: s.tag || '', doneDate: s.done_date || null, totalCommission: s.total_commission || 0, settledAmount: s.settled_amount || 0, installments: s.installments || [], note: s.note || '', fullySettled: s.fullySettled || false, _manual: s._manual || false })) : [];
+
+    const execMap = {}, envMap = {};
+    (dataReportsRes.data || []).forEach(row => { if (row.execution) execMap[row.year] = row.execution; if (row.environmental) envMap[row.year] = row.environmental; });
+    appData.dataReports.execution = execMap; appData.dataReports.environmental = envMap;
+    const rtMap = {}; (reportTemplatesRes.data || []).forEach(row => { rtMap[row.type] = row.fields; }); appData.reportTemplates = rtMap;
+    const ctMap = {}; (commissionTemplatesRes.data || []).forEach(row => { ctMap[row.key] = { total: row.total, ratios: row.ratios }; }); appData.commissionTemplates = ctMap;
+    const knowledgeSetting = settingsData.find(s => s.key === 'knowledgeUrl'); if (knowledgeSetting) appData.knowledgeUrl = knowledgeSetting.value || '';
+}
+
+// 【sync-rewrite】合并云端 tasks / work_logs：吸收 dashboard 入口的修改。
+// 规则：① 完成态粘性——任一方标记为完成则保持完成，避免 dashboard 完成被覆盖；
+//       ② 云端新增的任务/日志补回本地；③ 墓碑(_deletedTaskIds/_deletedWorkLogIds)中的不补回。
+// 绝不删除任何本地项目。
+async function mergeCloudDelta() {
+    try {
+        const { data: tk, error: tkErr } = await supabaseClient.from('tasks').select('*');
+        if (!tkErr && tk) {
+            const cloudById = {}; tk.forEach(t => { cloudById[t.id] = t; });
+            const localById = {}; appData.tasks.forEach(t => { localById[t.id] = t; });
+            const merged = [];
+            appData.tasks.forEach(t => {
+                const c = cloudById[t.id];
+                if (c && c.completed && !t.completed) {
+                    t.completed = true;
+                    t.completedDate = t.completedDate || (c.completed_date ? c.completed_date.split('T')[0] : new Date().toISOString().split('T')[0]);
+                    if (t.projectId != null && t.nodeIndex != null) {
+                        const p = appData.projects.find(pr => pr.id === t.projectId);
+                        if (p && p.nodes[t.nodeIndex]) {
+                            p.nodes[t.nodeIndex].status = 'done';
+                            p.status = calcStatus(p.nodes);
+                            if (p.status === 'done') p.doneDate = p.doneDate || new Date().toISOString().split('T')[0];
+                        }
+                    }
+                }
+                if (!(appData._deletedTaskIds || []).includes(t.id)) merged.push(t);
+            });
+            tk.forEach(c => {
+                if (!localById[c.id] && !(appData._deletedTaskIds || []).includes(c.id)) {
+                    merged.push({ id: c.id, projectId: c.project_id, nodeIndex: c.node_index, title: c.title, dueDate: c.due_date || null, completed: c.completed || false, weekLabel: c.week_label || '', monthLabel: c.month_label || '', planDate: c.plan_date || null, startDate: c.start_date || c.plan_date || c.due_date || null, endDate: c.end_date || c.due_date || null, completedDate: c.completed_date || null });
+                }
+            });
+            appData.tasks = merged;
+        }
+    } catch (e) { console.warn('合并云端任务失败:', e); }
+
+    try {
+        const { data: wl, error: wlErr } = await supabaseClient.from('work_logs').select('*');
+        if (!wlErr && wl) {
+            const cloudById = {}; wl.forEach(w => { cloudById[w.id] = w; });
+            const localById = {}; appData.workLogs.forEach(w => { localById[w.id] = w; });
+            const merged = [];
+            appData.workLogs.forEach(w => { if (!(appData._deletedWorkLogIds || []).includes(w.id)) merged.push(w); });
+            wl.forEach(c => { if (!localById[c.id] && !(appData._deletedWorkLogIds || []).includes(c.id)) merged.push({ id: c.id, date: c.date, type: c.type || 'daily', projectId: c.project_id || null, content: c.content || '' }); });
+            appData.workLogs = merged;
+        }
+    } catch (e) { console.warn('合并云端日志失败:', e); }
+}
+
 
         // ---------- 版本快照管理 ----------
         function applySnapshotPayload(payload) {
@@ -1350,6 +1129,13 @@ async function loadFromSupabase() {
             renderPage(currentPage);
             updateSyncStatus('已恢复版本 ' + (data.version || ''), 'success');
             console.log('✅ 已恢复指定版本:', data.version, data.created_at);
+            // 【sync-rewrite】恢复后作为新版本重新上传，使该版本成为云端最新并同步到其他设备
+            try {
+                saveData(true);
+                console.log('✅ 已恢复版本并重新上传为最新版本');
+            } catch (e) {
+                console.warn('⚠️ 恢复版本后重新上传失败（本地已恢复）:', e);
+            }
         }
 
         async function restoreLatestSnapshot() {
@@ -1357,6 +1143,39 @@ async function loadFromSupabase() {
             if (!ok) throw new Error('没有可用的版本快照');
             renderPage(currentPage);
             updateSyncStatus('已恢复最新版本', 'success');
+        }
+
+        // 【sync-rewrite】墓碑删除：仅删除用户“明确删除”的任务/日志（精确 id）。
+        // 与旧逻辑“云端有而本地没有就删除”相反，这里绝不做推断式删除，从根上避免误删。
+        async function applyTombstones() {
+            // 任务墓碑
+            try {
+                const delTaskIds = (appData._deletedTaskIds || []).filter(function(x){ return x; });
+                if (delTaskIds.length > 0) {
+                    const { error } = await supabaseClient.from('tasks').delete().in('id', delTaskIds);
+                    if (error) {
+                        console.warn('⚠️ 删除已删任务失败:', error);
+                    } else {
+                        appData._deletedTaskIds = [];
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+                        console.log('🗑️ 已删除 ' + delTaskIds.length + ' 个已删任务');
+                    }
+                }
+            } catch (e) { console.warn('⚠️ 任务墓碑删除异常:', e); }
+            // 工作日志墓碑（沿用原有标记）
+            try {
+                const delLogIds = (appData._deletedWorkLogIds || []).filter(function(x){ return x; });
+                if (delLogIds.length > 0) {
+                    const { error } = await supabaseClient.from('work_logs').delete().in('id', delLogIds);
+                    if (error) {
+                        console.warn('⚠️ 清理已删除日志失败:', error);
+                    } else {
+                        appData._deletedWorkLogIds = [];
+                        localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+                        console.log('🗑️ 已清理 ' + delLogIds.length + ' 条已删日志');
+                    }
+                }
+            } catch (e) { console.warn('⚠️ 日志墓碑删除异常:', e); }
         }
 
         // ---------- 同步到 Supabase ----------
@@ -1420,7 +1239,8 @@ async function syncToSupabase(createSnapshotFlag = false) {
             month_label: t.monthLabel || '',
             plan_date: t.planDate || null,
             start_date: t.startDate || t.planDate || t.dueDate || null,
-            end_date: t.endDate || t.dueDate || null
+            end_date: t.endDate || t.dueDate || null,
+            updated_at: t.updatedAt || new Date().toISOString()
         });
 
         const mapWorkLog = (w) => ({
@@ -1534,138 +1354,9 @@ async function syncToSupabase(createSnapshotFlag = false) {
             { key: 'template_order', value: JSON.stringify(appData.templates.map(t => t.id)) }
         ];
 
-        // ===== 安全合并：清理前先把云端有但本地没有的项目合并到本地 =====
-        // 防止本地数据过期（如 dashboard 修改了 tasks 后工作台尚未拉取）导致
-        // 清理逻辑误删云端中实际仍需要的项目/任务
-        try {
-            const { data: cloudProjectsFull, error: mergeFetchErr } = await supabaseClient
-                .from('projects')
-                .select('*');
-            if (!mergeFetchErr && cloudProjectsFull) {
-                const localPidSet = new Set(projectsData.map(p => p.id));
-                const missingProjects = cloudProjectsFull.filter(p => !localPidSet.has(p.id));
-                if (missingProjects.length > 0) {
-                    console.log(`🔒 [安全合并] 发现 ${missingProjects.length} 个云端项目不在本地数据中，先合并再清理...`);
-                    missingProjects.forEach(p => {
-                        const mapped = {
-                            id: p.id, templateId: p.template_id, company: p.company,
-                            status: p.status || 'active',
-                            tag: p.tag || '', nodes: p.nodes || [],
-                            doneDate: p.done_date || null,
-                            important: p.important || false, urgent: p.urgent || false
-                        };
-                        if (p.status === 'archived') {
-                            appData.archived.push({ projectData: mapped, archivedAt: p.archived_at || null });
-                        } else if (p.status === 'shelved') {
-                            appData.shelved.push({ projectData: mapped, shelvedAt: p.shelved_at || null });
-                        } else if (p.status === 'terminated') {
-                            appData.terminated.push({ projectData: mapped, terminatedAt: p.terminated_at || null, reason: p.reason || '' });
-                        } else {
-                            appData.projects.push({ ...mapped, archived: false, shelved: false, terminated: false });
-                        }
-                        // 同步加入 projectsData，避免清理逻辑误删
-                        projectsData.push(mapProject({
-                            ...mapped,
-                            archived_at: p.archived_at || null,
-                            shelved_at: p.shelved_at || null,
-                            terminated_at: p.terminated_at || null,
-                            reason: p.reason || null,
-                            created_at: p.created_at || new Date().toISOString()
-                        }));
-                    });
-                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
-                    console.log(`✅ [安全合并] 已合并 ${missingProjects.length} 个云端项目到本地`);
-                }
-            }
-        } catch (err) { console.warn('⚠️ [安全合并] 项目合并异常:', err); }
-
-        // 同理：安全合并云端有但本地没有的任务
-        try {
-            const { data: cloudTasksFull, error: taskMergeErr } = await supabaseClient.from('tasks').select('*');
-            if (!taskMergeErr && cloudTasksFull) {
-                const localTidSet = new Set((appData.tasks || []).map(t => t.id).filter(Boolean));
-                const missingTasks = cloudTasksFull.filter(t => !localTidSet.has(t.id));
-                if (missingTasks.length > 0) {
-                    console.log(`🔒 [安全合并] 发现 ${missingTasks.length} 个云端任务不在本地，先合并...`);
-                    missingTasks.forEach(t => {
-                        appData.tasks.push({
-                            id: t.id, projectId: t.project_id, nodeIndex: t.node_index,
-                            title: t.title || '', dueDate: t.due_date || null,
-                            completed: t.completed || false,
-                            weekLabel: t.week_label || '', monthLabel: t.month_label || '',
-                            planDate: t.plan_date || null,
-                            startDate: t.start_date || t.plan_date || t.due_date || null,
-                            endDate: t.end_date || t.due_date || null,
-                            completedDate: t.completed_date || null
-                        });
-                    });
-                    console.log(`✅ [安全合并] 已合并 ${missingTasks.length} 个云端任务到本地`);
-                }
-            }
-        } catch (err) { console.warn('⚠️ [安全合并] 任务合并异常:', err); }
-
-        // 清理云端多余数据（仅删除本地确实不存在的项目——经过安全合并后此列表应为空，
-        // 除非本地确实没有该项目的任何记录，即用户在本地真正删除了该项目）
-        try {
-            const { data: cloudProjects, error: fetchError } = await supabaseClient
-                .from('projects')
-                .select('id');
-            if (fetchError) throw fetchError;
-            const cloudIds = new Set(cloudProjects.map(p => p.id));
-            const localIds = new Set(projectsData.map(p => p.id));
-            const idsToDelete = [...cloudIds].filter(id => !localIds.has(id));
-            if (idsToDelete.length > 0) {
-                console.log(`🔵 检测到 ${idsToDelete.length} 个云端多余项目，正在删除...`);
-                const { data: tasksToDelete, error: tasksQueryErr } = await supabaseClient
-                    .from('tasks')
-                    .select('id')
-                    .in('project_id', idsToDelete);
-                if (!tasksQueryErr && tasksToDelete && tasksToDelete.length > 0) {
-                    const taskIds = tasksToDelete.map(t => t.id);
-                    await supabaseClient.from('tasks').delete().in('id', taskIds);
-                    console.log(`✅ 已删除 ${taskIds.length} 个关联任务`);
-                }
-                const { data: sectsToDelete, error: sectsQueryErr } = await supabaseClient
-                    .from('settlements')
-                    .select('id')
-                    .in('project_id', idsToDelete);
-                if (!sectsQueryErr && sectsToDelete && sectsToDelete.length > 0) {
-                    const sectIds = sectsToDelete.map(s => s.id);
-                    await supabaseClient.from('settlements').delete().in('id', sectIds);
-                    console.log(`✅ 已删除 ${sectIds.length} 个关联结算记录`);
-                }
-                const { data: logsToDelete, error: logsQueryErr } = await supabaseClient
-                    .from('work_logs')
-                    .select('id')
-                    .in('project_id', idsToDelete);
-                if (!logsQueryErr && logsToDelete && logsToDelete.length > 0) {
-                    const logIds = logsToDelete.map(w => w.id);
-                    await supabaseClient.from('work_logs').delete().in('id', logIds);
-                    console.log(`✅ 已删除 ${logIds.length} 个关联工作日志`);
-                }
-                await supabaseClient.from('projects').delete().in('id', idsToDelete);
-                console.log(`✅ 已删除 ${idsToDelete.length} 个多余项目`);
-            }
-        } catch (err) { console.warn('⚠️ 清理多余数据过程出错:', err); }
-
-        // ===== 清理云端多余任务（经过安全合并后此列表应为空，除非用户在本地真正删除了任务）=====
-        try {
-            const localTaskIds = new Set((appData.tasks || []).map(t => t.id).filter(Boolean));
-            const { data: cloudTasks, error: tasksFetchErr } = await supabaseClient.from('tasks').select('id');
-            if (!tasksFetchErr && cloudTasks && cloudTasks.length > 0) {
-                const taskIdsToDelete = cloudTasks.map(t => t.id).filter(id => !localTaskIds.has(id));
-                if (taskIdsToDelete.length > 0) {
-                    const { error: tasksDelErr } = await supabaseClient.from('tasks').delete().in('id', taskIdsToDelete);
-                    if (tasksDelErr) {
-                        console.warn('⚠️ 清理云端多余任务失败:', tasksDelErr);
-                    } else {
-                        console.log(`✅ 已删除 ${taskIdsToDelete.length} 个云端多余任务`);
-                    }
-                }
-            }
-        } catch (err) { console.warn('⚠️ 清理云端多余任务异常:', err); }
-
-        // ===== 执行上传 =====
+        // 【sync-rewrite】上传端：只做新增/更新（upsert，幂等），绝不删除云端任何项目/任务。
+        // 工作台没有“真删除项目”功能（归档/搁置/终止都只是改状态），因此上传端不再做任何
+        // “云端有而本地没有就删除”的物理删除——这是此前项目被误删的根因，已从结构上移除。
         const tableConfigs = [
             { name: 'companies', data: companiesData, conflict: 'name' },
             { name: 'templates', data: templatesData, conflict: 'id' },
@@ -1683,69 +1374,51 @@ async function syncToSupabase(createSnapshotFlag = false) {
         const errors = [];
         for (const table of tableConfigs) {
             try {
-                if (table.data.length === 0) { console.log(`⏭️ ${table.name} 无数据，跳过`); continue; }
+                if (table.data.length === 0) { console.log('跳过 ' + table.name + '（无数据）'); continue; }
                 const { error } = await supabaseClient
                     .from(table.name)
                     .upsert(table.data, { onConflict: table.conflict });
                 if (error) {
-                    console.error(`❌ ${table.name} 同步失败:`, error);
+                    console.error('❌ ' + table.name + ' 同步失败:', error);
                     errors.push({ table: table.name, error });
                     hasError = true;
                 } else {
-                    console.log(`✅ ${table.name} 同步成功`);
+                    console.log('✅ ' + table.name + ' 同步成功');
                 }
             } catch (err) {
-                console.error(`❌ ${table.name} 同步异常:`, err);
+                console.error('❌ ' + table.name + ' 同步异常:', err);
                 errors.push({ table: table.name, error: err });
                 hasError = true;
             }
         }
 
-        // ===== 清理已删除的工作日志（精确删除云端记录，避免下次同步又出现）=====
-        // 仅删除被用户明确删除的 id，不会误删 dashboard 等其它入口写入的日志
-        try {
-            const delIds = (appData._deletedWorkLogIds || []).filter(function(x){ return x; });
-            if (delIds.length > 0) {
-                const { error: delErr } = await supabaseClient.from('work_logs').delete().in('id', delIds);
-                if (delErr) {
-                    console.warn('⚠️ 清理已删除日志失败:', delErr);
-                } else {
-                    appData._deletedWorkLogIds = [];
-                    // 仅持久化清理标记，不再触发上传
-                    localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-                    console.log('🗑️ 已清理 ' + delIds.length + ' 条已删除日志');
-                }
-            }
-        } catch (e) { console.warn('⚠️ 清理已删除日志异常:', e); }
+        // 墓碑删除：仅删除用户“明确删除”的任务/日志（精确 id，绝不做推断式删除）
+        await applyTombstones();
 
         if (hasError) {
             console.error('❌ 同步过程中部分表失败，错误汇总:');
-            errors.forEach(({ table, error }) => {
-                console.error(`  - ${table}:`, error.message || error);
-            });
+            errors.forEach(({ table, error }) => { console.error('  - ' + table + ':', error.message || error); });
             updateSyncStatus('同步失败', 'error');
-        } else {
-            _pendingUpload = false;   // 已成功上传，清除“有待上传修改”标记
-            // 上传成功后创建版本快照（仅手动上传时），并重新加载云端数据
-            let snapshotWarning = false;
-            let snapshotHint = '';
-            if (createSnapshotFlag) {
-                try {
-                    await createSnapshot();
-                    console.log('✅ 版本快照创建完成');
-                } catch (snapErr) {
-                    console.warn('⚠️ 同步成功，但版本快照未创建:', snapErr);
-                    snapshotWarning = true;
-                    if (snapErr._hint) snapshotHint = snapErr._hint;
-                    else if (snapErr.code === '42501' || (snapErr.message && snapErr.message.includes('permission denied'))) {
-                        snapshotHint = '快照表权限不足，请在云同步页执行含 grant 的建表 SQL。';
-                    }
-                }
-            }
-            await loadFromSupabase();
-            updateSyncStatus(snapshotWarning ? ('同步成功（快照失败）' + (snapshotHint ? '：' + snapshotHint : '')) : '已同步', snapshotWarning ? 'error' : 'success');
-            console.log('✅ 所有数据同步完成');
+            // 保留 _pendingUpload=true 以便下次自动重试；抛出异常
+            throw new Error('部分表同步失败: ' + errors.map(e => e.table).join(','));
         }
+
+        _pendingUpload = false;   // 已成功上传，清除“有待上传修改”标记
+        _lastUploadedAt = Date.now();
+        // 上传成功后创建版本快照（每次上传都生成一个版本，支持恢复到任意版本）
+        let snapOk = true;
+        if (createSnapshotFlag) {
+            try {
+                await createSnapshot();
+                console.log('✅ 版本快照创建完成');
+            } catch (snapErr) {
+                snapOk = false;
+                console.warn('⚠️ 同步成功，但版本快照未创建:', snapErr);
+            }
+        }
+        updateSyncStatus(snapOk ? '已同步' : '已同步(快照失败)', 'success');
+        console.log('✅ 所有数据上传完成');
+
     } catch (err) {
         updateSyncStatus('上传失败', 'error');
         throw err;
@@ -2145,59 +1818,39 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
         function startAutoSync() {
             if (autoSyncTimer) clearInterval(autoSyncTimer);
             autoSyncTimer = setInterval(async () => {
-  	             if (!supabaseClient) return;
-  	             if (_uploading) {
-    	                 console.log('⏰ 自动同步：上传进行中，本次跳过');
-    	                 return;
-    	             }
-  	             // 本地有待上传的修改（例如刚改了节点状态）时，先上传再拉取，
-  	             // 否则 30s 拉取会把云端旧数据覆盖回来，导致刚做的修改丢失
-  	             const hadPending = _pendingUpload;
-  	             if (_pendingUpload) {
-    	                 try {
-    	                     console.log('⏰ 自动同步：检测到本地未上传修改，先上传再拉取...');
-    	                     await syncToSupabase();
-    	                 } catch (e) {
-    	                     console.warn('⚠️ 自动上传本地修改失败，本次跳过拉取以免覆盖修改:', e);
-    	                     return;
-    	                 }
-    	             }
-  	             // 防抖待上传期间（用户刚修改完、尚未真正上传到云端），跳过本次拉取，
-  	             // 避免把尚未提交的本地修改被旧快照覆盖
-  	             if (autoUploadTimer) {
-    	                 console.log('⏰ 自动同步：检测到有待上传的修改，本次跳过拉取');
-    	                 return;
-    	             }
-     	            if (hadPending) {
-     	                 // 已上传并从云端刷新过数据，直接渲染最新状态（无需重复拉取）
-     	                 const ae = document.activeElement;
-      	                 const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
-      	                     ae.tagName === 'SELECT' || ae.isContentEditable);
-      	                 if (!typing) renderPage(currentPage);
-     	                 updateSyncStatus('已同步', 'success');
-     	                 console.log('✅ 自动同步完成（已上传本地修改）');
-     	            } else {
-     	                 console.log('⏰ 自动同步：拉取云端数据...');
-     	                 try {
-      	                      await loadFromSupabase();
-      	                      // 检测用户是否正在输入（工作日志/聊天框/任何表单）：
-      	                      // 若正在输入，本次同步只更新数据、跳过页面重渲染，避免打断输入、清空草稿
-      	                      const ae = document.activeElement;
-      	                      const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
-      	                          ae.tagName === 'SELECT' || ae.isContentEditable);
-      	                      if (typing) {
-      	                          console.log('⏸ 检测到正在输入，本次自动同步跳过页面刷新（数据已更新）');
-      	                          updateSyncStatus('已同步', 'success');
-      	                      } else {
-      	                          renderPage(currentPage);
-        	                      updateSyncStatus('已同步', 'success');
-        	                  }
-        	              console.log('✅ 自动拉取完成');
-    	                  } catch (e) {
-     	                      console.warn('⚠️ 自动拉取失败:', e);
-    	                  }
-     	            }
- 	       }, 30000);
+                if (!supabaseClient) return;
+                if (_uploading) {
+                    console.log('⏰ 自动同步：上传进行中，本次跳过');
+                    return;
+                }
+                // 正在防抖上传期间（用户刚修改完、尚未真正上传），跳过本次，避免覆盖未提交修改
+                if (autoUploadTimer) {
+                    console.log('⏰ 自动同步：检测到待上传修改（防抖中），本次跳过');
+                    return;
+                }
+                const ae = document.activeElement;
+                const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
+                    ae.tagName === 'SELECT' || ae.isContentEditable);
+                try {
+                    if (_pendingUpload) {
+                        // 本地有待上传修改：先上传（本地优先），上传即生成新版本
+                        console.log('⏰ 自动同步：本地有未上传修改，先上传...');
+                        await syncToSupabase(true);
+                        if (!typing) renderPage(currentPage);
+                        updateSyncStatus('已同步', 'success');
+                        console.log('✅ 自动上传完成');
+                    } else if (autoSyncEnabled) {
+                        // 本地干净：拉取云端最新（只读采用快照，绝不删除）
+                        console.log('⏰ 自动同步：拉取云端最新...');
+                        await loadFromSupabase();
+                        if (!typing) renderPage(currentPage);
+                        updateSyncStatus('已同步', 'success');
+                        console.log('✅ 自动拉取完成');
+                    }
+                } catch (e) {
+                    console.warn('⚠️ 自动同步失败:', e);
+                }
+            }, 30000);
         }
 
         function stopAutoSync() {
@@ -2237,8 +1890,8 @@ async function manualSync() {
     }
     showConfirm('确认从云端同步最新版本数据到本地（将覆盖本地未保存的修改）？', async function() {
         try {
+            _pendingUpload = false;   // 显式拉取：先清除待上传标记，确保拉取不被跳过
             await loadFromSupabase();
-            _pendingUpload = false;   // 已从云端拉取，本地与云端一致，清除待上传标记
             renderPage(currentPage);
             showToast('✅ 已从云端同步最新数据');
             updateSyncStatus('已同步', 'success');
@@ -2614,6 +2267,9 @@ function renderHome(mc) {
 function deleteTask(tid) {
     showConfirm('确认删除此待办？', function() {
         appData.tasks = appData.tasks.filter(t => t.id !== tid);
+        // 【sync-rewrite】墓碑：记录被删任务 id，上传时精确删除云端对应记录（不靠“本地没有就删云端”）
+        appData._deletedTaskIds = appData._deletedTaskIds || [];
+        if (appData._deletedTaskIds.indexOf(tid) === -1) appData._deletedTaskIds.push(tid);
         saveData(true);
         renderPage(currentPage);
         showToast('✅ 已删除并同步云端');
