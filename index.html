@@ -1,24 +1,68 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes">
-    <title>个人工作台 · 专业版</title>
+<!-- ============================================================
+     v21.10-mobile-split  2026-09-08  ★ 当前最新稿
+     基于 v21-mobile-split 另存改写，原文件未改动。
 
-    <!-- FullCalendar v3 依赖 -->
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/3.10.2/fullcalendar.min.css">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.7/css/bootstrap.min.css">
+     v21.10 追加修复：
+     · 日历视图月网格错乱（日期竖排成单列）：移除对 .fc-view/.fc-view-container/
+       .fc-day-grid-container/.fc-day-grid 的 display/height 覆写，避免破坏
+       FullCalendar 3 原生 table 布局；将 .fc-day-top 的 display:flex 改回
+       text-align:center，让日期在单元格内居中而不破坏单元格。
+
+     本次变更（仅 CSS，JS / DOM / 数据逻辑零改动）：
+     · 移动端显示逻辑与 PC 端分离重写：PC 端 = 基础样式（>768px 自然生效），
+       移动端 = 独立覆写层 @media (max-width:768px)，按 10 个分区组织：
+       骨架布局 / 导航 / 头部 / 卡片看板 / 表格 / 表单按钮 / 弹窗 / 日历 / 工具页 / 小屏
+     · 新增小屏补充层 @media (max-width:480px)
+     · 汉堡按钮改 44×44 触控区；侧边栏打开用纯 CSS box-shadow 9999px 模拟全屏遮罩
+       （不拦截点击，原「点外部关闭」逻辑照常工作，JS 未改）
+     · 输入框强制 16px 防 iOS 聚焦自动放大；按钮触控高度 30~44px
+     · 头部操作区改单行横滑并隐藏时钟腾空间；适配 iPhone 底部安全区
+     · 弹窗限高 92vh 防溢出；表格/筛选标签保留横滚滑动
+     冻结列（freeze-enabled）规则原样保留，未被移动层覆盖。
+
+     --- 2026-09-06 追加修复（云端缺失横幅根因）---
+     · 拉取云端项目时原来用白名单 p.status === 'active' || 'done' 过滤，
+       但工作台自己就把 p.status 维护为 pending/progress/done
+       （p.status = calcStatus(p.nodes)），上传也照实写这个值。
+       导致所有"未开始/进行中"项目在每次拉取后从本地消失，
+       反复触发 v2 的"云端缺失"横幅。
+     · 修复：快照路径(约 939 行)与分表路径(约 1117 行)两处，
+       改为反向排除 archived/shelved/terminated（这三种由各自分支单独处理），
+       其余状态全部保留。
+     ============================================================ -->
+<!-- ============================================================
+     v2-fixed (fix_project_deletion_v2)  2026-08-24
+     修复：项目总表项目被云端同步反复删除的问题
+     · 移除上传时“云端多余项目”物理删除分支（防误删的核心）
+     · 任务删除改为墓碑机制（只删用户明确删除的任务）
+     · 上传部分失败时明确报错，不再伪装成功
+     · 拉取前预检云端数据，异常/为空时中止同步保留本地
+     · 同步后项目缺失检测 + 横幅警告 + 一键恢复同步前备份
+     基线：C:/Users/zty/Desktop/workbench-index.html（原文件未改动）
+     ============================================================ -->
+<html lang="zh-CN" data-page-node-id="PhqhUO4Ud94VkHLhTTDtKV">
+<head data-page-node-id="NUCgOcPiTkOzjYdXAK03dz">
+    <meta charset="UTF-8" data-page-node-id="WtK6r9hOVZ36IbrHb1vwGC">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes" data-page-node-id="BLiI1KEztCK766SFRGbkF5">
+    <title>个人工作台 · 专业版</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#1a3a5c">
+
+    <!-- FullCalendar v3 依赖（已本地化：vendor/，避免 CDN 跟踪防护拦截导致样式丢失） -->
+    <link rel="stylesheet" href="vendor/fullcalendar.min.css" data-page-node-id="vBfZbgwNamFZzG7uItgO1u">
+    <link rel="stylesheet" href="vendor/bootstrap.min.css" data-page-node-id="VIHsu9QRJ2HIS0HTm1Jph9">
 
     <!-- 图表、排序、Supabase -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="vendor/chart.umd.min.js"></script>
+    <script src="vendor/Sortable.min.js"></script>
+    <script src="vendor/supabase.min.js"></script>
 
     <!-- FullCalendar 依赖（顺序：jQuery → Moment → FullCalendar → Bootstrap JS） -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/1.10.2/jquery.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.18.1/moment.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/fullcalendar/3.10.2/fullcalendar.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/twitter-bootstrap/3.3.7/js/bootstrap.min.js"></script>
+    <script src="vendor/jquery.min.js"></script>
+    <script src="vendor/moment.min.js"></script>
+    <script src="vendor/fullcalendar.min.js"></script>
+    <script src="vendor/bootstrap.min.js"></script>
 
     <style>
 /* ===== 完整样式 ===== */
@@ -335,17 +379,15 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .field input, .field select, .field textarea { width:100%; padding:6px 12px; border-radius:8px; border:1px solid #dde2e8; font-size:13px; }
 .field textarea { min-height:50px; resize:vertical; }
 .empty-state { text-align:center; padding:24px; color:#cbd5e1; font-size:14px; }
-.fc-calendar-container { flex:1; min-height:0; position:relative; display:flex; flex-direction:column; overflow:auto; }
-.fc-calendar-container .fc { height:100% !important; flex:1; }
-.fc-calendar-container .fc-view-container { height:calc(100% - 50px) !important; flex:1; }
-.fc-calendar-container .fc-view { height:100% !important; }
-.fc-calendar-container .fc-day-grid-container { height:calc(100% - 30px) !important; }
-.fc-calendar-container .fc-day-grid { height:100% !important; }
-.fc-calendar-container .fc-day-grid .fc-row { height:calc((100% - 2px)/6) !important; min-height:50px !important; }
-.fc-calendar-container .fc-day-grid .fc-row .fc-day-number { font-size:16px !important; padding:4px 6px; }
-.fc-calendar-container .fc-day-grid .fc-row .fc-day-grid-event { font-size:13px !important; padding:4px 6px !important; margin:2px 3px !important; border-radius:6px; line-height:1.4; }
-.fc-calendar-container .fc-day-grid .fc-row .fc-day-grid-event .fc-title { font-size:12px !important; }
-.fc-calendar-container .fc-day-header { font-size:14px !important; padding:8px 0 !important; }
+.fc-calendar-container { flex:1; min-height:0; position:relative; display:flex; flex-direction:column; overflow:hidden; }
+.fc-calendar-container .fc { flex:1; min-height:0; height:100% !important; }
+/* 不再覆写 .fc-view/.fc-day-grid 等内部 display/height，避免破坏 FullCalendar 原生 table 布局 */
+.fc-calendar-container .fc-day-grid .fc-row { min-height:50px; }
+.fc-calendar-container .fc-day-top { text-align:center !important; }
+.fc-calendar-container .fc-day-number { font-size:16px !important; padding:4px 6px; }
+.fc-calendar-container .fc-day-grid-event { font-size:13px !important; padding:4px 6px !important; margin:2px 3px !important; border-radius:6px; line-height:1.4; }
+.fc-calendar-container .fc-day-grid-event .fc-title { font-size:12px !important; }
+.fc-calendar-container .fc-day-header { font-size:14px !important; padding:8px 0 !important; text-align:center !important; }
 .cal-toolbar { display:flex; flex-wrap:wrap; gap:8px; padding:8px 0 12px; border-bottom:1px solid var(--border); margin-bottom:10px; flex-shrink:0; align-items:center; }
 .cal-toolbar .view-group { display:flex; gap:2px; background:#f1f4f9; border-radius:30px; padding:2px; }
 .cal-toolbar .view-group button { border:none; background:transparent; padding:6px 16px; border-radius:30px; font-size:13px; font-weight:500; color:#475569; cursor:pointer; transition:0.2s; }
@@ -365,117 +407,562 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .auto-toggle-group .btn-auto:hover { background:rgba(255,255,255,0.15); }
 .auto-toggle-group .sep { color:rgba(255,255,255,0.2); }
 
-/* ===== 移动端响应式优化（已移除冻结列） ===== */
+/* ======================================================================
+   移动端专属显示层（max-width:768px）—— v21-mobile-split
+   设计原则：与 PC 端完全分离。PC 端样式即基础样式（>768px 自然生效），
+   本层只负责移动端覆写，不反向影响 PC；JS / DOM / 数据逻辑零改动。
+   结构：① 骨架布局 ② 导航 ③ 头部 ④ 卡片与看板 ⑤ 表格 ⑥ 表单与按钮
+         ⑦ 弹窗 ⑧ 日历 ⑨ 各工具页 ⑩ 小屏(≤480px)补充
+   ====================================================================== */
 @media (max-width:768px) {
-    .hamburger { display:block; }
-    .sidebar { position:fixed; top:0; left:-280px; width:280px; height:100%; transition:left 0.3s ease; z-index:998; background:#fff; box-shadow:2px 0 12px rgba(0,0,0,0.1); overflow-y:auto; }
-    .sidebar.open { left:0; }
-    .main { margin-left:0 !important; width:100%; }
+    /* ==================================================================
+       ① 移动端专属设计令牌（--m-* 前缀，与 PC :root 完全分离）
+       设计原则：独立令牌，PC 端不读、不受影响；移动端只读 m-*，
+       便于后续单独调优而不牵连桌面版
+       ================================================================== */
+    :root {
+        --m-radius: 14px;
+        --m-radius-sm: 10px;
+        --m-spacing-xs: 4px;
+        --m-spacing-s: 8px;
+        --m-spacing-m: 12px;
+        --m-spacing-l: 16px;
+        --m-header-h: 48px;
+        --m-bottomnav-h: 56px;
+        --m-tap-min: 44px;
+        --m-font-mini: 10px;
+        --m-font-sm: 12px;
+        --m-font-md: 14px;
+        --m-font-lg: 16px;
+        --m-font-xl: 18px;
+        --m-primary: #1a3a5c;
+        --m-primary-light: #2a5f8f;
+        --m-primary-grad: linear-gradient(135deg, #1a3a5c, #2a5f8f);
+        --m-bg: #f0f4f9;
+        --m-card: #ffffff;
+        --m-border: #e9ecef;
+        --m-text: #1a3a5c;
+        --m-text-secondary: #6c7a94;
+        --m-text-muted: #94a3b8;
+        --m-success: #28a745;
+        --m-warning: #ffc107;
+        --m-danger: #dc3545;
+        --m-shadow-sm: 0 2px 8px rgba(26,58,92,0.06);
+        --m-shadow-md: 0 4px 14px rgba(26,58,92,0.10);
+        --m-shadow-lg: 0 6px 20px rgba(26,58,92,0.14);
+        --m-safe-bottom: env(safe-area-inset-bottom);
+    }
 
-    /* 为汉堡按钮留出空间，防止遮挡标题 */
-    .main-header h2 { padding-left: 42px; font-size:15px; }
-    .main-header .header-actions { margin-left: auto; }
+    /* ---------- ② 骨架布局：单列堆叠 + 底部导航预留空间 ---------- */
+    html, body { height: 100%; }
+    body { font-size: 13px; -webkit-tap-highlight-color: transparent; }
+    .main { margin-left: 0 !important; width: 100%; }
+    .main-content { padding: 10px 8px calc(var(--m-bottomnav-h) + 12px + var(--m-safe-bottom)); gap: 12px; }
 
-    .main-content { padding:8px 6px 12px; gap:10px; }
-    .card { padding:10px 10px; margin-bottom:6px; border-radius:10px; }
-    .card-header { flex-direction:column; align-items:stretch; gap:6px; }
-    .card-header h3 { font-size:14px; }
-    .main-header { padding:10px 14px; gap:6px; }
-    .main-header .header-actions .btn { font-size:10px; padding:3px 8px; }
+    /* 移动端专属：为"今天要处理"区块加卡片感（PC 无此样式） */
+    .today-todo-card {
+        background: var(--m-card); border-radius: var(--m-radius);
+        box-shadow: var(--m-shadow-md); padding: 12px 14px; margin-bottom: 4px;
+        border-left: 4px solid var(--m-warning);
+    }
+    .today-todo-card .card-title { font-size: 15px; font-weight: 600; color: var(--m-primary); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+    .today-todo-card .todo-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--m-border); font-size: 13px; }
+    .today-todo-card .todo-item:last-child { border-bottom: none; }
+    .today-todo-card .todo-item.overdue { color: var(--m-danger); font-weight: 500; }
+    .today-todo-card .todo-item.overdue::before { content: '⚠'; color: var(--m-danger); font-weight: 700; }
+    .today-todo-card .todo-item .todo-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .today-todo-card .todo-item .todo-date { font-size: 11px; color: var(--m-text-secondary); flex-shrink: 0; }
+    .today-todo-card .todo-item.done { opacity: 0.55; text-decoration: line-through; }
+    .today-todo-card .todo-item .todo-check {
+        width: 22px; height: 22px; border-radius: 6px; border: 2px solid var(--m-border);
+        display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0;
+        background: #fff; transition: all 0.15s; color: transparent; font-size: 14px; line-height: 1;
+    }
+    .today-todo-card .todo-item.done .todo-check { background: var(--m-success); border-color: var(--m-success); color: #fff; }
+    .today-todo-card .todo-empty { color: var(--m-text-muted); font-size: 12px; padding: 8px 0; text-align: center; }
 
-    /* 看板 */
-    .kanban-grid { flex-direction:column; gap:8px; }
-    .kanban-col { min-width:unset; max-height:260px; padding:8px; }
-    .kanban-col h4 { font-size:12px; }
-    .kanban-card { padding:10px; font-size:12px; }
+    /* ---------- ② 导航：抽屉式侧边栏 + 全屏遮罩 ---------- */
+    .hamburger {
+        display:flex; align-items:center; justify-content:center;
+        position:fixed; top:8px; left:8px; z-index:9999;
+        width:44px; height:44px; padding:0; font-size:20px; line-height:1;
+        background:var(--primary); color:#fff; border:none; border-radius:12px;
+        box-shadow:0 2px 10px rgba(26,58,92,0.35); cursor:pointer;
+    }
+    .hamburger:active { transform:scale(0.94); }
+    .sidebar {
+        position:fixed; top:0; left:-290px; width:280px; max-width:85vw; height:100%;
+        transition:left 0.3s ease, box-shadow 0.3s ease;
+        z-index:10000; background:#fff; overflow-y:auto;
+        padding-bottom:env(safe-area-inset-bottom);
+    }
+    /* 打开时用超大投影模拟全屏遮罩（纯 CSS，无需改动 JS） */
+    .sidebar.open { left:0; box-shadow:0 0 0 9999px rgba(15,23,42,0.45); }
+    .sidebar nav a { min-height:44px; padding:10px 16px; font-size:14px; }
 
-    /* 表格 - 水平滚动 + 小字体（无固定列） */
-    .table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+    /* ---------- ③ 头部：标题避让汉堡，操作区横滑 ---------- */
+    .main-header { padding:10px 12px 10px 60px; gap:8px; flex-wrap:nowrap; }
+    .main-header h2 { font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:0; }
+    .main-header .header-actions {
+        margin-left:auto; flex-wrap:nowrap; overflow-x:auto; gap:6px;
+        -webkit-overflow-scrolling:touch; scrollbar-width:none; max-width:100%;
+    }
+    .main-header .header-actions::-webkit-scrollbar { display:none; }
+    .main-header .header-actions .btn { font-size:11px; padding:5px 10px; min-height:36px; flex-shrink:0; }
+    .main-header .header-actions #currentTime { display:none; } /* 窄屏隐藏时钟，腾出空间 */
+    .auto-toggle-group { flex-shrink:0; }
+    .auto-toggle-group .btn-auto { font-size:10px; padding:3px 7px; min-height:32px; }
+    .sync-status { font-size:10px; flex-shrink:0; }
+
+    /* ---------- ④ 卡片与看板：全宽单列 ---------- */
+    .card { padding:14px 12px; margin-bottom:0; border-radius:12px; }
+    .card-header { flex-direction:column; align-items:stretch; gap:8px; margin-bottom:10px; }
+    .card-header h3 { font-size:15px; }
+    .kanban-grid { flex-direction:column; gap:10px; overflow-x:visible; }
+    .kanban-col { min-width:unset; max-height:320px; padding:10px; }
+    .kanban-col h4 { font-size:13px; }
+    .kanban-card { padding:12px; font-size:13px; }
+    .node-row { font-size:12px; padding:5px 0; }
+    .node-status-btn { font-size:10px; padding:4px 10px; min-width:44px; min-height:28px; }
+
+    /* ---------- ⑤ 表格：横滚 + 触控滑动 ---------- */
+    .table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; border-radius:10px; }
     .table-wrap table { font-size:12px; min-width:700px; }
-    .table-wrap th, .table-wrap td { padding:4px 6px; font-size:12px; }
+    .table-wrap th, .table-wrap td { padding:6px 6px; font-size:12px; }
     .table-wrap th { font-size:12px; }
 
-    /* 筛选标签 */
-    .filter-pills span { height:28px; font-size:11px; padding:0 10px; }
+    /* ===== 【v21.1】移动端项目总表卡片化 ===== */
+    /* 移动端下隐藏原表格，改用卡片布局 */
+    #projectsCard .table-wrap { display:none; }
+    .m-proj-cards { display:flex; flex-direction:column; gap:10px; }
+    .m-proj-card {
+        background:var(--m-card); border-radius:var(--m-radius); padding:14px 16px;
+        border:1px solid var(--m-border); box-shadow:var(--m-shadow-sm);
+        cursor:pointer; transition:all 0.15s; position:relative; overflow:hidden;
+    }
+    .m-proj-card:active { transform:scale(0.98); box-shadow:var(--m-shadow-md); }
+    .m-proj-card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:10px; }
+    .m-proj-card-name { font-size:16px; font-weight:700; color:var(--m-primary); display:flex; align-items:center; gap:8px; }
+    .m-proj-card-name .drag-icon { font-size:18px; color:var(--m-text-muted); cursor:grab; }
+    .m-proj-card-prog { display:flex; align-items:center; gap:10px; }
+    .m-proj-card-bar { flex:1; height:8px; background:rgba(148,163,184,0.20); border-radius:4px; overflow:hidden; }
+    .m-proj-card-fill { height:100%; border-radius:4px; transition:width 0.3s; }
+    .m-proj-card-fill.low { background:linear-gradient(90deg,#94a3b8,#64748b); }
+    .m-proj-card-fill.mid { background:linear-gradient(90deg,#3b82f6,#60a5fa); }
+    .m-proj-card-fill.high { background:linear-gradient(90deg,#10b981,#34d399); }
+    .m-proj-card-pct { font-size:14px; font-weight:700; color:var(--m-primary); min-width:42px; text-align:right; }
+    .m-proj-card-count { font-size:12px; color:var(--m-text-muted); }
+    .m-proj-card-expand { font-size:11px; color:var(--m-primary); padding:6px 0 0; display:flex; align-items:center; gap:4px; cursor:pointer; }
 
-    .task-grid { grid-template-columns:1fr; }
-    .task-assign-card { padding:10px; }
-    .task-assign-card .card-title { font-size:13px; }
-    .work-log-layout { flex-direction:column; }
-    .project-list-sidebar { width:100%; max-height:180px; overflow-y:auto; border-right:none; border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:8px; }
-    .modal { max-width:98%; padding:14px; margin:8px; }
+    /* 展开的详情区域 */
+    .m-proj-card-detail { display:none; padding-top:12px; margin-top:12px; border-top:1px solid var(--m-border); }
+    .m-proj-card.expanded .m-proj-card-detail { display:block; }
+    .m-proj-card.expanded .m-proj-card-expand { color:var(--m-danger); }
+    .m-proj-type-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px dashed var(--m-border); }
+    .m-proj-type-row:last-child { border-bottom:none; }
+    .m-proj-type-name { font-size:14px; font-weight:600; color:var(--m-text); flex:1; }
+    .m-proj-type-check { width:22px; height:22px; border-radius:6px; border:2px solid var(--m-border); display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; background:#fff; transition:all 0.15s; }
+    .m-proj-type-check.checked { background:var(--m-success); border-color:var(--m-success); color:#fff; font-size:14px; }
+    .m-proj-type-tag { font-size:11px; padding:2px 8px; border-radius:10px; background:rgba(59,130,246,0.10); color:#3b82f6; font-weight:500; }
+    .m-proj-type-actions { display:flex; gap:6px; }
+    .m-proj-type-actions button { font-size:11px; padding:4px 10px; min-height:28px; }
+
+    /* 公司行背景色（对应原表格行色） */
+    .m-proj-card.archived { border-left:4px solid #28a745; background:rgba(40,167,69,0.04); }
+    .m-proj-card.shelved { border-left:4px solid #ffc107; background:rgba(255,193,7,0.04); }
+    .m-proj-card.terminated { border-left:4px solid #dc3545; background:rgba(220,53,69,0.04); }
+
+    /* 防止移动端卡片内容溢出（首页/总表/看板） */
+    .m-proj-card, .today-todo-card, .m-settle-card, .m-data-card, .m-task-card { overflow:hidden; word-wrap:break-word; overflow-wrap:break-word; }
+    .m-proj-card-header { flex-wrap:wrap; gap:6px; min-width:0; }
+    .m-proj-card-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .m-proj-card-prog { min-width:0; flex:1; }
+    .m-proj-card-detail { min-width:0; }
+    .m-proj-type-name { min-width:0; overflow:hidden; text-overflow:ellipsis; }
+
+    /* ===== 【v21.1】移动端筛选下拉框 ===== */
+    .m-filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+    .m-filter-select { flex:1; min-width:100px; height:38px; font-size:16px; padding:0 10px; border-radius:10px; border:1px solid var(--m-border); background:#fff; color:var(--m-text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 8px center; padding-right:28px; }
+    .m-filter-search { flex:2; min-width:120px; display:flex; gap:4px; }
+    .m-filter-search input { flex:1; height:38px; font-size:16px; padding:0 12px; border-radius:10px; border:1px solid var(--m-border); background:#fff; }
+    .m-filter-search button { width:38px; height:38px; border-radius:10px; border:none; background:var(--m-primary); color:#fff; font-size:14px; display:flex; align-items:center; justify-content:center; }
+
+    /* ===== 【v21.1】移动端看板卡片修复 ===== */
+    .kanban-grid { overflow-x:hidden !important; width:100%; }
+    .kanban-col { width:100% !important; min-width:0 !important; max-height:40vh; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+    .kanban-card { overflow:hidden; word-wrap:break-word; overflow-wrap:break-word; width:100%; box-sizing:border-box; }
+    .kanban-card .card-title { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex-wrap:nowrap !important; }
+    .kanban-card .card-title span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:100%; }
+    .kanban-card .tag { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .kanban-card .node-row { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:4px 0; border-bottom:1px dashed rgba(0,0,0,0.06); font-size:12px; }
+    .kanban-card .node-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+    .kanban-card .node-status-btn { flex-shrink:0; font-size:10px; padding:3px 8px; min-width:44px; min-height:26px; border-radius:8px; border:1px solid var(--m-border); background:#fff; cursor:pointer; }
+    .kanban-card .progress-bar { width:100%; height:6px; background:rgba(148,163,184,0.15); border-radius:3px; overflow:hidden; margin:6px 0; }
+    .kanban-card .progress-fill { height:100%; border-radius:3px; transition:width 0.3s; }
+    .kanban-card .progress-fill.low { background:linear-gradient(90deg,#94a3b8,#64748b); }
+    .kanban-card .progress-fill.mid { background:linear-gradient(90deg,#3b82f6,#60a5fa); }
+    .kanban-card .progress-fill.high { background:linear-gradient(90deg,#10b981,#34d399); }
+    .kanban-card > div:last-child { display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; }
+    .kanban-card > div:last-child .btn { min-height:28px; font-size:10px; padding:3px 8px; flex-shrink:0; }
+
+    /* ---------- ⑥ 表单与按钮：触控友好 ---------- */
+    input, select, textarea { font-size:16px; } /* ≥16px 防止 iOS 聚焦自动放大 */
+    .btn { font-size:12px; padding:6px 14px; min-height:38px; }
+    .btn-sm { font-size:11px; padding:5px 12px; min-height:34px; }
+    .btn-xs { font-size:10px; padding:4px 10px; min-height:30px; }
+    .filter-pills { flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; padding-bottom:2px; }
+    .filter-pills span { height:34px; font-size:12px; padding:0 14px; flex-shrink:0; }
+    .drag-handle { font-size:20px; padding:8px 6px; touch-action:none; }
+
+    /* ---------- ⑦ 弹窗：接近全屏 ---------- */
+    .modal { max-width:96%; max-height:92vh; padding:16px 14px; margin:8px; border-radius:14px; overflow-y:auto; }
     .modal h2 { font-size:17px; }
     .modal h3 { font-size:15px; }
-    .settlement-summary { flex-wrap:wrap; gap:6px; padding:8px 12px; font-size:12px; }
-    .settlement-summary .stat-item .value { font-size:13px; }
+
+    /* ---------- ⑧ 日历：压缩高度防溢出 ---------- */
+    .fc-calendar-container { height:58vh; min-height:300px; }
+    .fc-calendar-container .fc-day-grid .fc-row { min-height:30px !important; }
+    .fc-calendar-container .fc-day-number { font-size:10px !important; padding:1px 2px; }
+    .fc-calendar-container .fc-day-grid-event { font-size:8px !important; padding:1px 3px !important; margin:1px 2px !important; }
+    .fc-calendar-container .fc-day-grid-event .fc-title { font-size:7px !important; }
+    .fc-calendar-container .fc-day-header { font-size:10px !important; padding:2px 0 !important; }
+    .cal-toolbar { flex-direction:column; align-items:stretch; gap:8px; padding:4px 0 8px; }
+    .cal-toolbar .filter-group { margin-left:0; flex-wrap:wrap; }
+    .cal-toolbar .filter-group select, .cal-toolbar .filter-group input { width:100%; height:38px; font-size:16px; }
+    .cal-toolbar .view-group button { font-size:12px; padding:6px 14px; min-height:36px; }
+    .cal-toolbar .nav-group .month-label { font-size:14px; min-width:70px; }
+
+    /* ---------- ⑨ 各工具页 ---------- */
+    .task-grid { grid-template-columns:1fr; }
+    .task-assign-card { padding:12px; }
+    .task-assign-card .card-title { font-size:13px; }
+    .work-log-layout { flex-direction:column; }
+    .project-list-sidebar { width:100%; max-height:160px; overflow-y:auto; -webkit-overflow-scrolling:touch; border-right:none; border-bottom:1px solid var(--border); padding-bottom:10px; margin-bottom:10px; }
+    .project-list-sidebar h4 { font-size:13px; margin-bottom:8px; }
+    .log-input-area { width:100%; }
+    .log-input-area textarea { height:120px; font-size:16px; }
+    .log-input-area .btn-primary { width:100%; min-height:40px; font-size:14px; }
+    .log-project-item { padding:8px 12px; font-size:13px; min-height:36px; display:flex; align-items:center; }
+    .settlement-summary { flex-wrap:wrap; gap:6px; padding:10px 12px; font-size:12px; }
+    .settlement-summary .stat-item .value { font-size:14px; }
     .installment-container { flex-wrap:wrap; justify-content:center; }
-    .installment-item { min-width:50px; padding:3px 4px; }
+    .installment-item { min-width:52px; padding:4px; }
     .installment-item .inst-row { font-size:13px; }
     .installment-item .inst-date-text { font-size:11px; min-width:44px; }
-
-    /* 日历高度限制防止溢出 */
-    .fc-calendar-container { height: 60vh; min-height: 300px; }
-    .fc-calendar-container .fc-day-grid .fc-row { min-height:30px !important; }
-    .fc-calendar-container .fc-day-grid .fc-row .fc-day-number { font-size:10px !important; padding:1px 2px; }
-    .fc-calendar-container .fc-day-grid .fc-row .fc-day-grid-event { font-size:8px !important; padding:1px 3px !important; margin:1px 2px !important; }
-    .fc-calendar-container .fc-day-grid .fc-row .fc-day-grid-event .fc-title { font-size:7px !important; }
-    .fc-calendar-container .fc-day-header { font-size:10px !important; padding:2px 0 !important; }
-
-.report-preview-box {
-    min-height: 200px;
-    max-height: 360px;
-    font-size: 12px;
-    padding: 4px 6px;
-    overflow-x: auto;
-    word-wrap: break-word;
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-}
-.report-preview-box .field-title {
-    font-size: 12px;
-}
-.report-preview-box .field-content {
-    font-size: 11px;
-    padding: 1px 4px;
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    word-break: break-word;
-    overflow-x: auto;
-    width: 100%;
-    max-width: 100%;
-    box-sizing: border-box;
-}
-.report-preview-box .field-content span {
-    display: block;
-    word-break: break-word;
-    overflow-wrap: break-word;
-    max-width: 100%;
-}
-    .chart-row { flex-direction:column; gap:10px; }
-    .chart-row .card { flex:1; padding:10px; }
-    .cal-toolbar { flex-direction:column; align-items:stretch; gap:6px; padding:4px 0 8px; }
-    .cal-toolbar .filter-group { margin-left:0; flex-wrap:wrap; }
-    .cal-toolbar .filter-group select, .cal-toolbar .filter-group input { width:100%; height:30px; font-size:12px; }
-    .cal-toolbar .view-group button { font-size:12px; padding:4px 12px; }
-    .cal-toolbar .nav-group .month-label { font-size:14px; min-width:70px; }
-    .auto-toggle-group .btn-auto { font-size:10px; padding:2px 6px; }
-    .sync-status { font-size:10px; }
-    .template-list { grid-template-columns:1fr 1fr; gap:8px; }
-    .template-card { padding:10px; }
+    .chart-row { flex-direction:column; gap:12px; }
+    .chart-row .card { flex:1; padding:12px; }
+    .template-list { grid-template-columns:1fr 1fr; gap:10px; }
+    .template-card { padding:12px; }
     .template-card .template-name { font-size:13px; }
-    .commission-card { flex-direction:column; align-items:stretch; padding:10px 12px; }
+    .commission-card { flex-direction:column; align-items:stretch; padding:12px; }
     .commission-card .info { flex-wrap:wrap; gap:6px; }
-    .node-row { font-size:11px; padding:3px 0; }
-    .node-status-btn { font-size:9px; padding:2px 8px; min-width:36px; }
-    .btn { font-size:11px; padding:4px 12px; }
-    .btn-sm { font-size:10px; padding:3px 10px; }
-    .btn-xs { font-size:9px; padding:2px 8px; }
-    .color-setting-row { flex-direction:column; align-items:stretch; gap:4px; }
+    .color-setting-row { flex-direction:column; align-items:stretch; gap:6px; }
     .color-setting-row label { min-width:auto; font-size:13px; }
     .color-setting-row input[type="range"] { width:100%; }
-    .report-fields-editor .field-tag { font-size:11px; padding:3px 8px; }
-    .drag-handle { font-size:20px; padding:6px 4px; touch-action:none; }
+    .report-fields-editor { gap:4px; padding:6px; min-height:36px; }
+    .report-fields-editor .field-tag { font-size:11px; padding:2px 7px; border-radius:10px; gap:4px; min-height:22px; line-height:1.3; }
+    .report-fields-editor .field-tag .remove-field { font-size:12px; }
+    .report-fields-editor .field-tag .drag-handle { font-size:11px; }
+
+    /* 报告预览：防横向撑破 */
+    .report-preview-box { min-height:200px; max-height:360px; font-size:12px; padding:6px; overflow-x:auto; word-wrap:break-word; width:100%; max-width:100%; box-sizing:border-box; }
+    .report-preview-box .field-title { font-size:12px; }
+    .report-preview-box .field-content { font-size:11px; padding:2px 4px; white-space:pre-wrap; word-wrap:break-word; word-break:break-word; overflow-x:auto; width:100%; max-width:100%; box-sizing:border-box; }
+    .report-preview-box .field-content span { display:block; word-break:break-word; overflow-wrap:break-word; max-width:100%; }
+
+    /* ==================================================================
+       ⑫ 底部导航栏（移动端专属，PC 不显示）
+       - 5 个高频入口：首页/项目/任务/日历/云同步
+       - 其他 9 个页面通过左上角汉堡抽屉访问
+       - 顶边短横作为 active 指示条，符合 iOS/Android 通用模式
+       ================================================================== */
+    .mobile-bottomnav {
+        position: fixed; left: 0; right: 0; bottom: 0;
+        height: calc(var(--m-bottomnav-h) + var(--m-safe-bottom));
+        padding-bottom: var(--m-safe-bottom);
+        background: rgba(255,255,255,0.96);
+        backdrop-filter: saturate(180%) blur(10px);
+        -webkit-backdrop-filter: saturate(180%) blur(10px);
+        border-top: 1px solid var(--m-border);
+        display: flex; justify-content: space-around; align-items: stretch;
+        z-index: 9997;
+        box-shadow: 0 -2px 10px rgba(26,58,92,0.05);
+    }
+    .mobile-bottomnav a {
+        position: relative;
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        flex: 1;
+        min-width: var(--m-tap-min); min-height: var(--m-tap-min);
+        padding: 6px 0 4px;
+        text-decoration: none; color: var(--m-text-muted);
+        font-size: 10px; gap: 2px;
+        transition: color 0.15s ease;
+        -webkit-tap-highlight-color: transparent;
+    }
+    .mobile-bottomnav a .icon { font-size: 20px; line-height: 1; transition: transform 0.15s ease; }
+    .mobile-bottomnav a .label { font-weight: 500; letter-spacing: 0.3px; }
+    .mobile-bottomnav a.active { color: var(--m-primary); font-weight: 600; }
+    .mobile-bottomnav a.active .icon { transform: translateY(-1px) scale(1.05); }
+    .mobile-bottomnav a.active::before {
+        content: ''; position: absolute; top: 0; left: 50%; transform: translateX(-50%);
+        width: 28px; height: 3px; background: var(--m-primary); border-radius: 0 0 3px 3px;
+    }
+    .mobile-bottomnav .nav-badge {
+        position: absolute; top: 4px; right: calc(50% - 18px);
+        background: var(--m-danger); color: #fff;
+        font-size: 9px; padding: 1px 5px; border-radius: 10px;
+        font-weight: 600; line-height: 1.2; min-width: 16px; text-align: center;
+    }
+    .mobile-bottomnav .nav-badge.zero { display: none; }
+
+    /* 底部导航：仅移动端可见；PC 端由 CSS 默认隐藏 */
+    .mobile-bottomnav { display: none; }
+    /* 在移动端 media query 内部强制显示 */
+    body { padding-bottom: 0; }
+    /* 抽屉打开时底部导航下沉一层，避免遮罩覆盖 */
+    body.drawer-open .mobile-bottomnav { visibility: hidden; }
+
+    /* ===== 【v21.2】移动端表格→卡片（横表转竖卡，保留主要信息） ===== */
+    .m-cards { overflow-x: visible !important; border-radius: 0 !important; padding: 0 !important; }
+    .m-cards table { display: block !important; min-width: 0 !important; width: 100% !important; }
+    .m-cards thead { display: none !important; }
+    .m-cards tbody { display: block !important; }
+    .m-cards tr { display: block !important; padding: 12px 14px; margin-bottom: 10px; background: #fff; border: 1px solid var(--m-border); border-radius: 12px; box-shadow: 0 2px 8px rgba(26,58,92,0.06); }
+    .m-cards tr:hover { background: #fff !important; }
+    .m-cards td { display: flex !important; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px dashed rgba(0,0,0,0.05) !important; border-left: 0 !important; border-right: 0 !important; border-top: 0 !important; text-align: right; }
+    .m-cards td:last-child { border-bottom: none !important; }
+    .m-cards td::before { content: ''; flex-shrink: 0; font-weight: 600; color: var(--text-secondary); font-size: 12px; text-align: left; min-width: 56px; line-height: 1.5; }
+
+    /* 任务表 (7列) */
+    #taskTableWrap.m-cards td:nth-child(1)::before { content: '任务'; }
+    #taskTableWrap.m-cards td:nth-child(2)::before { content: '项目'; }
+    #taskTableWrap.m-cards td:nth-child(3)::before { content: '进度'; }
+    #taskTableWrap.m-cards td:nth-child(4)::before { content: '时间'; }
+    #taskTableWrap.m-cards td:nth-child(5)::before { content: '日期'; }
+    #taskTableWrap.m-cards td:nth-child(6)::before { content: '状态'; }
+    #taskTableWrap.m-cards td:nth-child(7)::before { content: ''; }
+
+    /* 搁置表 (5列) */
+    #shelvedTableWrap.m-cards td:nth-child(1)::before { content: '项目'; }
+    #shelvedTableWrap.m-cards td:nth-child(2)::before { content: '公司'; }
+    #shelvedTableWrap.m-cards td:nth-child(3)::before { content: '日期'; }
+    #shelvedTableWrap.m-cards td:nth-child(4)::before { content: '原因'; }
+    #shelvedTableWrap.m-cards td:nth-child(5)::before { content: ''; }
+
+    /* 终止表 (5列) */
+    #terminatedTableWrap.m-cards td:nth-child(1)::before { content: '项目'; }
+    #terminatedTableWrap.m-cards td:nth-child(2)::before { content: '公司'; }
+    #terminatedTableWrap.m-cards td:nth-child(3)::before { content: '日期'; }
+    #terminatedTableWrap.m-cards td:nth-child(4)::before { content: '原因'; }
+    #terminatedTableWrap.m-cards td:nth-child(5)::before { content: ''; }
+
+    /* 归档表 (4列) */
+    #archivedTableWrap.m-cards td:nth-child(1)::before { content: '项目'; }
+    #archivedTableWrap.m-cards td:nth-child(2)::before { content: '公司'; }
+    #archivedTableWrap.m-cards td:nth-child(3)::before { content: '日期'; }
+    #archivedTableWrap.m-cards td:nth-child(4)::before { content: ''; }
+
+    /* 结算表 (10列) */
+    #settlementTableWrap.m-cards td:nth-child(1)::before { content: '公司'; }
+    #settlementTableWrap.m-cards td:nth-child(2)::before { content: '项目'; }
+    #settlementTableWrap.m-cards td:nth-child(3)::before { content: '标签'; }
+    #settlementTableWrap.m-cards td:nth-child(4)::before { content: '状态'; }
+    #settlementTableWrap.m-cards td:nth-child(5)::before { content: '完成'; }
+    #settlementTableWrap.m-cards td:nth-child(6)::before { content: '提成'; }
+    #settlementTableWrap.m-cards td:nth-child(7)::before { content: '已发'; }
+    #settlementTableWrap.m-cards td:nth-child(8)::before { content: '分期'; }
+    #settlementTableWrap.m-cards td:nth-child(9)::before { content: '备注'; }
+    #settlementTableWrap.m-cards td:nth-child(10)::before { content: ''; }
+    #settlementTableWrap.m-cards td:nth-child(8) { justify-content: flex-start; }
+    #settlementTableWrap.m-cards .installment-container { justify-content: flex-start !important; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+    #settlementTableWrap.m-cards .installment-item { min-width: 60px; }
+
+    /* 结算筛选栏：移动端竖排 */
+    #settlementCard .card-header > div:last-child { flex-wrap: wrap; gap: 6px; }
+    .archive-filter-bar { flex-wrap: wrap; gap: 8px; }
+    .archive-filter-bar input, .archive-filter-bar select { flex: 1; min-width: 100px; height: 38px; font-size: 16px; }
+
+    /* 任务页：移动端上下分区各占等比 */
+    .task-layout { gap: 10px; }
+    .task-layout .top { min-height: 0; }
+    .task-layout .bottom { min-height: 0; }
+    .task-layout .top .task-grid { max-height: 40vh !important; }
+    .task-layout .bottom .table-wrap { max-height: 35vh; }
+
+    /* 结算筛选栏：移动端各控件全宽 */
+    #settlementCard > div:nth-child(3) { flex-direction: column; align-items: stretch; gap: 6px; padding: 10px; }
+    #settlementCard > div:nth-child(3) input, #settlementCard > div:nth-child(3) select { width: 100% !important; font-size: 16px !important; padding: 6px 12px !important; border-radius: 10px !important; }
+    #settlementCard > div:nth-child(3) label { font-size: 13px; }
+    #settlementCard > div:nth-child(3) .btn { width: 100%; }
+
+    /* 日志页 textarea 高度微调 */
+    .log-input-area textarea { height: 120px !important; }
+
+    /* ===== 【v21.3】数据填报卡片化 ===== */
+    .m-data-cards { display:flex; flex-direction:column; gap:10px; }
+    .m-data-card {
+        background:var(--m-card); border-radius:var(--m-radius); padding:14px;
+        border:1px solid var(--m-border); box-shadow:var(--m-shadow-sm);
+        overflow:hidden; word-break:break-word; overflow-wrap:break-word;
+    }
+    .m-data-card-header { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:10px; }
+    .m-data-card-title { font-size:14px; font-weight:700; color:var(--m-primary); flex:1; }
+    .m-data-card-title input { flex:1; font-size:16px; padding:6px 12px; border-radius:10px; border:1px solid var(--m-border); background:#f8fafc; text-align:center; }
+    .m-data-quarter-row { display:flex; gap:6px; flex-wrap:wrap; }
+    .m-data-q-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        flex: 1;
+        min-width: 52px;
+        height: 36px;
+        border-radius: 8px;
+        border: 2px solid var(--m-border);
+        background: #fff;
+        color: var(--text-secondary);
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.15s;
+        user-select: none;
+        text-align: center;
+        line-height: 1;
+    }
+    .m-data-q-btn input[type="checkbox"] { display: none; }
+    .m-data-q-btn.checked {
+        background: linear-gradient(135deg, #10b981, #34d399);
+        color: #fff;
+        border-color: #10b981;
+    }
+    .m-data-q-btn:active { transform: scale(0.96); }
+    .m-data-card-actions { display:flex; justify-content:flex-end; margin-top:8px; }
+
+    /* ===== 【v21.3】任务分配卡片化（总表样式） ===== */
+    .m-task-cards { display:flex; flex-direction:column; gap:10px; }
+    .m-task-card {
+        background:var(--m-card); border-radius:var(--m-radius); padding:14px;
+        border:1px solid var(--m-border); box-shadow:var(--m-shadow-sm);
+        cursor:pointer; transition:all 0.15s; position:relative; overflow:hidden;
+        word-break:break-word; overflow-wrap:break-word;
+    }
+    .m-task-card:active { transform:scale(0.98); box-shadow:var(--m-shadow-md); }
+    .m-task-card.selected { border-color:var(--primary); box-shadow:0 0 0 2px var(--primary); }
+    .m-task-card-header { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+    .m-task-card-name { font-size:14px; font-weight:700; color:var(--m-primary); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .m-task-card-prog { display:flex; align-items:center; gap:8px; }
+    .m-task-card-bar { width:60px; height:6px; background:rgba(148,163,184,0.20); border-radius:3px; overflow:hidden; }
+    .m-task-card-fill { height:100%; border-radius:3px; }
+    .m-task-card-pct { font-size:13px; font-weight:700; color:var(--m-primary); }
+    .m-task-card-count { font-size:12px; color:var(--text-muted); margin-bottom:6px; }
+    .m-task-card-expand { font-size:11px; color:var(--m-primary); padding:4px 0; display:flex; align-items:center; gap:4px; }
+    .m-task-card-detail { display:none; padding-top:10px; margin-top:10px; border-top:1px solid var(--m-border); }
+    .m-task-card.expanded .m-task-card-detail { display:block; }
+    .m-task-card.expanded .m-task-card-expand { color:var(--m-danger); }
+    .m-task-node-row { display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px dashed var(--m-border); }
+    .m-task-node-row:last-child { border-bottom:none; }
+    .m-task-node-check { width:22px; height:22px; border-radius:6px; border:2px solid var(--m-border); display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; background:#fff; transition:all 0.15s; }
+    .m-task-node-check.checked { background:var(--m-primary); border-color:var(--m-primary); color:#fff; font-size:14px; }
+    .m-task-node-name { flex:1; font-size:13px; color:var(--m-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .m-task-node-status { font-size:11px; padding:2px 8px; border-radius:8px; flex-shrink:0; }
+    .m-task-node-status.pending { background:rgba(148,163,184,0.15); color:#64748b; }
+    .m-task-node-status.progress { background:rgba(59,130,246,0.15); color:#3b82f6; }
+    .m-task-node-status.done { background:rgba(16,185,129,0.15); color:#10b981; }
+
+    /* ===== 【v21.3】结算管理卡片化（展开式） ===== */
+    .m-settle-cards { display:flex; flex-direction:column; gap:10px; }
+    .m-settle-card {
+        background:var(--m-card); border-radius:var(--m-radius); padding:14px;
+        border:1px solid var(--m-border); box-shadow:var(--m-shadow-sm);
+        cursor:pointer; transition:all 0.15s; position:relative; overflow:hidden;
+        word-break:break-word; overflow-wrap:break-word;
+    }
+    .m-settle-card:active { transform:scale(0.98); }
+    .m-settle-card-header { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    .m-settle-card-name { font-size:15px; font-weight:700; color:var(--m-primary); flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .m-settle-card-status { font-size:12px; padding:3px 10px; border-radius:10px; flex-shrink:0; font-weight:600; }
+    .m-settle-card-status.done { background:rgba(16,185,129,0.15); color:#10b981; }
+    .m-settle-card-status.progress { background:rgba(59,130,246,0.15); color:#3b82f6; }
+    .m-settle-card-status.pending { background:rgba(148,163,184,0.15); color:#64748b; }
+    .m-settle-card-status.archived { background:rgba(40,167,69,0.15); color:#28a745; }
+    .m-settle-card-meta { display:flex; gap:12px; margin-top:8px; flex-wrap:wrap; }
+    .m-settle-card-meta-item { font-size:12px; color:var(--text-secondary); }
+    .m-settle-card-meta-item b { color:var(--m-text); font-weight:600; }
+    .m-settle-card-settle-tag { font-size:11px; padding:2px 8px; border-radius:8px; font-weight:600; }
+    .m-settle-card-settle-tag.full { background:rgba(16,185,129,0.15); color:#10b981; }
+    .m-settle-card-settle-tag.partial { background:rgba(245,158,11,0.15); color:#f59e0b; }
+    .m-settle-card-settle-tag.unpaid { background:rgba(239,68,68,0.15); color:#ef4444; }
+    .m-settle-card-settle-tag.none { background:rgba(148,163,184,0.15); color:#64748b; }
+    .m-settle-card-expand { font-size:11px; color:var(--m-primary); padding:6px 0 0; display:flex; align-items:center; gap:4px; }
+    .m-settle-card-detail { display:none; padding-top:10px; margin-top:10px; border-top:1px solid var(--m-border); }
+    .m-settle-card.expanded .m-settle-card-detail { display:block; }
+    .m-settle-card.expanded .m-settle-card-expand { color:var(--m-danger); }
+    .m-settle-detail-row { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; padding:6px 0; border-bottom:1px dashed var(--m-border); font-size:13px; }
+    .m-settle-detail-row:last-child { border-bottom:none; }
+    .m-settle-detail-label { color:var(--text-secondary); flex-shrink:0; font-size:12px; }
+    .m-settle-detail-value { text-align:right; flex:1; }
+    .m-settle-detail-value .installment-container { justify-content:flex-end !important; }
+
+    /* ===== 【v21.3】工作日志下拉框 ===== */
+    .m-log-select-wrap { margin-bottom:10px; }
+    .m-log-select-wrap label { font-size:13px; font-weight:500; color:var(--m-text-secondary); margin-bottom:4px; display:block; }
+    .m-log-select { width:100%; height:40px; font-size:16px; padding:0 12px; border-radius:10px; border:1px solid var(--m-border); background:#fff; color:var(--m-text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; padding-right:32px; }
+
+    /* ===== 【v21.3】首页看板折叠展开 ===== */
+    .m-kanban-folders { display:flex; flex-direction:column; gap:10px; }
+    .m-kanban-folder {
+        background:var(--m-card); border-radius:var(--m-radius); padding:0;
+        border:1px solid var(--m-border); box-shadow:var(--m-shadow-sm);
+        overflow:hidden;
+    }
+    .m-kanban-folder-header {
+        display:flex; align-items:center; justify-content:space-between;
+        padding:12px 14px; cursor:pointer; transition:background 0.15s;
+        background:linear-gradient(135deg, rgba(26,58,92,0.03), rgba(26,58,92,0.01));
+    }
+    .m-kanban-folder-header:active { background:rgba(26,58,92,0.06); }
+    .m-kanban-folder-title { font-size:14px; font-weight:700; color:var(--m-primary); display:flex; align-items:center; gap:6px; }
+    .m-kanban-folder-count { font-size:12px; color:var(--m-text-muted); background:rgba(148,163,184,0.15); padding:2px 10px; border-radius:10px; }
+    .m-kanban-folder-arrow { font-size:12px; color:var(--m-text-muted); transition:transform 0.2s; }
+    .m-kanban-folder.expanded .m-kanban-folder-arrow { transform:rotate(180deg); }
+    .m-kanban-folder-body { display:none; padding:10px; max-height:50vh; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+    .m-kanban-folder.expanded .m-kanban-folder-body { display:block; }
+    .m-kanban-folder-body .kanban-card { margin-bottom:8px; }
+    .m-kanban-folder-body .kanban-card:last-child { margin-bottom:0; }
+
+    /* ===== 【v21.3】看板卡片溢出修复 ===== */
+    .kanban-card { position:relative; overflow:hidden; word-break:break-word; overflow-wrap:break-word; }
+    .kanban-card .card-title { display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; line-height:1.3; }
+    .kanban-card .tag { display:inline-block; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+    .kanban-card .node-row { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:3px 0; border-bottom:1px dashed rgba(0,0,0,0.05); font-size:12px; min-height:28px; }
+    .kanban-card .node-row span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; min-width:0; }
+    .kanban-card .node-status-btn { flex-shrink:0; font-size:10px; padding:2px 6px; min-width:38px; min-height:24px; border-radius:6px; border:1px solid var(--m-border); background:#fff; cursor:pointer; }
+    .kanban-card > div:last-child { display:flex; gap:4px; flex-wrap:wrap; margin-top:6px; }
+    .kanban-card > div:last-child .btn { min-height:24px; font-size:10px; padding:2px 6px; flex-shrink:0; }
+    .kanban-col { max-height:35vh !important; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+
+    /* 数据填报年筛选：移动端下拉框 */
+    .m-year-bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+    .m-year-bar select { flex:1; height:36px; font-size:14px; padding:0 10px; border-radius:10px; border:1px solid var(--m-border); background:#fff; }
+    .m-year-bar .btn { flex-shrink:0; }
+}
+
+/* ---------- 小屏补充（≤480px）：进一步压缩 ---------- */
+@media (max-width:480px) {
+    .main-header h2 { font-size:14px; }
+    .card { padding:12px 10px; }
+    .kanban-col { max-height:280px; }
+    .template-list { grid-template-columns:1fr; }
+    .fc-calendar-container { height:52vh; }
+    .modal { max-width:100%; margin:4px; padding:14px 10px; }
+    .mobile-bottomnav a { font-size: 9px; }
+    .mobile-bottomnav a .icon { font-size: 18px; }
+}
+
+/* ---------- PC 端显式隐藏移动端专属元素（完全分离） ---------- */
+@media (min-width:769px) {
+    .mobile-bottomnav { display: none !important; }
+    .hamburger { display: none !important; }
+    .today-todo-card { display: none; }
 }
 /* ===== 冻结列（与原有显示完全一致） ===== */
 #projectsCard.freeze-enabled .sticky-col,
@@ -502,58 +989,67 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 }
     </style>
 </head>
-<body>
+<body data-page-node-id="seFuZukgk6EvwcKKYn0fTs">
 
     <!-- 侧边栏 -->
-    <button class="hamburger" onclick="toggleSidebar()">☰</button>
-    <aside class="sidebar" id="sidebar">
-        <div class="logo">📋 <span>工作台</span></div>
-        <nav>
-            <div class="nav-label">核心</div>
-            <a data-page="home" class="active">🏠 首页看板</a>
-            <a data-page="projects">📁 项目总表</a>
-            <a data-page="tasks">📋 任务分配</a>
-            <a data-page="calendar">📅 日历视图</a>
-            <div class="nav-label">管理</div>
-            <a data-page="logs">📝 工作日志</a>
-            <a data-page="settlement">💰 结算管理</a>
-            <a data-page="shelved">⏸️ 搁置 <span class="badge" id="shelvedBadge">0</span></a>
-            <a data-page="terminated">🛑 终止 <span class="badge" id="terminatedBadge">0</span></a>
-            <a data-page="archived">📦 归档 <span class="badge" id="archivedBadge">0</span></a>
-            <div class="nav-label">工具</div>
-            <a data-page="data-report">📊 数据填报</a>
-            <a data-page="templates">📐 模板中心</a>
-            <a data-page="report-template">📄 报告模板</a>
-            <a data-page="knowledge">🧠 知识库</a>
-            <a data-page="cloudsync">☁️ 云同步</a>
+    <button class="hamburger" onclick="toggleSidebar()" data-page-node-id="nVH4Xe0dcsaqjX5acPnB6l">☰</button>
+    <aside class="sidebar" id="sidebar" data-page-node-id="nSAiqoyM7LG78cwHVHdy1q">
+        <div class="logo" data-page-node-id="xeHANZbMAX6hDbXXlmwEaD">📋 <span data-page-node-id="qnayMn0S1XiZnhH7eMBnkM">工作台</span></div>
+        <nav data-page-node-id="y09wo7yd65iRfBK4c1qOj0">
+            <div class="nav-label" data-page-node-id="n8pb2kHcizjdNcGE1l8pyc">核心</div>
+            <a data-page="home" class="active" data-page-node-id="2poYDiOAfO2HF7dGsPZKEq">🏠 首页看板</a>
+            <a data-page="projects" data-page-node-id="U2E6Pzshq9yKaR0QStONT2">📁 项目总表</a>
+            <a data-page="tasks" data-page-node-id="J2BwfHCWeBDu3mpKtwTlV3">📋 任务分配</a>
+            <a data-page="calendar" data-page-node-id="zGeP8HsaxdllzES9tbYLtn">📅 日历视图</a>
+            <div class="nav-label" data-page-node-id="sBVHrMWVaXeeGngeFLhdJH">管理</div>
+            <a data-page="logs" data-page-node-id="Hwz4Giek8axOrNVgAFLek0">📝 工作日志</a>
+            <a data-page="settlement" data-page-node-id="2VvKHVbz3Ts2FOU7UdGLRm">💰 结算管理</a>
+            <a data-page="shelved" data-page-node-id="UsK50m15qjkpnvFYMEocwC">⏸️ 搁置 <span class="badge" id="shelvedBadge" data-page-node-id="hTQHKoTzfPNPLAZTNlVDRf">0</span></a>
+            <a data-page="terminated" data-page-node-id="55U75FMS1i3tVwKVQ65F29">🛑 终止 <span class="badge" id="terminatedBadge" data-page-node-id="apbbsFPjaeqrsxd7xTQ2kM">0</span></a>
+            <a data-page="archived" data-page-node-id="rFggN5O1CwWMFJ2ev2xk3w">📦 归档 <span class="badge" id="archivedBadge" data-page-node-id="l6qzXntpEEMwUIoNZLuG42">0</span></a>
+            <div class="nav-label" data-page-node-id="WTEnaDhlsplHYM29NVMXbA">工具</div>
+            <a data-page="data-report" data-page-node-id="RumzUJo70NEVEqepZuselM">📊 数据填报</a>
+            <a data-page="templates" data-page-node-id="9zUAg2aPltyAuwpAt6C9Fu">📐 模板中心</a>
+            <a data-page="report-template" data-page-node-id="cO429kOC1eo1vQBXEphZly">📄 报告模板</a>
+            <a data-page="knowledge" data-page-node-id="nRexmtOikwlk4OlR9B4H2s">🧠 知识库</a>
+            <a data-page="cloudsync" data-page-node-id="Si7NBznoERJWSTbdbaz5xR">☁️ 云同步</a>
         </nav>
     </aside>
 
+    <!-- 底部导航栏（仅移动端显示，PC 隐藏） -->
+    <nav class="mobile-bottomnav" id="mobileBottomNav">
+        <a data-page="home" class="active" href="#home"><span class="icon">🏠</span><span class="label">首页</span></a>
+        <a data-page="projects" href="#projects"><span class="icon">📁</span><span class="label">项目</span></a>
+        <a data-page="tasks" href="#tasks"><span class="icon">📋</span><span class="label">任务</span><span class="nav-badge zero" id="mobileTaskBadge">0</span></a>
+        <a data-page="calendar" href="#calendar"><span class="icon">📅</span><span class="label">日历</span></a>
+        <a data-page="cloudsync" href="#cloudsync"><span class="icon">☁️</span><span class="label">云同步</span></a>
+    </nav>
+
     <!-- 主区域 -->
-    <div class="main">
-        <div class="main-header">
-            <h2 id="pageTitle">🏠 首页看板</h2>
-            <div class="header-actions">
-                <button class="btn btn-sm" onclick="openKnowledge()">🧠 知识库</button>
-                <span id="currentTime"></span>
-                <button class="btn btn-sm" onclick="manualUpload()" title="上传数据到云端">📤 上传</button>
-                <button class="btn btn-sm" onclick="manualSync()" title="从云端同步数据">📥 同步</button>
-                <span class="auto-toggle-group">
-                    <button class="btn-auto off" id="autoUploadBtn" onclick="toggleAutoUpload()">📤 上传</button>
-                    <span class="sep">|</span>
-                    <button class="btn-auto off" id="autoSyncBtn" onclick="toggleAutoSync()">📥 同步</button>
+    <div class="main" data-page-node-id="vxDjQHq9TRQvlQ3PaJgWrX">
+        <div class="main-header" data-page-node-id="ftI4Ny0FXnuQGolqeRQHs0">
+            <h2 id="pageTitle" data-page-node-id="q6D4LRsHztLcpy0PfZQjK8">🏠 首页看板</h2>
+            <div class="header-actions" data-page-node-id="oNllkC10RANkMB2bEZsHik">
+                <button class="btn btn-sm" onclick="openKnowledge()" data-page-node-id="GWUZOayBt3MEjwREKJgGWA">🧠 知识库</button>
+                <span id="currentTime" data-page-node-id="NQBrZUTlJR9bHLyHrBCFNq"></span>
+                <button class="btn btn-sm" onclick="manualUpload()" title="上传数据到云端" data-page-node-id="DCAIDAeaOtn8Ej3CYmb325">📤 上传</button>
+                <button class="btn btn-sm" onclick="manualSync()" title="从云端同步数据" data-page-node-id="CCL08lsZrf89Dc4yRIgmWr">📥 同步</button>
+                <span class="auto-toggle-group" data-page-node-id="utfVdQcYgrP11cthrzaymX">
+                    <button class="btn-auto off" id="autoUploadBtn" onclick="toggleAutoUpload()" data-page-node-id="dntyTyJG393i3YgGatQPok">📤 上传</button>
+                    <span class="sep" data-page-node-id="FYe3cAl9H92YzzucXECMBP">|</span>
+                    <button class="btn-auto off" id="autoSyncBtn" onclick="toggleAutoSync()" data-page-node-id="ZfwUtmBeL3xo0yGVlmEuOp">📥 同步</button>
                 </span>
-                <button class="btn btn-sm" onclick="exportData()">💾</button>
-                <button class="btn btn-sm" onclick="document.getElementById('importFile').click()">📥</button>
-                <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(this)">
-                <button class="btn btn-sm" onclick="openBatchImport()">📋 批量导入</button>
-                <span class="sync-status" id="syncStatus">
-                    <span class="dot" id="syncDot"></span>
-                    <span id="syncText">未配置</span>
+                <button class="btn btn-sm" onclick="exportData()" data-page-node-id="OjtifV2yBO0isgeVbZfDgh">💾</button>
+                <button class="btn btn-sm" onclick="document.getElementById('importFile').click()" data-page-node-id="9eWpTGxXY73JvfPFYJBaDQ">📥</button>
+                <input type="file" id="importFile" style="display:none" accept=".json" onchange="importData(this)" data-page-node-id="zw49bMrLHvSu4fHkCloTUD">
+                <button class="btn btn-sm" onclick="openBatchImport()" data-page-node-id="QRmnc5KzceNO4ZCDEvlxt1">📋 批量导入</button>
+                <span class="sync-status" id="syncStatus" data-page-node-id="iV9kGLoil40AkUquD8irsd">
+                    <span class="dot" id="syncDot" data-page-node-id="zIh3ltWTkZsIQJl6zuvd7K"></span>
+                    <span id="syncText" data-page-node-id="OEHHNVjfT9r1bE1bPDPNje">未配置</span>
                 </span>
             </div>
         </div>
-        <div class="main-content" id="mainContent"></div>
+        <div class="main-content" id="mainContent" data-page-node-id="yrJJgEh50qb7ZLUeNkf1PE"></div>
     </div>
 
     <script>
@@ -602,6 +1098,11 @@ function clearSelectedProject() {
     renderLogs(document.getElementById('mainContent'));
 }
 
+function handleLogProjectSelect(val) {
+    window._selectedLogProjectId = val || null;
+    renderLogs(document.getElementById('mainContent'));
+}
+
 function formatDateISO(dateStr) {
     if (!dateStr) return '';
     try {
@@ -623,14 +1124,102 @@ function getProjectName(projectId) {
     if (p) return `${p.company}-${getTplName(p.templateId)}`;
     return '已删除项目';
 }
+
+// ============================================================
+// 【v21 新增】云端时间戳/完成态单调合并 —— 根治"最后写入者胜出"覆盖
+// ------------------------------------------------------------
+// 背景：看板 dashboard_pyqt_v21 直接 PATCH 云端的 tasks.completed 与
+//       projects.nodes[n].status；工作台本地若无相应更新就上传，会把看板
+//       刚改的完成状态覆盖回去（"看板点完成→30s 后又被覆盖回未完成"）。
+// 策略（记录级单调合并，只前进不后退）：
+//   1) 任务 completed：只要云端 = true，本地就采纳 true（禁止 true→false 回退）
+//   2) 节点 status：只要云端 = done，本地就采纳 done（禁止 done→pending/progress 回退）
+//   3) 项目 status / doneDate：云端 done 时采纳，且同步补 doneDate
+//   4) 合并后重算项目整体状态 calcStatus(nodes)，防止节点变更后项目状态滞留
+//   5) 不动本地用户编辑的 title/due_date 等字段（避免用云端默认覆盖本地编辑）
+// ============================================================
+async function mergeCloudStateBeforeUpload() {
+    if (!supabaseClient) return;
+    const [pRes, tRes] = await Promise.all([
+        supabaseClient.from('projects').select('*'),
+        supabaseClient.from('tasks').select('*')
+    ]);
+    if (pRes.error) throw new Error('读取云端 projects 失败: ' + (pRes.error.message || ''));
+    if (tRes.error) throw new Error('读取云端 tasks 失败: ' + (tRes.error.message || ''));
+    const cloudProjects = pRes.data || [];
+    const cloudTasks = tRes.data || [];
+    if (!cloudProjects.length && !cloudTasks.length) return;
+
+    const pById = new Map(cloudProjects.map(p => [p.id, p]));
+    const tById = new Map(cloudTasks.map(t => [t.id, t]));
+
+    let taskMerged = 0;
+    let projMerged = 0;
+
+    // ===== 任务：完成状态单调合并 =====
+    appData.tasks.forEach(localTask => {
+        const ct = tById.get(localTask.id);
+        if (!ct) return;
+        if (ct.completed && !localTask.completed) {
+            localTask.completed = true;
+            localTask.completedDate = ct.completed_date || null;
+            taskMerged++;
+        }
+    });
+
+    // ===== 项目节点：完成状态单调合并 =====
+    const mergeProjectNodes = (localProject) => {
+        if (!localProject || !Array.isArray(localProject.nodes)) return;
+        const cp = pById.get(localProject.id);
+        if (!cp || !Array.isArray(cp.nodes)) return;
+        localProject.nodes.forEach((ln, i) => {
+            const cn = cp.nodes[i];
+            if (!cn) return;
+            // 完成态单调：云端 done 优先采纳，绝不回退
+            if (cn.status === 'done' && ln.status !== 'done') {
+                ln.status = 'done';
+                projMerged++;
+            }
+        });
+        // 项目整体状态同步：云端 done 且本地未 done → 采纳
+        if (cp.status === 'done' && localProject.status !== 'done') {
+            localProject.status = 'done';
+            if (cp.done_date && !localProject.doneDate) {
+                localProject.doneDate = cp.done_date;
+            }
+            projMerged++;
+        }
+    };
+
+    appData.projects.forEach(mergeProjectNodes);
+    (appData.archived || []).forEach(a => a.projectData && mergeProjectNodes(a.projectData));
+    (appData.shelved || []).forEach(s => s.projectData && mergeProjectNodes(s.projectData));
+    (appData.terminated || []).forEach(t => t.projectData && mergeProjectNodes(t.projectData));
+
+    // 节点合并后重算项目整体状态（保持单调：已完成项目不回退）
+    appData.projects.forEach(p => {
+        const calc = calcStatus(p.nodes);
+        if (p.status === 'done') {
+            // 已 done 的项目保持 done，不回退
+            if (!p.doneDate) p.doneDate = new Date().toISOString().split('T')[0];
+        } else if (calc === 'done') {
+            p.status = 'done';
+            if (!p.doneDate) p.doneDate = new Date().toISOString().split('T')[0];
+            projMerged++;
+        } else if (calc !== p.status) {
+            p.status = calc;
+        }
+    });
+
+    if (taskMerged || projMerged) {
+        console.log(`🔁 云端合并：${taskMerged} 条任务完成态、${projMerged} 处节点/项目完成态已同步到本地（防止上传覆盖）`);
+        try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+    }
+}
+
 	let _uploading = false;              // 上传锁
 	let _disableAutoUpload = false;      // 禁止自动上传（用于同步/加载时）
 	let _pendingUpload = false;          // 本地有待上传的修改（用于自动同步上传优先）
-        // 【sync-rewrite】本地优先 / 版本化同步 新增状态位
-        let _lastPulledAt = null;            // 最近一次成功拉取的快照时间，用于判断是否已是最新
-        let _lastSyncedVersion = null;       // 最近一次同步（上传或拉取）的版本标识
-        let _lastUploadedAt = 0;             // 最近一次成功上传的时间戳
-        const UPLOAD_DEBOUNCE_MS = 3000;     // 频繁操作后，静默 3 秒才上传一次（以最后一次数据为准）
         let calViewMode = 'month';
         let calFilterProject = 'all';
         let calFilterStatus = 'all';
@@ -670,6 +1259,7 @@ function getProjectName(projectId) {
             },
             projectTypeColors: {},
             _idCounter: 0,
+            _deletedProjectIds: [],   // 【v21.5修复】已取消项目的墓碑：上传时从云端精确删除
         };
 
         // ---------- 辅助函数 ----------
@@ -712,6 +1302,8 @@ function getProjectName(projectId) {
             if (sb) sb.textContent = appData.shelved?.length ?? 0;
             if (tb) tb.textContent = appData.terminated?.length ?? 0;
             if (ab) ab.textContent = appData.archived?.length ?? 0;
+            // 【v21 新增】移动端底部导航任务徽标同步
+            try { if (typeof syncMobileBottomNav === 'function') syncMobileBottomNav(); } catch (e) {}
         }
 
         function getPriorityLabel(p) {
@@ -758,9 +1350,6 @@ function getProjectName(projectId) {
         // 避免连续点击/输入造成多次上传和数据竞争
         let autoUploadTimer = null;
 
-        // 【sync-rewrite】本地优先 + 防抖上传
-        // 设计：任何本地修改先写 localStorage（本地缓存），再按“最后一次操作后静默 N 秒”
-        // 防抖上传一次；force=true 时立即上传。上传即生成一个版本快照。
         function scheduleAutoUpload() {
             const syncOn = autoUploadEnabled || autoSyncEnabled;
             if (!syncOn || _disableAutoUpload || !supabaseClient || !getSupabaseConfig()) {
@@ -768,39 +1357,39 @@ function getProjectName(projectId) {
                 return;
             }
             updateSyncStatus('待上传...', 'syncing');
-            if (autoUploadTimer) clearTimeout(autoUploadTimer);
+            clearTimeout(autoUploadTimer);
             autoUploadTimer = setTimeout(function() {
                 autoUploadTimer = null;
                 syncToSupabase(true).catch(function(err) {
                     console.error('自动上传失败', err);
                     updateSyncStatus('上传失败', 'error');
                 });
-            }, UPLOAD_DEBOUNCE_MS);
+            }, 2000);
         }
 
         function saveData(force = false) {
             ensureColors();
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));   // 1) 永远先写本地缓存
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
             updateBadges();
             // 标记本地有待上传的修改（加载/同步过程中产生的写入不标记，避免误触发上传）
             if (!_disableAutoUpload) _pendingUpload = true;
             // 自动上传或自动同步开启时，本地修改都应上传（避免 30s 同步把未上传的修改覆盖回去）
             const shouldUpload = (force || autoUploadEnabled || autoSyncEnabled) && !_disableAutoUpload && supabaseClient && getSupabaseConfig();
-            if (shouldUpload) {
-                if (force) {
-                    // 强制保存（手动上传/关键操作）立即上传，不走防抖，并生成版本快照
-                    syncToSupabase(true).catch(err => {
-                        console.error('自动上传失败', err);
-                        updateSyncStatus('上传失败', 'error');
-                    });
-                } else {
-                    // 频繁操作走防抖：最后一次操作后静默 UPLOAD_DEBOUNCE_MS 才上传一次
-                    scheduleAutoUpload();
-                }
-            } else if (!autoUploadEnabled) {
-                updateSyncStatus('本地缓存', '');
-            }
+        if (shouldUpload) {
+            if (force) {
+                // 强制保存（手动上传/关键操作）立即上传，不走防抖，并生成版本快照
+                syncToSupabase(true).catch(err => {
+                    console.error('自动上传失败', err);
+                    updateSyncStatus('上传失败', 'error');
+                });
+            } else {
+            // 频繁操作走防抖，最后一次操作后 2 秒才上传一次
+            scheduleAutoUpload();
         }
+    } else if (!autoUploadEnabled) {
+        updateSyncStatus('本地缓存', '');
+    }
+}
         // ---------- Supabase 配置 ----------
         function getSupabaseConfig() {
             try { const raw = localStorage.getItem('supabase_config'); if (raw) return JSON.parse(raw); } catch (e) {}
@@ -832,201 +1421,493 @@ function getProjectName(projectId) {
 
         // ---------- 从 Supabase 加载 ----------
 async function loadFromSupabase() {
-    // 【sync-rewrite】统一入口：安全拉取云端最新数据（只读采用快照，绝不删除本地/云端项目）
-    return pullLatest();
-}
-
-// 【sync-rewrite】安全拉取：采用云端最新版本快照整体覆盖本地（快照本身是完整有效状态，
-// 因此不会“丢失”任何项目）；本地若有未上传修改则跳过拉取（交由上传逻辑处理，避免覆盖）；
-// 拉取后合并云端 tasks/work_logs 表以吸收 dashboard 等入口的修改（完成态粘性 + 墓碑，不删项目）。
-async function pullLatest() {
     if (!supabaseClient) throw new Error('Supabase 未初始化');
     _disableAutoUpload = true;
+    // 【v2修复】记录拉取前的本地项目全集 + 完整数据备份，用于同步后检测“项目被云端数据抹掉”的情况
+    const _v2PrePullIds = collectAllProjectIds();
+    let _v2BackupJson = null;
+    try { _v2BackupJson = JSON.stringify(appData); } catch (e) {}
     try {
-        console.log('开始从云端拉取最新数据...');
-
-        // 本地有待上传修改时，不覆盖本地（避免丢失本地编辑）；上传逻辑会在 30s 定时器里先上传
-        if (_pendingUpload) {
-            console.log('本地有待上传修改，跳过拉取（先上传本地修改）');
-            return;
-        }
+        console.log('🔵 开始从 Supabase 加载数据...');
 
         // 连接测试
         try {
             const { error } = await supabaseClient.from('companies').select('count', { count: 'exact', head: true });
-            if (error) { console.error('连接测试失败:', error); throw error; }
+            if (error) { console.error('❌ 连接测试失败:', error); throw error; }
+            console.log('✅ 连接测试通过');
         } catch (e) {
-            console.error('连接测试异常:', e);
+            console.error('❌ 连接测试异常:', e);
             throw e;
         }
 
-        // 优先读取最新版本快照（完整状态，采用它整体覆盖本地）
-        let snap = null;
+        // 【v2修复】预检：先读取云端 projects / tasks 全表。
+        // 1) 查询失败 → 直接中止本次同步（本地数据保持原样，绝不被半途失败的结果覆盖）；
+        // 2) 云端项目为空但本地有项目 → 视为异常（云端数据可能被误删/未上传成功），中止并保留本地。
+        // 只有预检通过，才允许应用快照 / 用云端数据覆盖本地。
+        const [pfProjRes, pfTaskRes] = await Promise.all([
+            supabaseClient.from('projects').select('*'),
+            supabaseClient.from('tasks').select('*')
+        ]);
+        if (pfProjRes.error) {
+            throw new Error('云端 projects 表查询失败: ' + (pfProjRes.error.message || JSON.stringify(pfProjRes.error)));
+        }
+        const pfProjects = pfProjRes.data || [];
+        const pfTasks = pfTaskRes.data || [];
+        if (pfProjects.length === 0 && (appData.projects || []).length > 0) {
+            throw new Error('云端项目数据为空，已中止本次同步并保留本地 ' + appData.projects.length + ' 个项目（云端数据可能不完整，请先核查或上传本地数据）');
+        }
+
+        // 优先使用版本快照（若 snapshots 表存在且有记录），否则回退到旧版分表同步
         try {
-            const { data, error } = await supabaseClient
-                .from('snapshots')
-                .select('id, created_at, payload, version, device, comment')
-                .order('created_at', { ascending: false })
-                .limit(1);
-            if (error) {
-                if (error.code === '42P01' || (error.message && error.message.includes('snapshots') && error.message.includes('does not exist'))) {
-                    console.warn('snapshots 表不存在，无法采用版本快照');
-                } else if (error.code === '42501' || (error.message && error.message.includes('permission denied'))) {
-                    console.warn('snapshots 表权限不足:', error.message);
-                } else {
-                    throw error;
+            const snapshotLoaded = await loadLatestSnapshot();
+            if (snapshotLoaded) {
+                console.log('✅ 已使用最新版本快照，并从云端 work_logs 合并最新工作日志');
+                // 工作日志以云端 work_logs 表为准：dashboard 等外部入口也直接写入该表，
+                // 而快照仅包含工作台上传时的本地日志，因此需单独拉取最新日志合并进来
+                try {
+                    const { data: wlData, error: wlErr } = await supabaseClient.from('work_logs').select('*');
+                    if (!wlErr && wlData) {
+                        appData.workLogs = (wlData || []).map(w => ({
+                            id: w.id,
+                            date: w.date,
+                            type: w.type || 'daily',
+                            projectId: w.project_id || null,
+                            content: w.content || ''
+                        }));
+                    } else if (wlErr) {
+                        console.warn('⚠️ 合并云端工作日志失败:', wlErr.message);
+                    }
+                } catch (e2) {
+                    console.warn('⚠️ 合并云端工作日志异常:', e2);
                 }
-            } else if (data && data.length > 0) {
-                snap = data[0];
+                // 项目与任务以云端表为准合并：dashboard 会直接修改 projects.nodes / tasks.completed，
+                // 若不合并，快照中的旧数据会把 dashboard 的修改覆盖回去，导致工作台看不到变化。
+                try {
+                    // 【v2修复】直接使用预检阶段获取的云端数据（pfProjects / pfTasks），
+                    // 查询失败已在预检处中止，不会再出现“旧快照已覆盖本地、云端合并又失败”导致项目丢失的情况
+                    {
+                        const allP = pfProjects;
+                        // 【v21 修复】原来用白名单 (active|done) 过滤云端项目，但工作台自己
+                        // 就把 p.status 维护为 pending/progress/done（见 calcStatus，节点状态
+                        // 变更时 p.status = calcStatus(p.nodes)），上传也是照实写这个值。
+                        // 结果：所有"未开始/进行中"项目在每次拉取后从本地消失，反复触发
+                        // "云端缺失"横幅。改为反向排除已移出主表的三种状态（它们由下方
+                        // archived/shelved/terminated 分支单独处理），其余状态全部保留。
+                        appData.projects = allP.filter(p => p.status !== 'archived' && p.status !== 'shelved' && p.status !== 'terminated').map(p => {
+                            // 兼容旧数据：之前 sync 会把 done 项目强制写成 active，若 done_date 存在则恢复为 done
+                            let status = (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active');
+                            const nodes = p.nodes || [];
+                            // 若节点全部完成但状态未标记为 done，也统一恢复（防止云端缺失 done_date 时图表清零）
+                            if (status !== 'done' && nodes.length > 0 && nodes.every(n => n.status === 'done')) status = 'done';
+                            let doneDate = p.done_date || null;
+                            // 已完成项目必须保留完成日期；若云端没有 done_date，用 updated_at 或今天兜底
+                            if (status === 'done' && !doneDate) {
+                                doneDate = p.updated_at ? p.updated_at.split('T')[0] : new Date().toISOString().split('T')[0];
+                            }
+                            return {
+                                id: p.id, templateId: p.template_id, company: p.company,
+                                status: status,
+                                tag: p.tag || '', nodes: nodes, doneDate: doneDate,
+                                important: p.important || false, urgent: p.urgent || false,
+                                archived: false, shelved: false, terminated: false
+                            };
+                        });
+                        appData.archived = allP.filter(p => p.status === 'archived').map(p => ({
+                            projectData: {
+                                id: p.id, templateId: p.template_id, company: p.company, status: p.status,
+                                tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null,
+                                important: p.important || false, urgent: p.urgent || false
+                            }, archivedAt: p.archived_at || null
+                        }));
+                        appData.shelved = allP.filter(p => p.status === 'shelved').map(p => ({
+                            projectData: {
+                                id: p.id, templateId: p.template_id, company: p.company, status: p.status,
+                                tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null,
+                                important: p.important || false, urgent: p.urgent || false
+                            }, shelvedAt: p.shelved_at || null
+                        }));
+                        appData.terminated = allP.filter(p => p.status === 'terminated').map(p => ({
+                            projectData: {
+                                id: p.id, templateId: p.template_id, company: p.company, status: p.status,
+                                tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null,
+                                important: p.important || false, urgent: p.urgent || false
+                            }, terminatedAt: p.terminated_at || null, reason: p.reason || ''
+                        }));
+                    }
+                    // 【v21.5修复】拉取后去重：云端历史残留的"同公司同模板"重复项目只保留一个，
+                    // 其余记入墓碑，待下次上传从云端精确删除，根治"一直显示2个重复"。
+                    {
+                        const seen = {};
+                        const dupIds = [];
+                        appData.projects = (appData.projects || []).filter(pr => {
+                            const k = pr.company + '||' + pr.templateId;
+                            if (seen[k]) { dupIds.push(pr.id); return false; }
+                            seen[k] = true;
+                            return true;
+                        });
+                        if (dupIds.length > 0) {
+                            if (!appData._deletedProjectIds) appData._deletedProjectIds = [];
+                            dupIds.forEach(id => {
+                                if (appData._deletedProjectIds.indexOf(id) === -1) appData._deletedProjectIds.push(id);
+                                appData.tasks = (appData.tasks || []).filter(t => t.projectId !== id);
+                                appData.settlements = (appData.settlements || []).filter(s => s.projectId !== id);
+                            });
+                            console.log('🧹 拉取去重：移除 ' + dupIds.length + ' 个重复项目');
+                        }
+                    }
+                    {
+                        let tasks = pfTasks.map(t => ({
+                            id: t.id, projectId: t.project_id, nodeIndex: t.node_index, title: t.title,
+                            dueDate: t.due_date || null, completed: t.completed || false,
+                            weekLabel: t.week_label || '', monthLabel: t.month_label || '',
+                            planDate: t.plan_date || null,
+                            startDate: t.start_date || t.plan_date || t.due_date || null,
+                            endDate: t.end_date || t.due_date || null,
+                            completedDate: t.completed_date || null
+                        }));
+                        const localTaskOrder = localStorage.getItem('task_order');
+                        if (localTaskOrder) {
+                            try {
+                                const orderIds = JSON.parse(localTaskOrder);
+                                if (Array.isArray(orderIds) && orderIds.length > 0) {
+                                    const ordered = [];
+                                    orderIds.forEach(id => { const f = tasks.find(t => t.id === id); if (f) ordered.push(f); });
+                                    tasks.forEach(t => { if (!ordered.find(o => o.id === t.id)) ordered.push(t); });
+                                    tasks = ordered;
+                                }
+                            } catch (e) {}
+                        }
+                        appData.tasks = tasks;
+                    }
+                    // 合并完成后持久化到本地缓存，避免刷新页面后丢失 dashboard 等外部入口的更新
+                    ensureColors();
+                    syncSettlementsWithProjects();
+                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+                } catch (e3) {
+                    console.warn('⚠️ 合并云端项目/任务失败:', e3);
+                }
+                // 【v2修复】同步后比对：本地原有项目若在同步结果中消失，弹横幅警告并提供一键恢复
+                checkPostPullProjectLoss(_v2PrePullIds, _v2BackupJson);
+                return;
             }
         } catch (e) {
-            console.warn('读取最新快照失败，改用分表拉取兜底:', e);
+            console.warn('⚠️ 快照加载异常，尝试旧版分表同步:', e);
         }
 
-        if (snap && snap.payload) {
-            // 采用最新快照整体覆盖本地（快照是某次完整上传产生的有效状态，绝不会缺项目）
-            applySnapshotPayload(snap.payload);
-            _lastPulledAt = snap.created_at;
-            _lastSyncedVersion = snap.version || snap.id;
-            console.log('已采用最新版本快照:', snap.created_at);
+        // 并行查询所有表
+        const queries = [
+            supabaseClient.from('companies').select('*'),
+            supabaseClient.from('templates').select('*'),
+            supabaseClient.from('projects').select('*'),
+            supabaseClient.from('tasks').select('*'),
+            supabaseClient.from('work_logs').select('*'),
+            supabaseClient.from('settlements').select('*'),
+            supabaseClient.from('data_reports').select('*'),
+            supabaseClient.from('report_templates').select('*'),
+            supabaseClient.from('commission_templates').select('*'),
+            supabaseClient.from('settings').select('*'),
+        ];
+
+        const results = await Promise.allSettled(queries);
+        const [companiesRes, templatesRes, projectsRes, tasksRes, workLogsRes, settlementsRes, dataReportsRes,
+            reportTemplatesRes, commissionTemplatesRes, settingsRes
+        ] = results.map(r => r.status === 'fulfilled' ? r.value : { error: new Error('查询失败'), data: [] });
+
+        // 处理错误日志（保持原样）
+        if (companiesRes.error) console.warn('⚠️ companies 表查询失败:', companiesRes.error);
+        if (templatesRes.error) console.warn('⚠️ templates 表查询失败:', templatesRes.error);
+        if (projectsRes.error) console.warn('⚠️ projects 表查询失败:', projectsRes.error);
+        if (tasksRes.error) console.warn('⚠️ tasks 表查询失败:', tasksRes.error);
+        if (workLogsRes.error) console.warn('⚠️ workLogs 表查询失败:', workLogsRes.error);
+        if (settlementsRes.error) console.warn('⚠️ settlements 表查询失败:', settlementsRes.error);
+        if (dataReportsRes.error) console.warn('⚠️ dataReports 表查询失败:', dataReportsRes.error);
+        if (reportTemplatesRes.error) console.warn('⚠️ reportTemplates 表查询失败:', reportTemplatesRes.error);
+        if (commissionTemplatesRes.error) console.warn('⚠️ commissionTemplates 表查询失败:', commissionTemplatesRes.error);
+        if (settingsRes.error) console.warn('⚠️ settings 表查询失败:', settingsRes.error);
+
+        // 判断是否全部失败
+        const allFailed = [companiesRes, templatesRes, projectsRes, tasksRes, workLogsRes, settlementsRes,
+            dataReportsRes, reportTemplatesRes, commissionTemplatesRes, settingsRes
+        ].every(r => r.error);
+        if (allFailed) {
+            throw new Error('所有表查询均失败，请检查网络和权限');
+        }
+
+        // 【v2修复】projects 表是核心数据：查询失败时中止同步（本地保持原样），
+        // 不允许用空结果覆盖本地项目；云端为空但本地有项目同样视为异常并中止
+        if (projectsRes.error) {
+            throw new Error('云端 projects 表查询失败: ' + (projectsRes.error.message || '查询异常'));
+        }
+        if ((projectsRes.data || []).length === 0 && (appData.projects || []).length > 0) {
+            throw new Error('云端项目数据为空，已中止本次同步并保留本地 ' + appData.projects.length + ' 个项目（云端数据可能不完整，请先核查或上传本地数据）');
+        }
+
+        // ===== 读取公司顺序和模板顺序（从 settings） =====
+        const settingsData = settingsRes.data || [];
+        const companyOrderSetting = settingsData.find(s => s.key === 'company_order');
+        const templateOrderSetting = settingsData.find(s => s.key === 'template_order');
+        let companyOrder = companyOrderSetting ? JSON.parse(companyOrderSetting.value) : null;
+        let templateOrder = templateOrderSetting ? JSON.parse(templateOrderSetting.value) : null;
+
+        // ===== 加载公司列表并应用顺序 =====
+        let cloudCompanies = companiesRes.data?.map(c => c.name) || [];
+        if (companyOrder && Array.isArray(companyOrder) && companyOrder.length > 0) {
+            // 只保留存在的公司
+            const validCompanies = companyOrder.filter(name => cloudCompanies.includes(name));
+            // 补充未在顺序中的公司（新增的或遗漏的）
+            const ordered = [...validCompanies];
+            cloudCompanies.forEach(name => {
+                if (!ordered.includes(name)) ordered.push(name);
+            });
+            appData.companies = ordered;
         } else {
-            // 兜底：快照不可用，从分表拉取（只读采用，绝不删除）
-            await pullFromTablesFallback();
+            appData.companies = cloudCompanies;
         }
 
-        // 合并云端 tasks / work_logs，吸收 dashboard 等入口的修改（完成态粘性 + 墓碑，不删项目）
-        await mergeCloudDelta();
-
-        // 墓碑：本地已删除的任务/日志不应从云端复活
-        if (appData._deletedTaskIds && appData._deletedTaskIds.length) {
-            appData.tasks = appData.tasks.filter(t => appData._deletedTaskIds.indexOf(t.id) === -1);
+        // ===== 加载模板列表并应用顺序 =====
+        let cloudTemplates = templatesRes.data?.map(t => ({
+            id: t.id,
+            name: t.name,
+            nodes: t.nodes || [],
+            tags: t.tags || [],
+            settlementByTag: t.settlement_by_tag || {}
+        })) || [];
+        if (templateOrder && Array.isArray(templateOrder) && templateOrder.length > 0) {
+            const ordered = [];
+            templateOrder.forEach(id => {
+                const found = cloudTemplates.find(t => t.id === id);
+                if (found) ordered.push(found);
+            });
+            // 补充未在顺序中的模板（新增的）
+            cloudTemplates.forEach(t => {
+                if (!ordered.find(o => o.id === t.id)) ordered.push(t);
+            });
+            appData.templates = ordered;
+        } else {
+            appData.templates = cloudTemplates;
         }
-        if (appData._deletedWorkLogIds && appData._deletedWorkLogIds.length) {
-            appData.workLogs = appData.workLogs.filter(w => appData._deletedWorkLogIds.indexOf(w.id) === -1);
+
+        // ===== 加载项目（保持原有逻辑） =====
+        const allProjects = projectsRes.data || [];
+        console.log(`🔵 从 Supabase 获取到 ${allProjects.length} 个项目记录`);
+
+        // 分离活跃、归档、搁置、终止项目（活跃项目 = 未移出主表的所有状态）
+        // 【v21 修复】原来只放行 active/done，但工作台自身把 p.status 维护为
+        // pending/progress/done，导致"未开始/进行中"项目每次拉取后从本地消失、
+        // 反复触发"云端缺失"横幅。改为反向排除三种已移出主表的状态，
+        // 它们由下方 archived/shelved/terminated 分支单独处理。
+        let activeProjects = allProjects.filter(p => p.status !== 'archived' && p.status !== 'shelved' && p.status !== 'terminated').map(p => {
+            // 兼容旧数据：之前 sync 会把 done 项目强制写成 active，若 done_date 存在则恢复为 done
+            let status = (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active');
+            const nodes = p.nodes || [];
+            // 若节点全部完成但状态未标记为 done，也统一恢复（防止云端缺失 done_date 时图表清零）
+            if (status !== 'done' && nodes.length > 0 && nodes.every(n => n.status === 'done')) status = 'done';
+            let doneDate = p.done_date || null;
+            // 已完成项目必须保留完成日期；若云端没有 done_date，用 updated_at 或今天兜底
+            if (status === 'done' && !doneDate) {
+                doneDate = p.updated_at ? p.updated_at.split('T')[0] : new Date().toISOString().split('T')[0];
+            }
+            return {
+                id: p.id,
+                templateId: p.template_id,
+                company: p.company,
+                status: status,
+                tag: p.tag || '',
+                nodes: nodes,
+                doneDate: doneDate,
+                important: p.important || false,
+                urgent: p.urgent || false,
+                archived: false,
+                shelved: false,
+                terminated: false
+            };
+        });
+
+        // 尝试保持本地项目顺序（如果本地有顺序记录，则应用）
+        const localProjectOrder = localStorage.getItem('project_order');
+        if (localProjectOrder) {
+            try {
+                const orderIds = JSON.parse(localProjectOrder);
+                if (Array.isArray(orderIds) && orderIds.length > 0) {
+                    const ordered = [];
+                    orderIds.forEach(id => {
+                        const found = activeProjects.find(p => p.id === id);
+                        if (found) ordered.push(found);
+                    });
+                    activeProjects.forEach(p => {
+                        if (!ordered.find(o => o.id === p.id)) ordered.push(p);
+                    });
+                    activeProjects = ordered;
+                }
+            } catch (e) {}
         }
 
+        appData.projects = activeProjects;
+
+        // 归档项目
+        appData.archived = allProjects.filter(p => p.status === 'archived').map(p => ({
+            projectData: {
+                id: p.id,
+                templateId: p.template_id,
+                company: p.company,
+                status: p.status,
+                tag: p.tag || '',
+                nodes: p.nodes || [],
+                doneDate: p.done_date || null,
+                important: p.important || false,
+                urgent: p.urgent || false
+            },
+            archivedAt: p.archived_at || null
+        }));
+
+        // 搁置项目
+        appData.shelved = allProjects.filter(p => p.status === 'shelved').map(p => ({
+            projectData: {
+                id: p.id,
+                templateId: p.template_id,
+                company: p.company,
+                status: p.status,
+                tag: p.tag || '',
+                nodes: p.nodes || [],
+                doneDate: p.done_date || null,
+                important: p.important || false,
+                urgent: p.urgent || false
+            },
+            shelvedAt: p.shelved_at || null
+        }));
+
+        // 终止项目
+        appData.terminated = allProjects.filter(p => p.status === 'terminated').map(p => ({
+            projectData: {
+                id: p.id,
+                templateId: p.template_id,
+                company: p.company,
+                status: p.status,
+                tag: p.tag || '',
+                nodes: p.nodes || [],
+                doneDate: p.done_date || null,
+                important: p.important || false,
+                urgent: p.urgent || false
+            },
+            terminatedAt: p.terminated_at || null,
+            reason: p.reason || ''
+        }));
+
+        // ===== 加载任务 =====
+        let tasks = tasksRes.data?.map(t => ({
+            id: t.id,
+            projectId: t.project_id,
+            nodeIndex: t.node_index,
+            title: t.title,
+            dueDate: t.due_date || null,
+            completed: t.completed || false,
+            weekLabel: t.week_label || '',
+            monthLabel: t.month_label || '',
+            planDate: t.plan_date || null,
+            startDate: t.start_date || t.plan_date || t.due_date || null,
+            endDate: t.end_date || t.due_date || null,
+            completedDate: t.completed_date || null
+        })) || [];
+        // 保持本地任务顺序（如果本地有存储）
+        const localTaskOrder = localStorage.getItem('task_order');
+        if (localTaskOrder) {
+            try {
+                const orderIds = JSON.parse(localTaskOrder);
+                if (Array.isArray(orderIds) && orderIds.length > 0) {
+                    const ordered = [];
+                    orderIds.forEach(id => {
+                        const found = tasks.find(t => t.id === id);
+                        if (found) ordered.push(found);
+                    });
+                    tasks.forEach(t => {
+                        if (!ordered.find(o => o.id === t.id)) ordered.push(t);
+                    });
+                    tasks = ordered;
+                }
+            } catch (e) {}
+        }
+        appData.tasks = tasks;
+
+        // ===== 加载工作日志 =====
+        let logs = workLogsRes.data?.map(w => ({
+            id: w.id,
+            date: w.date,
+            type: w.type || 'daily',
+            projectId: w.project_id || null,
+            content: w.content || ''
+        })) || [];
+        appData.workLogs = logs;
+
+        // ===== 加载结算记录 =====
+        let settlements = settlementsRes.data?.map(s => ({
+            id: s.id,
+            projectId: s.project_id,
+            company: s.company,
+            projectName: s.project_name,
+            tag: s.tag || '',
+            doneDate: s.done_date || null,
+            totalCommission: s.total_commission || 0,
+            settledAmount: s.settled_amount || 0,
+            installments: s.installments || [],
+            note: s.note || '',
+            fullySettled: s.fully_settled || false,
+            _manual: s._manual || false
+        })) || [];
+        appData.settlements = settlements;
+
+        // ===== 加载数据报告 =====
+        const execMap = {},
+            envMap = {};
+        (dataReportsRes.data || []).forEach(row => {
+            if (row.execution) execMap[row.year] = row.execution;
+            if (row.environmental) envMap[row.year] = row.environmental;
+        });
+        appData.dataReports.execution = execMap;
+        appData.dataReports.environmental = envMap;
+
+        // ===== 加载报告模板 =====
+        const rtMap = {};
+        (reportTemplatesRes.data || []).forEach(row => { rtMap[row.type] = row.fields; });
+        appData.reportTemplates = rtMap;
+
+        // ===== 加载提成模板 =====
+        const ctMap = {};
+        (commissionTemplatesRes.data || []).forEach(row => {
+            ctMap[row.key] = { total: row.total, ratios: row.ratios };
+        });
+        appData.commissionTemplates = ctMap;
+
+        // ===== 加载知识库链接（从 settings） =====
+        const knowledgeSetting = settingsData.find(s => s.key === 'knowledgeUrl');
+        if (knowledgeSetting) appData.knowledgeUrl = knowledgeSetting.value || '';
+
+        // ===== 其他初始化 =====
         ensureColors();
         syncSettlementsWithProjects();
+
+        // 更新 id 计数器
+        let maxId = 0;
+        [...appData.projects, ...appData.templates, ...appData.tasks, ...appData.workLogs, ...appData.settlements]
+        .forEach(item => {
+            if (item.id && item.id.startsWith('id_')) {
+                const num = parseInt(item.id.substring(3));
+                if (!isNaN(num) && num > maxId) maxId = num;
+            }
+        });
+        appData._idCounter = maxId;
+
+        // 【v21.7】云端拉取后再同步一次"幽灵公司"，确保有项目的公司都登记进 companies，下次上传也会带上
+        reconcileCompaniesFromProjects();
+
+        // 保存到本地
         localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-        console.log('拉取完成，共加载项目:', appData.projects.length);
+        console.log('✅ 数据加载完成，共加载项目:', appData.projects.length);
+        // 【v2修复】同步后比对：本地原有项目若在同步结果中消失，弹横幅警告并提供一键恢复
+        checkPostPullProjectLoss(_v2PrePullIds, _v2BackupJson);
     } finally {
         _disableAutoUpload = false;
     }
 }
-
-// 【sync-rewrite】兜底：快照不可用时，从分表只读拉取（采用云端数据，不删除）
-async function pullFromTablesFallback() {
-    const queries = [
-        supabaseClient.from('companies').select('*'),
-        supabaseClient.from('templates').select('*'),
-        supabaseClient.from('projects').select('*'),
-        supabaseClient.from('tasks').select('*'),
-        supabaseClient.from('work_logs').select('*'),
-        supabaseClient.from('settlements').select('*'),
-        supabaseClient.from('data_reports').select('*'),
-        supabaseClient.from('report_templates').select('*'),
-        supabaseClient.from('commission_templates').select('*'),
-        supabaseClient.from('settings').select('*')
-    ];
-    const results = await Promise.allSettled(queries);
-    const [companiesRes, templatesRes, projectsRes, tasksRes, workLogsRes, settlementsRes, dataReportsRes, reportTemplatesRes, commissionTemplatesRes, settingsRes] =
-        results.map(r => r.status === 'fulfilled' ? r.value : { error: new Error('查询失败'), data: [] });
-    const settingsData = settingsRes.data || [];
-    const companyOrderSetting = settingsData.find(s => s.key === 'company_order');
-    const templateOrderSetting = settingsData.find(s => s.key === 'template_order');
-    let companyOrder = companyOrderSetting ? JSON.parse(companyOrderSetting.value) : null;
-    let templateOrder = templateOrderSetting ? JSON.parse(templateOrderSetting.value) : null;
-
-    let cloudCompanies = companiesRes.data ? companiesRes.data.map(c => c.name) : [];
-    if (companyOrder && Array.isArray(companyOrder) && companyOrder.length > 0) {
-        const ordered = companyOrder.filter(name => cloudCompanies.includes(name));
-        cloudCompanies.forEach(name => { if (!ordered.includes(name)) ordered.push(name); });
-        appData.companies = ordered;
-    } else { appData.companies = cloudCompanies; }
-
-    let cloudTemplates = templatesRes.data ? templatesRes.data.map(t => ({ id: t.id, name: t.name, nodes: t.nodes || [], tags: t.tags || [], settlementByTag: t.settlement_by_tag || {} })) : [];
-    if (templateOrder && Array.isArray(templateOrder) && templateOrder.length > 0) {
-        const ordered = [];
-        templateOrder.forEach(id => { const f = cloudTemplates.find(t => t.id === id); if (f) ordered.push(f); });
-        cloudTemplates.forEach(t => { if (!ordered.find(o => o.id === t.id)) ordered.push(t); });
-        appData.templates = ordered;
-    } else { appData.templates = cloudTemplates; }
-
-    const allProjects = projectsRes.data || [];
-    const activeProjects = allProjects.filter(p => p.status === 'active' || p.status === 'done').map(p => {
-        let status = (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active');
-        const nodes = p.nodes || [];
-        if (status !== 'done' && nodes.length > 0 && nodes.every(n => n.status === 'done')) status = 'done';
-        let doneDate = p.done_date || null;
-        if (status === 'done' && !doneDate) doneDate = p.updated_at ? p.updated_at.split('T')[0] : new Date().toISOString().split('T')[0];
-        return { id: p.id, templateId: p.template_id, company: p.company, status: status, tag: p.tag || '', nodes: nodes, doneDate: doneDate, important: p.important || false, urgent: p.urgent || false, archived: false, shelved: false, terminated: false };
-    });
-    appData.projects = activeProjects;
-    appData.archived = allProjects.filter(p => p.status === 'archived').map(p => ({ projectData: { id: p.id, templateId: p.template_id, company: p.company, status: p.status, tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null, important: p.important || false, urgent: p.urgent || false }, archivedAt: p.archived_at || null }));
-    appData.shelved = allProjects.filter(p => p.status === 'shelved').map(p => ({ projectData: { id: p.id, templateId: p.template_id, company: p.company, status: p.status, tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null, important: p.important || false, urgent: p.urgent || false }, shelvedAt: p.shelved_at || null }));
-    appData.terminated = allProjects.filter(p => p.status === 'terminated').map(p => ({ projectData: { id: p.id, templateId: p.template_id, company: p.company, status: p.status, tag: p.tag || '', nodes: p.nodes || [], doneDate: p.done_date || null, important: p.important || false, urgent: p.urgent || false }, terminatedAt: p.terminated_at || null, reason: p.reason || '' }));
-
-    appData.tasks = tasksRes.data ? tasksRes.data.map(t => ({ id: t.id, projectId: t.project_id, nodeIndex: t.node_index, title: t.title, dueDate: t.due_date || null, completed: t.completed || false, weekLabel: t.week_label || '', monthLabel: t.month_label || '', planDate: t.plan_date || null, startDate: t.start_date || t.plan_date || t.due_date || null, endDate: t.end_date || t.due_date || null, completedDate: t.completed_date || null })) : [];
-    appData.workLogs = workLogsRes.data ? workLogsRes.data.map(w => ({ id: w.id, date: w.date, type: w.type || 'daily', projectId: w.project_id || null, content: w.content || '' })) : [];
-    appData.settlements = settlementsRes.data ? settlementsRes.data.map(s => ({ id: s.id, projectId: s.project_id, company: s.company, projectName: s.project_name, tag: s.tag || '', doneDate: s.done_date || null, totalCommission: s.total_commission || 0, settledAmount: s.settled_amount || 0, installments: s.installments || [], note: s.note || '', fullySettled: s.fullySettled || false, _manual: s._manual || false })) : [];
-
-    const execMap = {}, envMap = {};
-    (dataReportsRes.data || []).forEach(row => { if (row.execution) execMap[row.year] = row.execution; if (row.environmental) envMap[row.year] = row.environmental; });
-    appData.dataReports.execution = execMap; appData.dataReports.environmental = envMap;
-    const rtMap = {}; (reportTemplatesRes.data || []).forEach(row => { rtMap[row.type] = row.fields; }); appData.reportTemplates = rtMap;
-    const ctMap = {}; (commissionTemplatesRes.data || []).forEach(row => { ctMap[row.key] = { total: row.total, ratios: row.ratios }; }); appData.commissionTemplates = ctMap;
-    const knowledgeSetting = settingsData.find(s => s.key === 'knowledgeUrl'); if (knowledgeSetting) appData.knowledgeUrl = knowledgeSetting.value || '';
-}
-
-// 【sync-rewrite】合并云端 tasks / work_logs：吸收 dashboard 入口的修改。
-// 规则：① 完成态粘性——任一方标记为完成则保持完成，避免 dashboard 完成被覆盖；
-//       ② 云端新增的任务/日志补回本地；③ 墓碑(_deletedTaskIds/_deletedWorkLogIds)中的不补回。
-// 绝不删除任何本地项目。
-async function mergeCloudDelta() {
-    try {
-        const { data: tk, error: tkErr } = await supabaseClient.from('tasks').select('*');
-        if (!tkErr && tk) {
-            const cloudById = {}; tk.forEach(t => { cloudById[t.id] = t; });
-            const localById = {}; appData.tasks.forEach(t => { localById[t.id] = t; });
-            const merged = [];
-            appData.tasks.forEach(t => {
-                const c = cloudById[t.id];
-                if (c && c.completed && !t.completed) {
-                    t.completed = true;
-                    t.completedDate = t.completedDate || (c.completed_date ? c.completed_date.split('T')[0] : new Date().toISOString().split('T')[0]);
-                    if (t.projectId != null && t.nodeIndex != null) {
-                        const p = appData.projects.find(pr => pr.id === t.projectId);
-                        if (p && p.nodes[t.nodeIndex]) {
-                            p.nodes[t.nodeIndex].status = 'done';
-                            p.status = calcStatus(p.nodes);
-                            if (p.status === 'done') p.doneDate = p.doneDate || new Date().toISOString().split('T')[0];
-                        }
-                    }
-                }
-                if (!(appData._deletedTaskIds || []).includes(t.id)) merged.push(t);
-            });
-            tk.forEach(c => {
-                if (!localById[c.id] && !(appData._deletedTaskIds || []).includes(c.id)) {
-                    merged.push({ id: c.id, projectId: c.project_id, nodeIndex: c.node_index, title: c.title, dueDate: c.due_date || null, completed: c.completed || false, weekLabel: c.week_label || '', monthLabel: c.month_label || '', planDate: c.plan_date || null, startDate: c.start_date || c.plan_date || c.due_date || null, endDate: c.end_date || c.due_date || null, completedDate: c.completed_date || null });
-                }
-            });
-            appData.tasks = merged;
-        }
-    } catch (e) { console.warn('合并云端任务失败:', e); }
-
-    try {
-        const { data: wl, error: wlErr } = await supabaseClient.from('work_logs').select('*');
-        if (!wlErr && wl) {
-            const cloudById = {}; wl.forEach(w => { cloudById[w.id] = w; });
-            const localById = {}; appData.workLogs.forEach(w => { localById[w.id] = w; });
-            const merged = [];
-            appData.workLogs.forEach(w => { if (!(appData._deletedWorkLogIds || []).includes(w.id)) merged.push(w); });
-            wl.forEach(c => { if (!localById[c.id] && !(appData._deletedWorkLogIds || []).includes(c.id)) merged.push({ id: c.id, date: c.date, type: c.type || 'daily', projectId: c.project_id || null, content: c.content || '' }); });
-            appData.workLogs = merged;
-        }
-    } catch (e) { console.warn('合并云端日志失败:', e); }
-}
-
 
         // ---------- 版本快照管理 ----------
         function applySnapshotPayload(payload) {
@@ -1129,13 +2010,6 @@ async function mergeCloudDelta() {
             renderPage(currentPage);
             updateSyncStatus('已恢复版本 ' + (data.version || ''), 'success');
             console.log('✅ 已恢复指定版本:', data.version, data.created_at);
-            // 【sync-rewrite】恢复后作为新版本重新上传，使该版本成为云端最新并同步到其他设备
-            try {
-                saveData(true);
-                console.log('✅ 已恢复版本并重新上传为最新版本');
-            } catch (e) {
-                console.warn('⚠️ 恢复版本后重新上传失败（本地已恢复）:', e);
-            }
         }
 
         async function restoreLatestSnapshot() {
@@ -1143,39 +2017,6 @@ async function mergeCloudDelta() {
             if (!ok) throw new Error('没有可用的版本快照');
             renderPage(currentPage);
             updateSyncStatus('已恢复最新版本', 'success');
-        }
-
-        // 【sync-rewrite】墓碑删除：仅删除用户“明确删除”的任务/日志（精确 id）。
-        // 与旧逻辑“云端有而本地没有就删除”相反，这里绝不做推断式删除，从根上避免误删。
-        async function applyTombstones() {
-            // 任务墓碑
-            try {
-                const delTaskIds = (appData._deletedTaskIds || []).filter(function(x){ return x; });
-                if (delTaskIds.length > 0) {
-                    const { error } = await supabaseClient.from('tasks').delete().in('id', delTaskIds);
-                    if (error) {
-                        console.warn('⚠️ 删除已删任务失败:', error);
-                    } else {
-                        appData._deletedTaskIds = [];
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-                        console.log('🗑️ 已删除 ' + delTaskIds.length + ' 个已删任务');
-                    }
-                }
-            } catch (e) { console.warn('⚠️ 任务墓碑删除异常:', e); }
-            // 工作日志墓碑（沿用原有标记）
-            try {
-                const delLogIds = (appData._deletedWorkLogIds || []).filter(function(x){ return x; });
-                if (delLogIds.length > 0) {
-                    const { error } = await supabaseClient.from('work_logs').delete().in('id', delLogIds);
-                    if (error) {
-                        console.warn('⚠️ 清理已删除日志失败:', error);
-                    } else {
-                        appData._deletedWorkLogIds = [];
-                        localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-                        console.log('🗑️ 已清理 ' + delLogIds.length + ' 条已删日志');
-                    }
-                }
-            } catch (e) { console.warn('⚠️ 日志墓碑删除异常:', e); }
         }
 
         // ---------- 同步到 Supabase ----------
@@ -1190,6 +2031,31 @@ async function syncToSupabase(createSnapshotFlag = false) {
     }
     _uploading = true;
     try {
+        // ===== 【v21.5修复】上传前先去重：同一公司+同模板 的活动项目只保留一个 =====
+        // 根源：云端历史残留了"取消后重建"导致的新旧两个 id 相同的项目行，
+        //      每次拉取都会把它们都带回本地 → 一直显示 2 个重复。
+        //      这里在每次上传前主动合并重复项，并将被移除的 id 记入墓碑，随本次上传从云端精确删除。
+        try {
+            const seen = {};
+            const dupIds = [];
+            appData.projects = appData.projects.filter(p => {
+                if (p.archived || p.shelved || p.terminated) return true;
+                const k = p.company + '||' + p.templateId;
+                if (seen[k]) { dupIds.push(p.id); return false; }
+                seen[k] = true;
+                return true;
+            });
+            if (dupIds.length > 0) {
+                if (!appData._deletedProjectIds) appData._deletedProjectIds = [];
+                dupIds.forEach(id => {
+                    if (appData._deletedProjectIds.indexOf(id) === -1) appData._deletedProjectIds.push(id);
+                    appData.tasks = appData.tasks.filter(t => t.projectId !== id);
+                    appData.settlements = appData.settlements.filter(s => s.projectId !== id);
+                });
+                console.log('🧹 去重：移除 ' + dupIds.length + ' 个重复项目（同公司同模板）');
+            }
+        } catch (e) { console.warn('⚠️ 项目去重异常:', e); }
+
         // 连接测试
         try {
             const { error } = await supabaseClient.from('companies').select('count', { count: 'exact', head: true });
@@ -1200,6 +2066,13 @@ async function syncToSupabase(createSnapshotFlag = false) {
         }
         updateSyncStatus('同步中...', 'syncing');
         console.log('🔵 开始同步数据到 Supabase...');
+
+        // ===== 【v21 新增】上传前先与云端做"时间戳合并" =====
+        // 根治：看板直接 PATCH 云端的 tasks.completed / projects.nodes 后，
+        // 若工作台本地有旧数据直接上传，会把看板刚改的完成状态覆盖回去
+        // （最后写入者胜出）。此处按记录级时间戳判定谁更新，只接受更新的值。
+        try { await mergeCloudStateBeforeUpload(); }
+        catch (e) { console.warn('⚠️ 云端合并失败，按原逻辑上传:', e); }
 
         // ===== 数据映射函数 =====
         const mapProject = (p) => ({
@@ -1239,8 +2112,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
             month_label: t.monthLabel || '',
             plan_date: t.planDate || null,
             start_date: t.startDate || t.planDate || t.dueDate || null,
-            end_date: t.endDate || t.dueDate || null,
-            updated_at: t.updatedAt || new Date().toISOString()
+            end_date: t.endDate || t.dueDate || null
         });
 
         const mapWorkLog = (w) => ({
@@ -1354,9 +2226,61 @@ async function syncToSupabase(createSnapshotFlag = false) {
             { key: 'template_order', value: JSON.stringify(appData.templates.map(t => t.id)) }
         ];
 
-        // 【sync-rewrite】上传端：只做新增/更新（upsert，幂等），绝不删除云端任何项目/任务。
-        // 工作台没有“真删除项目”功能（归档/搁置/终止都只是改状态），因此上传端不再做任何
-        // “云端有而本地没有就删除”的物理删除——这是此前项目被误删的根因，已从结构上移除。
+        // 【v2修复】移除原“清理云端多余项目”分支。
+        // 原逻辑：云端有、本地没有的项目 → 连同任务/结算/日志一起从云端物理删除。
+        // 问题：工作台本身没有“真删除项目”功能（归档/搁置/终止都是改 status，数据仍保留），
+        //       该分支唯一的实际效果就是把“本地恰好缺失的项目”从云端删掉——
+        //       一旦本地数据过期（多开标签页/上传部分失败/快照回滚），就会反复误删云端项目。
+        //       这正是“补回项目→上传成功→30s 同步后又消失”的根源。
+        // v2 起：上传只做 upsert（新增/更新），绝不物理删除云端项目行；
+        //       本地确实没有、云端有的项目，会在下次拉取时自动回到本地（安全方向的合并）。
+
+        // ===== 【v2修复】清理已删除任务：改为“墓碑”机制，只删用户明确删除过的任务 =====
+        // （与 work_logs 的 _deletedWorkLogIds 机制一致；
+        //   不再按“本地没有就删云端”，避免过期本地数据误删其他入口写入的任务）
+        try {
+            const deletedTaskIds = (appData._deletedTaskIds || []).filter(id => id);
+            if (deletedTaskIds.length > 0) {
+                const { error: tasksDelErr } = await supabaseClient.from('tasks').delete().in('id', deletedTaskIds);
+                if (tasksDelErr) {
+                    console.warn('⚠️ 清理已删除任务失败:', tasksDelErr);
+                } else {
+                    appData._deletedTaskIds = [];
+                    // 仅持久化清理标记，不触发上传
+                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+                    console.log(`🗑️ 已清理 ${deletedTaskIds.length} 条已删除任务`);
+                }
+            }
+        } catch (err) { console.warn('⚠️ 清理已删除任务异常:', err); }
+
+        // ===== 【v21.5修复】清理已删除项目：墓碑机制 =====
+        // 场景：默认项目「无真删除」（归档/搁置/终止仅改 status），但用户会在总表页面主动“取消”一个项目。
+        // 取消后本地 appData.projects 已移除，但云端 projects 行仍在（上传只 upsert 不删行），
+        // 于是“重新创建该项目”会 push 一个带新 id 的项目，上传后云端新旧两条并存 → 下次拉取出现 2 个重复。
+        // 解决：取消项目时把 id 记入 _deletedProjectIds（墓碑），上传时连同其子记录从云端精确删除，
+        //       再 upsert 现有数据，从根源消灭“同公司同模板2个重复”。
+        try {
+            const deletedProjectIds = (appData._deletedProjectIds || []).filter(id => id);
+            if (deletedProjectIds.length > 0) {
+                // 先删子记录（外键约束），再删项目本身
+                const { error: projTasksDelErr } = await supabaseClient.from('tasks').delete().in('project_id', deletedProjectIds);
+                if (projTasksDelErr) console.warn('⚠️ 清理已删除项目-任务失败:', projTasksDelErr);
+                const { error: projSettleDelErr } = await supabaseClient.from('settlements').delete().in('project_id', deletedProjectIds);
+                if (projSettleDelErr) console.warn('⚠️ 清理已删除项目-结算失败:', projSettleDelErr);
+                const { error: projLogsDelErr } = await supabaseClient.from('work_logs').delete().in('project_id', deletedProjectIds);
+                if (projLogsDelErr) console.warn('⚠️ 清理已删除项目-日志失败:', projLogsDelErr);
+                const { error: projDelErr } = await supabaseClient.from('projects').delete().in('id', deletedProjectIds);
+                if (projDelErr) {
+                    console.warn('⚠️ 清理已删除项目失败:', projDelErr);
+                } else {
+                    appData._deletedProjectIds = [];
+                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+                    console.log(`🗑️ 已清理 ${deletedProjectIds.length} 个已删除项目`);
+                }
+            }
+        } catch (err) { console.warn('⚠️ 清理已删除项目异常:', err); }
+
+        // ===== 执行上传 =====
         const tableConfigs = [
             { name: 'companies', data: companiesData, conflict: 'name' },
             { name: 'templates', data: templatesData, conflict: 'id' },
@@ -1374,51 +2298,72 @@ async function syncToSupabase(createSnapshotFlag = false) {
         const errors = [];
         for (const table of tableConfigs) {
             try {
-                if (table.data.length === 0) { console.log('跳过 ' + table.name + '（无数据）'); continue; }
+                if (table.data.length === 0) { console.log(`⏭️ ${table.name} 无数据，跳过`); continue; }
                 const { error } = await supabaseClient
                     .from(table.name)
                     .upsert(table.data, { onConflict: table.conflict });
                 if (error) {
-                    console.error('❌ ' + table.name + ' 同步失败:', error);
+                    console.error(`❌ ${table.name} 同步失败:`, error);
                     errors.push({ table: table.name, error });
                     hasError = true;
                 } else {
-                    console.log('✅ ' + table.name + ' 同步成功');
+                    console.log(`✅ ${table.name} 同步成功`);
                 }
             } catch (err) {
-                console.error('❌ ' + table.name + ' 同步异常:', err);
+                console.error(`❌ ${table.name} 同步异常:`, err);
                 errors.push({ table: table.name, error: err });
                 hasError = true;
             }
         }
 
-        // 墓碑删除：仅删除用户“明确删除”的任务/日志（精确 id，绝不做推断式删除）
-        await applyTombstones();
+        // ===== 清理已删除的工作日志（精确删除云端记录，避免下次同步又出现）=====
+        // 仅删除被用户明确删除的 id，不会误删 dashboard 等其它入口写入的日志
+        try {
+            const delIds = (appData._deletedWorkLogIds || []).filter(function(x){ return x; });
+            if (delIds.length > 0) {
+                const { error: delErr } = await supabaseClient.from('work_logs').delete().in('id', delIds);
+                if (delErr) {
+                    console.warn('⚠️ 清理已删除日志失败:', delErr);
+                } else {
+                    appData._deletedWorkLogIds = [];
+                    // 仅持久化清理标记，不再触发上传
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+                    console.log('🗑️ 已清理 ' + delIds.length + ' 条已删除日志');
+                }
+            }
+        } catch (e) { console.warn('⚠️ 清理已删除日志异常:', e); }
 
         if (hasError) {
             console.error('❌ 同步过程中部分表失败，错误汇总:');
-            errors.forEach(({ table, error }) => { console.error('  - ' + table + ':', error.message || error); });
+            errors.forEach(({ table, error }) => {
+                console.error(`  - ${table}:`, error.message || error);
+            });
             updateSyncStatus('同步失败', 'error');
-            // 保留 _pendingUpload=true 以便下次自动重试；抛出异常
-            throw new Error('部分表同步失败: ' + errors.map(e => e.table).join(','));
-        }
-
-        _pendingUpload = false;   // 已成功上传，清除“有待上传修改”标记
-        _lastUploadedAt = Date.now();
-        // 上传成功后创建版本快照（每次上传都生成一个版本，支持恢复到任意版本）
-        let snapOk = true;
-        if (createSnapshotFlag) {
-            try {
-                await createSnapshot();
-                console.log('✅ 版本快照创建完成');
-            } catch (snapErr) {
-                snapOk = false;
-                console.warn('⚠️ 同步成功，但版本快照未创建:', snapErr);
+            // 【v2修复】上传不完整时明确抛错：手动上传会弹出真实失败原因（不再显示“上传成功”），
+            // 自动同步会保留 _pendingUpload 待下次重试，且不会执行后续拉取覆盖本地
+            throw new Error('部分数据上传失败: ' + errors.map(e => e.table).join(', ') + '（云端数据未完整更新，本地修改已保留，将自动重试）');
+        } else {
+            _pendingUpload = false;   // 已成功上传，清除“有待上传修改”标记
+            // 上传成功后创建版本快照（仅手动上传时），并重新加载云端数据
+            let snapshotWarning = false;
+            let snapshotHint = '';
+            if (createSnapshotFlag) {
+                try {
+                    await createSnapshot();
+                    console.log('✅ 版本快照创建完成');
+                } catch (snapErr) {
+                    console.warn('⚠️ 同步成功，但版本快照未创建:', snapErr);
+                    snapshotWarning = true;
+                    if (snapErr._hint) snapshotHint = snapErr._hint;
+                    else if (snapErr.code === '42501' || (snapErr.message && snapErr.message.includes('permission denied'))) {
+                        snapshotHint = '快照表权限不足，请在云同步页执行含 grant 的建表 SQL。';
+                    }
+                }
             }
+            await loadFromSupabase();
+            updateSyncStatus(snapshotWarning ? ('同步成功（快照失败）' + (snapshotHint ? '：' + snapshotHint : '')) : '已同步', snapshotWarning ? 'error' : 'success');
+            console.log('✅ 所有数据同步完成');
         }
-        updateSyncStatus(snapOk ? '已同步' : '已同步(快照失败)', 'success');
-        console.log('✅ 所有数据上传完成');
-
     } catch (err) {
         updateSyncStatus('上传失败', 'error');
         throw err;
@@ -1481,6 +2426,12 @@ async function syncToSupabase(createSnapshotFlag = false) {
             }
 
             if (configured && supabaseClient) {
+                // 关闭自动上传/同步按钮时，若本地已有数据则完全走本地（不主动触碰云端）
+                const _rawCache = localStorage.getItem(STORAGE_KEY);
+                let _hasLocalData = false;
+                try { if (_rawCache) { const _c = JSON.parse(_rawCache); _hasLocalData = !!( _c.projects && _c.projects.length); } } catch(e) {}
+                const _autoPull = autoSyncEnabled || !_hasLocalData;
+                if (_autoPull) {
                 try {
                     console.log('🔵 尝试从 Supabase 加载...');
                     await loadFromSupabase();
@@ -1530,6 +2481,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
                     console.error('❌ 从 Supabase 加载失败:', e);
                     updateSyncStatus('同步失败', 'error');
                     console.log('🔵 尝试从本地缓存恢复...');
+                }
                 }
             }
 
@@ -1764,6 +2716,72 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
             saveData();
         }
 
+        // ============================================================
+        // 【v2修复】项目防丢失防护：同步后缺失检测 + 备份恢复
+        // ============================================================
+        function collectAllProjectIds() {
+            const ids = [];
+            (appData.projects || []).forEach(p => { if (p && p.id) ids.push(p.id); });
+            (appData.archived || []).forEach(a => { if (a && a.projectData && a.projectData.id) ids.push(a.projectData.id); });
+            (appData.shelved || []).forEach(s => { if (s && s.projectData && s.projectData.id) ids.push(s.projectData.id); });
+            (appData.terminated || []).forEach(t => { if (t && t.projectData && t.projectData.id) ids.push(t.projectData.id); });
+            return new Set(ids);
+        }
+
+        function checkPostPullProjectLoss(preIds, backupJson) {
+            try {
+                if (!preIds || preIds.size === 0) return;
+                const postIds = collectAllProjectIds();
+                const lost = [...preIds].filter(id => !postIds.has(id));
+                if (lost.length === 0) return;
+                console.warn('⚠️【v2防护】本次云端同步后，有 ' + lost.length + ' 个本地项目在云端不存在（可能曾被误删）:', lost);
+                if (backupJson) { try { localStorage.setItem('workbench_prepull_backup', backupJson); } catch (e) {} }
+                showProjectLossWarning(lost.length);
+            } catch (e) {
+                console.warn('⚠️ 项目缺失检测异常:', e);
+            }
+        }
+
+        function showProjectLossWarning(count) {
+            try {
+                if (document.getElementById('_projLossBanner')) return;
+                const b = document.createElement('div');
+                b.id = '_projLossBanner';
+                b.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;' +
+                    'background:#fff8e1;border:1px solid #ffb300;color:#7a5c00;padding:10px 16px;border-radius:10px;' +
+                    'font-size:13px;box-shadow:0 4px 16px rgba(0,0,0,.18);display:flex;gap:10px;align-items:center;max-width:92vw;';
+                b.innerHTML = '<span>⚠️ 刚才的云端同步中有 <b>' + count + '</b> 个项目在云端缺失（云端数据可能不完整）</span>';
+                const btnOk = document.createElement('button');
+                btnOk.textContent = '恢复同步前数据并重新上传';
+                btnOk.style.cssText = 'padding:6px 12px;border:none;border-radius:6px;background:#ffb300;color:#fff;cursor:pointer;font-size:12.5px;font-weight:600;';
+                btnOk.onclick = function () { restorePrePullBackup(); b.remove(); };
+                const btnIgnore = document.createElement('button');
+                btnIgnore.textContent = '忽略';
+                btnIgnore.style.cssText = 'padding:6px 12px;border:1px solid #d9a800;border-radius:6px;background:transparent;color:#7a5c00;cursor:pointer;font-size:12.5px;';
+                btnIgnore.onclick = function () { b.remove(); };
+                b.appendChild(btnOk);
+                b.appendChild(btnIgnore);
+                document.body.appendChild(b);
+            } catch (e) { console.warn('⚠️ 缺失警告横幅异常:', e); }
+        }
+
+        function restorePrePullBackup() {
+            try {
+                const raw = localStorage.getItem('workbench_prepull_backup');
+                if (!raw) { showAlert('未找到同步前的备份数据'); return; }
+                appData = JSON.parse(raw);
+                // 标记待上传：下一次自动同步会把恢复出来的项目重新写回云端（v2 已移除云端项目清理，不会再被删）
+                _pendingUpload = true;
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+                renderPage(currentPage);
+                showToast('✅ 已恢复同步前数据，将自动重新上传到云端');
+                console.log('✅【v2防护】已从同步前备份恢复数据');
+            } catch (e) {
+                console.error('❌ 恢复备份失败:', e);
+                showAlert('恢复备份失败: ' + e.message);
+            }
+        }
+
         function updateSyncStatus(text, type) {
             const dot = document.getElementById('syncDot'),
                 txt = document.getElementById('syncText');
@@ -1818,39 +2836,59 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
         function startAutoSync() {
             if (autoSyncTimer) clearInterval(autoSyncTimer);
             autoSyncTimer = setInterval(async () => {
-                if (!supabaseClient) return;
-                if (_uploading) {
-                    console.log('⏰ 自动同步：上传进行中，本次跳过');
-                    return;
-                }
-                // 正在防抖上传期间（用户刚修改完、尚未真正上传），跳过本次，避免覆盖未提交修改
-                if (autoUploadTimer) {
-                    console.log('⏰ 自动同步：检测到待上传修改（防抖中），本次跳过');
-                    return;
-                }
-                const ae = document.activeElement;
-                const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
-                    ae.tagName === 'SELECT' || ae.isContentEditable);
-                try {
-                    if (_pendingUpload) {
-                        // 本地有待上传修改：先上传（本地优先），上传即生成新版本
-                        console.log('⏰ 自动同步：本地有未上传修改，先上传...');
-                        await syncToSupabase(true);
-                        if (!typing) renderPage(currentPage);
-                        updateSyncStatus('已同步', 'success');
-                        console.log('✅ 自动上传完成');
-                    } else if (autoSyncEnabled) {
-                        // 本地干净：拉取云端最新（只读采用快照，绝不删除）
-                        console.log('⏰ 自动同步：拉取云端最新...');
-                        await loadFromSupabase();
-                        if (!typing) renderPage(currentPage);
-                        updateSyncStatus('已同步', 'success');
-                        console.log('✅ 自动拉取完成');
-                    }
-                } catch (e) {
-                    console.warn('⚠️ 自动同步失败:', e);
-                }
-            }, 30000);
+  	             if (!supabaseClient) return;
+  	             if (_uploading) {
+    	                 console.log('⏰ 自动同步：上传进行中，本次跳过');
+    	                 return;
+    	             }
+  	             // 本地有待上传的修改（例如刚改了节点状态）时，先上传再拉取，
+  	             // 否则 30s 拉取会把云端旧数据覆盖回来，导致刚做的修改丢失
+  	             const hadPending = _pendingUpload;
+  	             if (_pendingUpload) {
+    	                 try {
+    	                     console.log('⏰ 自动同步：检测到本地未上传修改，先上传再拉取...');
+    	                     await syncToSupabase();
+    	                 } catch (e) {
+    	                     console.warn('⚠️ 自动上传本地修改失败，本次跳过拉取以免覆盖修改:', e);
+    	                     return;
+    	                 }
+    	             }
+  	             // 防抖待上传期间（用户刚修改完、尚未真正上传到云端），跳过本次拉取，
+  	             // 避免把尚未提交的本地修改被旧快照覆盖
+  	             if (autoUploadTimer) {
+    	                 console.log('⏰ 自动同步：检测到有待上传的修改，本次跳过拉取');
+    	                 return;
+    	             }
+     	            if (hadPending) {
+     	                 // 已上传并从云端刷新过数据，直接渲染最新状态（无需重复拉取）
+     	                 const ae = document.activeElement;
+      	                 const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
+      	                     ae.tagName === 'SELECT' || ae.isContentEditable);
+      	                 if (!typing) renderPage(currentPage);
+     	                 updateSyncStatus('已同步', 'success');
+     	                 console.log('✅ 自动同步完成（已上传本地修改）');
+     	            } else {
+     	                 console.log('⏰ 自动同步：拉取云端数据...');
+     	                 try {
+      	                      await loadFromSupabase();
+      	                      // 检测用户是否正在输入（工作日志/聊天框/任何表单）：
+      	                      // 若正在输入，本次同步只更新数据、跳过页面重渲染，避免打断输入、清空草稿
+      	                      const ae = document.activeElement;
+      	                      const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
+      	                          ae.tagName === 'SELECT' || ae.isContentEditable);
+      	                      if (typing) {
+      	                          console.log('⏸ 检测到正在输入，本次自动同步跳过页面刷新（数据已更新）');
+      	                          updateSyncStatus('已同步', 'success');
+      	                      } else {
+      	                          renderPage(currentPage);
+        	                      updateSyncStatus('已同步', 'success');
+        	                  }
+        	              console.log('✅ 自动拉取完成');
+    	                  } catch (e) {
+     	                      console.warn('⚠️ 自动拉取失败:', e);
+    	                  }
+     	            }
+ 	       }, 30000);
         }
 
         function stopAutoSync() {
@@ -1890,8 +2928,8 @@ async function manualSync() {
     }
     showConfirm('确认从云端同步最新版本数据到本地（将覆盖本地未保存的修改）？', async function() {
         try {
-            _pendingUpload = false;   // 显式拉取：先清除待上传标记，确保拉取不被跳过
             await loadFromSupabase();
+            _pendingUpload = false;   // 已从云端拉取，本地与云端一致，清除待上传标记
             renderPage(currentPage);
             showToast('✅ 已从云端同步最新数据');
             updateSyncStatus('已同步', 'success');
@@ -1903,26 +2941,59 @@ async function manualSync() {
         // ============================================================
         // 侧边栏与导航
         // ============================================================
-        function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('open');
+            // 【v21 新增】抽屉打开时下沉底部导航，避免遮罩覆盖
+            document.body.classList.toggle('drawer-open', sidebar.classList.contains('open'));
+        }
         document.addEventListener('click', function(event) {
             if (window.innerWidth <= 768) {
                 const sidebar = document.getElementById('sidebar'),
                     hamburger = document.querySelector('.hamburger');
-                if (!sidebar.contains(event.target) && !hamburger.contains(event.target)) sidebar.classList.remove(
-                    'open');
+                if (!sidebar.contains(event.target) && !hamburger.contains(event.target)) {
+                    sidebar.classList.remove('open');
+                    document.body.classList.remove('drawer-open');
+                }
             }
         });
-        window.addEventListener('resize', function() { if (window.innerWidth > 768) document.getElementById('sidebar')
-                .classList.remove('open'); });
+        window.addEventListener('resize', function() {
+            if (window.innerWidth > 768) {
+                document.getElementById('sidebar').classList.remove('open');
+                document.body.classList.remove('drawer-open');
+            }
+        });
 
         let currentPage = 'home';
         document.querySelectorAll('.sidebar nav a').forEach(a => {
             a.addEventListener('click', function(e) {
                 e.preventDefault();
-                if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('open');
+                if (window.innerWidth <= 768) {
+                    document.getElementById('sidebar').classList.remove('open');
+                    document.body.classList.remove('drawer-open');
+                }
                 navigateTo(this.dataset.page);
             });
         });
+        // 【v21 新增】底部导航点击（移动端专属）
+        document.querySelectorAll('.mobile-bottomnav a').forEach(a => {
+            a.addEventListener('click', function(e) {
+                e.preventDefault();
+                navigateTo(this.dataset.page);
+            });
+        });
+        // 【v21 新增】同步底部导航 active 状态 + 任务徽标
+        function syncMobileBottomNav() {
+            document.querySelectorAll('.mobile-bottomnav a').forEach(a => {
+                a.classList.toggle('active', a.dataset.page === currentPage);
+            });
+            const badge = document.getElementById('mobileTaskBadge');
+            if (badge) {
+                const n = (appData.tasks || []).filter(t => !t.completed).length;
+                badge.textContent = n > 99 ? '99+' : n;
+                badge.classList.toggle('zero', n === 0);
+            }
+        }
 
         function navigateTo(page) {
             currentPage = page;
@@ -1935,6 +3006,7 @@ async function manualSync() {
             document.getElementById('pageTitle').textContent = titles[page] || page;
             renderPage(page);
             updateBadges();
+            syncMobileBottomNav();
         }
 
         function renderPage(page) {
@@ -2040,6 +3112,51 @@ async function manualSync() {
         // ============================================================
 function renderHome(mc) {
     try {
+        // =====【v21 新增】移动端"今天要处理"卡片：置顶显示今日/逾期任务=====
+        // 逻辑：列出未完成任务中 —— ①逾期(due<today)、②今日(due=today)、③明日(due=tomorrow)
+        // 排序：逾期→今日→明日→其他未设置日期的
+        // 上限：最多展示 6 条，超出显示 "+N 更多"
+        // 点击勾选框：切换 completed=true 并触发 saveData() 自动上传
+        // 点击任务标题：跳转到任务分配页
+        const _todayISO = new Date().toISOString().split('T')[0];
+        const _tomorrowISO = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]; })();
+        const _unfinishedTasks = (appData.tasks || []).filter(t => !t.completed);
+        const _todayList = _unfinishedTasks
+            .map(t => {
+                const dd = t.dueDate || '';
+                let prio = 3, tag = '';
+                if (dd && dd < _todayISO) { prio = 0; tag = 'overdue'; }
+                else if (dd === _todayISO) { prio = 1; tag = 'today'; }
+                else if (dd === _tomorrowISO) { prio = 2; tag = 'tomorrow'; }
+                return { ...t, _prio: prio, _tag: tag };
+            })
+            .filter(t => t._prio <= 2 || !t.dueDate)  // 只保留 逾期/今日/明日/无日期
+            .sort((a, b) => (a._prio - b._prio) || (a.dueDate || 'zz').localeCompare(b.dueDate || 'zz'))
+            .slice(0, 6);
+        const _moreCount = Math.max(0, _unfinishedTasks.filter(t => {
+            const dd = t.dueDate || '';
+            return (dd && dd < _todayISO) || dd === _todayISO || dd === _tomorrowISO;
+        }).length - _todayList.length);
+        const _todayItemsHtml = _todayList.length === 0
+            ? `<div class="todo-empty">🎉 今天暂无待办任务</div>`
+            : _todayList.map(t => {
+                const projName = getProjectName(t.projectId);
+                const dateText = t._tag === 'overdue' ? `逾期 · ${t.dueDate}` :
+                    t._tag === 'today' ? `今日` :
+                    t._tag === 'tomorrow' ? `明日` :
+                    (t.dueDate || '');
+                return `<div class="todo-item ${t._tag === 'overdue' ? 'overdue' : ''}">
+                    <div class="todo-check" onclick="toggleTaskComplete('${t.id}', this)" title="点击切换完成">✓</div>
+                    <div class="todo-title" onclick="navigateTo('tasks')" style="cursor:pointer" title="${esc(projName)}">${esc(t.title)}</div>
+                    <div class="todo-date">${dateText}</div>
+                </div>`;
+            }).join('') + (_moreCount > 0 ? `<div class="todo-empty" style="cursor:pointer;padding-top:6px" onclick="navigateTo('tasks')">+${_moreCount} 更多待办 →</div>` : '');
+        const _todayTodoCard = `<div class="today-todo-card">
+            <div class="card-title">📌 今天要处理 (${_todayList.length})</div>
+            ${_todayItemsHtml}
+        </div>`;
+        // =====【v21 新增结束】=====
+
         // 保存外层(mainContent)与各列内部滚动位置（修复：滑动看板后点击节点状态会返回顶部）
         const _mainTop = mc ? mc.scrollTop : 0;
         saveScrollPosition('kanbanGrid');
@@ -2063,7 +3180,29 @@ function renderHome(mc) {
             done = f.filter(p => calcStatus(p.nodes) === 'done');
         const tasks = appData.tasks.filter(t => !t.completed);
 
-        const filterHtml = `
+        // ===== 【v21.1】移动端筛选下拉框替代横滑 pill =====
+        const _isMobile = window.innerWidth <= 768;
+        if (!_isMobile && !window._expandedKanbanCols) window._expandedKanbanCols = { pending: false, progress: false, done: false };
+        if (_isMobile && !window._expandedKanbanCols) window._expandedKanbanCols = { pending: false, progress: false, done: false };
+        const filterHtml = _isMobile ? `
+            <div class="m-filter-bar">
+              <select class="m-filter-select" onchange="setHF('type',this.value); renderHome(document.getElementById('mainContent'));">
+                <option value="all" ${ft==='all'?'selected':''}>📋 全部类型</option>
+                ${appData.templates.map(t => `<option value="${t.id}" ${ft===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+              </select>
+              <select class="m-filter-select" onchange="setHF('status',this.value); renderHome(document.getElementById('mainContent'));">
+                <option value="all" ${fs==='all'?'selected':''}>📊 全部状态</option>
+                <option value="pending" ${fs==='pending'?'selected':''}>⏳ 未开始</option>
+                <option value="progress" ${fs==='progress'?'selected':''}>🔄 进行中</option>
+                <option value="done" ${fs==='done'?'selected':''}>✅ 已完成</option>
+              </select>
+              <div class="m-filter-search">
+                <input id="companySearch" placeholder="🔍 搜索公司..." value="${esc(compKeyword)}"
+                       onkeydown="if(event.key==='Enter'){ window._hcomp=this.value; renderHome(document.getElementById('mainContent')); }">
+                <button onclick="window._hcomp=document.getElementById('companySearch').value; renderHome(document.getElementById('mainContent'));">🔍</button>
+              </div>
+            </div>
+          ` : `
             <div class="filter-pills">
               <span class="${ft==='all'?'active':''}" onclick="setHF('type','all')">全部</span>
               ${appData.templates.map(t => `<span class="${ft===t.id?'active':''}" onclick="setHF('type','${t.id}')">${esc(t.name)}</span>`).join('')}
@@ -2082,7 +3221,7 @@ function renderHome(mc) {
             </div>
           `;
 
-        mc.innerHTML = `
+        mc.innerHTML = `${_todayTodoCard}
             <div class="card">
               <div class="card-header">
                 <h3>📌 项目看板</h3>
@@ -2091,11 +3230,52 @@ function renderHome(mc) {
                   <button class="btn btn-primary btn-sm" onclick="openProjectModal()" style="margin-left:auto;">+ 新建</button>
                 </div>
               </div>
+              ${_isMobile ? `
+              <div class="m-kanban-folders" id="kanbanGrid">
+                <div class="m-kanban-folder ${window._expandedKanbanCols.pending?'expanded':''}">
+                  <div class="m-kanban-folder-header" onclick="toggleKanbanCol('pending')">
+                    <div class="m-kanban-folder-title">⏳ 未开始</div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <span class="m-kanban-folder-count">${pen.length}</span>
+                      <span class="m-kanban-folder-arrow">▼</span>
+                    </div>
+                  </div>
+                  <div class="m-kanban-folder-body">
+                    ${pen.map(p=>kanbanCard(p)).join('')||'<div class="empty-state">—</div>'}
+                  </div>
+                </div>
+                <div class="m-kanban-folder ${window._expandedKanbanCols.progress?'expanded':''}">
+                  <div class="m-kanban-folder-header" onclick="toggleKanbanCol('progress')">
+                    <div class="m-kanban-folder-title">🔄 进行中</div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <span class="m-kanban-folder-count">${prog.length}</span>
+                      <span class="m-kanban-folder-arrow">▼</span>
+                    </div>
+                  </div>
+                  <div class="m-kanban-folder-body">
+                    ${prog.map(p=>kanbanCard(p)).join('')||'<div class="empty-state">—</div>'}
+                  </div>
+                </div>
+                <div class="m-kanban-folder ${window._expandedKanbanCols.done?'expanded':''}">
+                  <div class="m-kanban-folder-header" onclick="toggleKanbanCol('done')">
+                    <div class="m-kanban-folder-title">✅ 已完成</div>
+                    <div style="display:flex;align-items:center;gap:8px;">
+                      <span class="m-kanban-folder-count">${done.length}</span>
+                      <span class="m-kanban-folder-arrow">▼</span>
+                    </div>
+                  </div>
+                  <div class="m-kanban-folder-body">
+                    ${done.map(p=>kanbanCard(p)).join('')||'<div class="empty-state">—</div>'}
+                  </div>
+                </div>
+              </div>
+              ` : `
               <div class="kanban-grid" id="kanbanGrid">
                 <div class="kanban-col"><h4>⏳ 未开始 (${pen.length})</h4>${pen.map(p=>kanbanCard(p)).join('')||'<div class="empty-state">—</div>'}</div>
                 <div class="kanban-col"><h4>🔄 进行中 (${prog.length})</h4>${prog.map(p=>kanbanCard(p)).join('')||'<div class="empty-state">—</div>'}</div>
                 <div class="kanban-col"><h4>✅ 已完成 (${done.length})</h4>${done.map(p=>kanbanCard(p)).join('')||'<div class="empty-state">—</div>'}</div>
               </div>
+              `}
             </div>
             <div class="card">
               <div class="card-header"><h3>📝 今日待办</h3></div>
@@ -2121,7 +3301,7 @@ function renderHome(mc) {
         }
         
         const kanban = document.getElementById('kanbanGrid');
-        if (kanban) { 
+        if (kanban && !_isMobile) { 
             kanban.style.maxHeight = '45vh';
             kanban.style.overflowY = 'auto'; 
             const saved = scrollPositions['kanbanGrid']; 
@@ -2147,6 +3327,12 @@ function renderHome(mc) {
         mc.innerHTML = `<div class="card"><p style="color:red;">渲染出错，请刷新页面或检查控制台错误信息。</p></div>`;
     }
 }
+
+        function toggleKanbanCol(colKey) {
+            if (!window._expandedKanbanCols) window._expandedKanbanCols = { pending: false, progress: false, done: false };
+            window._expandedKanbanCols[colKey] = !window._expandedKanbanCols[colKey];
+            renderHome(document.getElementById('mainContent'));
+        }
 
         function kanbanCard(p) {
             const pct = getProgressPercent(p.nodes),
@@ -2267,8 +3453,8 @@ function renderHome(mc) {
 function deleteTask(tid) {
     showConfirm('确认删除此待办？', function() {
         appData.tasks = appData.tasks.filter(t => t.id !== tid);
-        // 【sync-rewrite】墓碑：记录被删任务 id，上传时精确删除云端对应记录（不靠“本地没有就删云端”）
-        appData._deletedTaskIds = appData._deletedTaskIds || [];
+        // 【v2修复】记录“墓碑”：上传时只精确删除这条任务，避免误删云端其他任务
+        if (!appData._deletedTaskIds) appData._deletedTaskIds = [];
         if (appData._deletedTaskIds.indexOf(tid) === -1) appData._deletedTaskIds.push(tid);
         saveData(true);
         renderPage(currentPage);
@@ -2320,6 +3506,27 @@ function toggleTask(tid, chk) {
     showToast(chk ? '✅ 任务已完成并同步' : '↩ 任务已取消完成并同步');
 }
 
+// 【v21 新增】移动端"今天要处理"卡片专用的勾选切换：
+// 与 toggleTask 逻辑一致，但支持"点击勾选框"式（无 checkbox 输入，用视觉勾选元素）
+function toggleTaskComplete(tid, el) {
+    const t = appData.tasks.find(tt => tt.id === tid);
+    if (!t) return;
+    toggleTask(tid, !t.completed);
+    // 局部刷新勾选视觉（不重新渲染整页，避免打断用户浏览）
+    if (el) {
+        const item = el.closest('.todo-item');
+        if (item) {
+            if (t.completed) {
+                item.classList.add('done');
+                el.classList.add('done-check');
+            } else {
+                item.classList.remove('done');
+                el.classList.remove('done-check');
+            }
+        }
+    }
+}
+
         function quickLog() {
             const inp = document.getElementById('quickLog');
             if (!inp || !inp.value.trim()) return;
@@ -2361,6 +3568,13 @@ function toggleTask(tid, chk) {
         function removeCompany(i) {
             const c = appData.companies[i];
             showConfirm(`确认删除公司「${c}」及其所有项目？`, function() {
+                // 【v21.5修复】把该公司所有相关项目/子记录 id 记入墓碑，上传时从云端精确删除，避免重新录入后重复
+                if (!appData._deletedProjectIds) appData._deletedProjectIds = [];
+                const collect = (pid) => { if (pid && appData._deletedProjectIds.indexOf(pid) === -1) appData._deletedProjectIds.push(pid); };
+                appData.projects.forEach(p => { if (p.company === c) collect(p.id); });
+                appData.archived.forEach(a => collect(a.projectData?.id));
+                appData.shelved.forEach(s => collect(s.projectData?.id));
+                appData.terminated.forEach(t => collect(t.projectData?.id));
                 appData.companies.splice(i, 1);
                 appData.projects = appData.projects.filter(p => p.company !== c);
                 appData.archived = appData.archived.filter(a => a.projectData.company !== c);
@@ -2416,6 +3630,9 @@ function renderProjects(mc) {
     requestAnimationFrame(() => { if (mc) { const _mx = Math.max(0, mc.scrollHeight - mc.clientHeight); mc.scrollTop = Math.min(_mt, _mx); } });
     try {
         saveScrollPosition('projectTableWrap');
+        const _isMobile = window.innerWidth <= 768;
+        // 【v21.7】总表渲染前，把"有项目但未登记"的幽灵公司补进公司列表，避免看不见却判重复
+        reconcileCompaniesFromProjects();
         // 读取冻结状态（新增）
         const freezeState = localStorage.getItem('freeze_state_projects') === 'true';
         const ensureNodes = (proj) => { if (!proj.nodes || !Array.isArray(proj.nodes)) proj.nodes = []; return proj; };
@@ -2450,6 +3667,91 @@ function renderProjects(mc) {
             return '';
         };
 
+        // ===== 【v21.1】移动端卡片式项目总表 =====
+        if (_isMobile) {
+            let cards = '<div class="card" id="projectsCard" style="flex:1;">';
+            cards += '<div class="card-header"><h3>📁 项目总表</h3><div>';
+            cards += '<button class="btn btn-primary btn-sm" onclick="openAddCompanyModal()">+ 新增公司</button> ';
+            cards += '<button class="btn btn-sm" onclick="openBatchImport()">📋 批量导入</button> ';
+            cards += '<button class="btn btn-sm btn-info" onclick="openProjectStatusColorSettings()">🎨 颜色设置</button> ';
+            if (filterTemplateId !== 'all') cards += '<button class="btn btn-sm btn-ghost" onclick="clearProjectFilter()">清除筛选</button> ';
+            cards += '</div></div>';
+
+            // 移动端筛选下拉框
+            cards += '<div class="m-filter-bar">';
+            cards += '<select class="m-filter-select" onchange="toggleProjectFilter(this.value); renderProjects(document.getElementById(\'mainContent\'));">';
+            cards += '<option value="all"' + (filterTemplateId==='all'?' selected':'') + '>📋 全部类型</option>';
+            appData.templates.forEach(t => {
+                cards += '<option value="'+t.id+'"'+(filterTemplateId===t.id?' selected':'')+'>'+esc(t.name)+'</option>';
+            });
+            cards += '</select>';
+            cards += '</div>';
+
+            // 公司卡片列表
+            cards += '<div class="m-proj-cards">';
+            appData.companies.forEach((comp, ci) => {
+                let hasMatching = true;
+                if (filterTemplateId !== 'all') {
+                    hasMatching = allProjects.some(p => p.company === comp && p.templateId === filterTemplateId);
+                }
+                if (!hasMatching) return;
+
+                const compProjects = allProjects.filter(p => p.company === comp);
+                const activeProjects = compProjects.filter(p => p._status === 'active');
+                const inactiveProjects = compProjects.filter(p => p._status !== 'active');
+                const progPct = companyProgress[comp];
+                const fillCls = progPct >= 70 ? 'high' : progPct >= 30 ? 'mid' : 'low';
+
+                // 获取公司状态（是否有归档/搁置/终止项目）
+                let companyStatus = '';
+                if (inactiveProjects.length > 0) {
+                    for (const s of ['archived','shelved','terminated']) {
+                        if (inactiveProjects.some(p => p._status === s)) { companyStatus = s; break; }
+                    }
+                }
+
+                cards += '<div class="m-proj-card ' + companyStatus + '" id="mProjCard_'+esc(comp)+'" onclick="toggleMobileProjCard(\''+esc(comp)+'\')">';
+                cards += '<div class="m-proj-card-header">';
+                cards += '<div class="m-proj-card-name"><span class="drag-icon">☰</span>' + esc(comp) + '</div>';
+                cards += '<div class="m-proj-card-prog">';
+                cards += '<div class="m-proj-card-bar"><div class="m-proj-card-fill ' + fillCls + '" style="width:' + progPct + '%;"></div></div>';
+                cards += '<div class="m-proj-card-pct">' + progPct + '%</div>';
+                cards += '</div></div>';
+                cards += '<div class="m-proj-card-count">' + activeProjects.length + ' 个项目进行中 · ' + compProjects.length + ' 个总计</div>';
+                cards += '<div class="m-proj-card-expand" onclick="event.stopPropagation();toggleMobileProjCard(\''+esc(comp)+'\')">👆 点击查看/编辑项目类型</div>';
+
+                // 展开详情：项目类型竖向排列
+                cards += '<div class="m-proj-card-detail">';
+                appData.templates.forEach(t => {
+                    const proj = allProjects.find(p => p.company === comp && p.templateId === t.id);
+                    const hasTags = t.tags && t.tags.length > 0;
+                    const checked = proj ? 'checked' : '';
+                    cards += '<div class="m-proj-type-row">';
+                    cards += '<div class="m-proj-type-check ' + checked + '" onclick="event.stopPropagation();toggleMProjType(\''+esc(comp)+'\',\''+t.id+'\',this)">';
+                    if (proj) cards += '✓';
+                    cards += '</div>';
+                    cards += '<div class="m-proj-type-name">'+esc(t.name)+'</div>';
+                    if (proj && hasTags) {
+                        const tagOpts = t.tags.map(tg => '<option '+(proj.tag===tg?'selected':'')+'>'+tg+'</option>').join('');
+                        cards += '<select style="font-size:11px;padding:3px 6px;border-radius:8px;border:1px solid var(--m-border);max-width:100px;" onchange="event.stopPropagation();updateTag(\''+esc(comp)+'\',\''+t.id+'\',this.value)">'+tagOpts+'</select>';
+                    }
+                    if (proj) {
+                        cards += '<div class="m-proj-type-actions">';
+                        cards += '<button class="btn btn-xs btn-ghost" onclick="event.stopPropagation();openEditProjectModal(\''+proj.id+'\')" title="编辑项目">✎</button>';
+                        cards += '</div>';
+                    }
+                    cards += '</div>';
+                });
+                cards += '</div>'; // m-proj-card-detail
+                cards += '</div>'; // m-proj-card
+            });
+            cards += '</div>'; // m-proj-cards
+            cards += '</div>'; // card
+            mc.innerHTML = cards;
+            return; // 移动端渲染完毕，不再执行 PC 表格逻辑
+        }
+
+        // ===== PC 端：原表格逻辑 =====
         // 修改：卡片容器添加 id 和 freeze-enabled 类
         let html = `
             <div class="card ${freezeState ? 'freeze-enabled' : ''}" id="projectsCard" style="flex:1;">
@@ -2612,6 +3914,13 @@ function renderProjects(mc) {
             const urgent = document.getElementById('pUrgent').checked;
             const t = appData.templates.find(tp => tp.id === tid);
             if (!t) { showAlert('模板不存在'); return; }
+            // 【v21.5修复】同公司+同模板已存在时不再重复创建
+            const dup = appData.projects.find(p => p.company === comp && p.templateId === tid && !p.archived && !p
+                .shelved && !p.terminated);
+            if (dup) { showToast('⚠️ 该公司「' + t.name + '」项目已存在，未重复创建');
+                closeModal();
+                renderHome(document.getElementById('mainContent'));
+                return; }
             appData.projects.push({
                 id: getNextId(),
                 templateId: tid,
@@ -2691,6 +4000,8 @@ function renderProjects(mc) {
             const _taskGridTop = _taskGridBefore ? _taskGridBefore.scrollTop : 0;
             const ft = window._tft || 'all',
                 fs = window._tfs || 'all';
+            const _isMobile = window.innerWidth <= 768;
+            if (!window._expandedTaskCards) window._expandedTaskCards = {};
             let elig = appData.projects.filter(p => !p.archived && !p.shelved && !p.terminated && calcStatus(p.nodes) !==
                 'done');
 	    elig = sortProjectsByOrder(elig);
@@ -2713,11 +4024,18 @@ function renderProjects(mc) {
                 <div class="card" style="flex:1;">
                   <div class="card-header">
                     <h3>📋 任务分配 <span style="font-size:12px;color:var(--text-secondary);font-weight:400;">（🔥重要紧急优先）</span></h3>
-                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+                      ${_isMobile ? `
+                        <select class="m-filter-select" onchange="setTF('type',this.value)">
+                          <option value="all" ${ft==='all'?'selected':''}>全部类型</option>
+                          ${appData.templates.map(t => `<option value="${t.id}" ${ft===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+                        </select>
+                      ` : `
                       <div class="filter-pills">
                         <span class="${ft==='all'?'active':''}" onclick="setTF('type','all')">全部</span>
                         ${appData.templates.map(t => `<span class="${ft===t.id?'active':''}" onclick="setTF('type','${t.id}')">${esc(t.name)}</span>`).join('')}
                       </div>
+                      `}
                       <button class="btn btn-sm btn-info" onclick="openTaskColorSettings()">🎨 颜色设置</button>
                     </div>
                   </div>
@@ -2730,6 +4048,42 @@ function renderProjects(mc) {
                         <button class="btn btn-primary" onclick="assignFromSelection()">分配任务</button>
                         <span style="font-size:12px;color:#94a3b8;">选择项目卡片中的节点，然后点击分配</span>
                       </div>
+                      ${_isMobile ? `
+                      <div class="m-task-cards" id="taskGrid">
+                        ${elig.map(p => {
+                          const pct = getProgressPercent(p.nodes);
+                          const isSelected = selPid === p.id;
+                          const isExpanded = window._expandedTaskCards[p.id];
+                          const bgStyle = getBgColor(p.templateId);
+                          const priorityHtml = getPriorityBadgeHtml(p);
+                          const selCount = (window._selectedNodes?.[p.id] || []).length;
+                          const fillCls = pct >= 70 ? 'high' : pct >= 30 ? 'mid' : 'low';
+                          return `<div class="m-task-card ${isSelected?'selected':''} ${isExpanded?'expanded':''}" style="${bgStyle}" onclick="selectProjectForTask('${p.id}')">
+                            <div class="m-task-card-header">
+                              <div class="m-task-card-name">${esc(p.company)} - ${esc(getTplName(p.templateId))} ${priorityHtml}</div>
+                              <div class="m-task-card-prog">
+                                <div class="m-task-card-bar"><div class="m-task-card-fill ${fillCls}" style="width:${pct}%"></div></div>
+                                <div class="m-task-card-pct">${pct}%</div>
+                              </div>
+                            </div>
+                            <div class="m-task-card-count">${p.nodes.length} 个节点 · 已选 ${selCount} 个</div>
+                            <div class="m-task-card-expand" onclick="event.stopPropagation(); toggleTaskCardExpand('${p.id}')">${isExpanded?'🔼 收起节点':'👇 展开选择节点'}</div>
+                            <div class="m-task-card-detail">
+                              ${p.nodes.map((n, idx) => {
+                                const checked = (window._selectedNodes?.[p.id] || []).includes(idx);
+                                return `<div class="m-task-node-row">
+                                  <div class="m-task-node-check ${checked?'checked':''}" onclick="event.stopPropagation(); toggleMobileNodeSelect('${p.id}',${idx},this)">
+                                    ${checked?'✓':''}
+                                  </div>
+                                  <span class="m-task-node-name" style="${n.status==='done'?'text-decoration:line-through;color:#94a3b8;':''}">${esc(n.name)}</span>
+                                  <span class="m-task-node-status ${n.status||'pending'}">${n.status==='done'?'已完成':n.status==='progress'?'进行中':'未开始'}</span>
+                                </div>`;
+                              }).join('')}
+                            </div>
+                          </div>`;
+                        }).join('') || '<div class="empty-state">无符合条件的项目</div>'}
+                      </div>
+                      ` : `
                       <div class="task-grid" id="taskGrid">
                         ${elig.map(p => {
                           const pct = getProgressPercent(p.nodes);
@@ -2755,10 +4109,11 @@ function renderProjects(mc) {
                           </div>`;
                         }).join('') || '<div class="empty-state">无符合条件的项目</div>'}
                       </div>
+                      `}
                     </div>
                     <div class="bottom">
                       <h4 style="color:var(--primary);font-size:14px;flex-shrink:0;">已分配的任务</h4>
-                      <div class="table-wrap" id="taskTableWrap">
+                      <div class="table-wrap m-cards" id="taskTableWrap">
                         <table><thead><tr><th>任务</th><th>项目</th><th>进度</th><th>时间段</th><th>日期</th><th>状态</th><th>操作</th></tr></thead>
                         <tbody>${appData.tasks.map(t => {
                           const p = t.projectId ? appData.projects.find(pr=>pr.id===t.projectId) : null;
@@ -2771,8 +4126,9 @@ function renderProjects(mc) {
                 </div>
               `;
             const grid = document.getElementById('taskGrid');
-            if (grid) { grid.style.maxHeight = '45vh';
+            if (grid && !_isMobile) { grid.style.maxHeight = '45vh';
                 grid.style.overflowY = 'auto'; }
+            else if (grid && _isMobile) { grid.style.overflowY = 'auto'; grid.style.maxHeight = 'none'; }
             const taskTable = document.getElementById('taskTableWrap');
             if (taskTable) { taskTable.style.maxHeight = '30vh';
                 taskTable.style.overflowY = 'auto'; }
@@ -2829,7 +4185,34 @@ function renderProjects(mc) {
         }
 
         function selectProjectForTask(pid) { window._selPid = pid;
+            if (window.innerWidth <= 768) {
+                if (!window._expandedTaskCards) window._expandedTaskCards = {};
+                window._expandedTaskCards[pid] = true;
+            }
             renderTasks(document.getElementById('mainContent')); }
+
+        function toggleTaskCardExpand(pid) {
+            if (!window._expandedTaskCards) window._expandedTaskCards = {};
+            window._expandedTaskCards[pid] = !window._expandedTaskCards[pid];
+            renderTasks(document.getElementById('mainContent'));
+        }
+
+        function toggleMobileNodeSelect(pid, idx, el) {
+            if (!window._selectedNodes) window._selectedNodes = {};
+            if (!window._selectedNodes[pid]) window._selectedNodes[pid] = [];
+            const arr = window._selectedNodes[pid];
+            const isChecked = !arr.includes(idx);
+            if (isChecked) { arr.push(idx); el.classList.add('checked'); el.textContent = '✓'; }
+            else { const pos = arr.indexOf(idx); if (pos > -1) arr.splice(pos, 1); el.classList.remove('checked'); el.textContent = ''; }
+            // 更新已选数量显示
+            const card = el.closest('.m-task-card');
+            const countEl = card ? card.querySelector('.m-task-card-count') : null;
+            if (countEl) {
+                const selCount = (window._selectedNodes?.[pid] || []).length;
+                const nodeCount = card.querySelectorAll('.m-task-node-row').length;
+                countEl.textContent = `${nodeCount} 个节点 · 已选 ${selCount} 个`;
+            }
+        }
 
         function toggleNodeSelection(pid, idx, checked) {
             if (!window._selectedNodes) window._selectedNodes = {};
@@ -3009,6 +4392,114 @@ function renderSettlement(mc) {
         return hexToRgba(cfg.color, cfg.alpha);
     };
 
+    // =====【v21.3】移动端结算卡片（展开式）=====
+    const _isMobile = window.innerWidth <= 768;
+    if (_isMobile) {
+        if (!window._expandedSettleCards) window._expandedSettleCards = {};
+        const cardsHtml = allProjects.map(p => {
+            const s = appData.settlements.find(st => st.projectId === p.id);
+            const status = calcStatus(p.nodes);
+            const isDone = status === 'done';
+            const total = s ? (s.totalCommission || 0) : 0;
+            const paid = s ? (s.settledAmount || 0) : 0;
+            const pct = getProgressPercent(p.nodes);
+            const fillCls = pct >= 70 ? 'high' : pct >= 30 ? 'mid' : 'low';
+            const isExpanded = window._expandedSettleCards[p.id];
+            const priorityHtml = getPriorityBadgeHtml(p);
+            let statusText = isDone ? '✅已完成' : status === 'progress' ? '🔄进行中' : '⏳未开始';
+            let statusCls = isDone ? 'done' : status === 'progress' ? 'progress' : 'pending';
+            if (p._status === 'archived') { statusText = '📦归档'; statusCls = 'archived'; }
+            let settleTag = 'none', settleTagText = '未结算';
+            if (isDone) {
+                if (s?.fullySettled) { settleTag = 'full'; settleTagText = '✅已结清'; }
+                else if (s && s.settledAmount > 0) { settleTag = 'partial'; settleTagText = '🔄部分结算'; }
+                else { settleTag = 'unpaid'; settleTagText = '⏳待结算'; }
+            }
+            let installmentsHtml = '';
+            if (s && s.installments && s.installments.length > 0) {
+                const filtered = s.installments.map((inst, idx) => ({ inst, idx })).filter(({ inst }) => inst.ratio > 0);
+                if (filtered.length > 0) {
+                    installmentsHtml = filtered.map(({ inst, idx }) => {
+                        let displayDate = inst.paidDate || inst.paidDateMonth || '';
+                        return `<div class="installment-item" data-idx="${idx}">
+                            <div class="inst-row">
+                                <input type="checkbox" ${inst.paid ? 'checked' : ''} onchange="toggleInst('${s.id}',${idx},this.checked)" ${!isDone ? 'disabled' : ''}>
+                                <span>${inst.ratio}%</span>
+                            </div>
+                            <div class="inst-date-text" onclick="${isDone ? `openDatePicker('${s.id}',${idx})` : ''}" title="${isDone ? '点击选择日期' : '项目未完成'}">
+                                ${displayDate || (isDone ? '选择日期' : '—')}
+                            </div>
+                        </div>`;
+                    }).join('');
+                } else {
+                    installmentsHtml = isDone ? '<span style="color:#6c7a94;">未配置</span>' : '—';
+                }
+            } else {
+                installmentsHtml = isDone ? '<span style="color:#6c7a94;">未配置</span>' : '—';
+            }
+            return `<div class="m-settle-card ${isExpanded?'expanded':''}" onclick="toggleSettleCard('${p.id}')">
+                <div class="m-settle-card-header">
+                    <div class="m-settle-card-name">${esc(p.company)} ${priorityHtml}</div>
+                    <span class="m-settle-card-status ${statusCls}">${statusText}</span>
+                </div>
+                <div class="m-settle-card-meta">
+                    <span class="m-settle-card-meta-item">${esc(getTplName(p.templateId))}</span>
+                    <span class="m-settle-card-settle-tag ${settleTag}">${settleTagText}</span>
+                </div>
+                <div class="m-settle-card-expand" onclick="event.stopPropagation(); toggleSettleCard('${p.id}')">${isExpanded?'🔼 收起详情':'👇 查看详情'}</div>
+                <div class="m-settle-card-detail">
+                    <div class="m-settle-detail-row"><span class="m-settle-detail-label">进度</span><span class="m-settle-detail-value">${pct}%</span></div>
+                    <div class="m-settle-detail-row"><span class="m-settle-detail-label">标签</span><span class="m-settle-detail-value">${p.tag ? esc(p.tag) : '（无）'}</span></div>
+                    <div class="m-settle-detail-row"><span class="m-settle-detail-label">完成日期</span><span class="m-settle-detail-value">${p.doneDate || '-'}</span></div>
+                    <div class="m-settle-detail-row"><span class="m-settle-detail-label">总提成</span><span class="m-settle-detail-value">${hide ? '***' : total.toFixed(2)}</span></div>
+                    <div class="m-settle-detail-row"><span class="m-settle-detail-label">已结算</span><span class="m-settle-detail-value">${hide ? '***' : paid.toFixed(2)}</span></div>
+                    <div class="m-settle-detail-row">
+                        <span class="m-settle-detail-label">分期</span>
+                        <span class="m-settle-detail-value">
+                            <div class="installment-container" style="display:flex;flex-wrap:wrap;gap:6px;">${installmentsHtml}</div>
+                        </span>
+                    </div>
+                    <div class="m-settle-detail-row"><span class="m-settle-detail-label">备注</span><span class="m-settle-detail-value">${s ? esc(s.note || '') : '-'}</span></div>
+                    <div class="m-settle-detail-row">
+                        <span class="m-settle-detail-label">操作</span>
+                        <span class="m-settle-detail-value">
+                            ${isDone ? `<button class="btn btn-xs" onclick="event.stopPropagation(); editSettlement('${p.id}')">✎ 编辑结算</button>` : '<span style="font-size:11px;color:#94a3b8;">项目未完成</span>'}
+                        </span>
+                    </div>
+                </div>
+            </div>`;
+        }).join('') || '<div class="empty-state" style="padding:20px;text-align:center;color:#6c7a94;">暂无项目</div>';
+        mc.innerHTML = `
+            <div class="card" id="settlementCard" style="flex:1;">
+                <div class="card-header">
+                    <h3>💰 结算管理</h3>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <button class="btn btn-sm" onclick="toggleHideAmt()">👁 ${hide ? '显示' : '隐藏'}金额</button>
+                        <button class="btn btn-sm" onclick="openSettlementConfig()">⚙️ 配置</button>
+                    </div>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:10px;border:1px solid var(--m-border);">
+                    <input type="text" id="settlementSearch" placeholder="搜索公司..." value="${esc(searchComp)}" style="flex:2;min-width:100px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;">
+                    <select id="settlementTypeFilter" onchange="applySettlementFilter()" style="flex:1;min-width:80px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;">
+                        <option value="all">全部</option>${typeOpts}
+                    </select>
+                    <input type="date" id="settlementStart" value="${startDate}" style="flex:1.5;min-width:100px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;" placeholder="开始日期">
+                    <input type="date" id="settlementEnd" value="${endDate}" style="flex:1.5;min-width:100px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;" placeholder="结束日期">
+                    <button class="btn btn-primary btn-sm" onclick="applySettlementFilter()" style="flex-shrink:0;">筛选</button>
+                    <button class="btn btn-sm btn-ghost" onclick="clearSettlementFilter()" style="flex-shrink:0;">清除</button>
+                </div>
+                <div class="settlement-summary" style="margin-bottom:10px;">
+                    <div class="stat-item"><span class="label">📊 项目数</span><span class="value">${allProjects.length}</span></div>
+                    <div class="stat-item"><span class="label">💰 总提成</span><span class="value">${hide ? '****' : totalCommissionSum.toFixed(2)}</span></div>
+                    <div class="stat-item"><span class="label">✅ 已结算</span><span class="value">${hide ? '****' : totalSettledSum.toFixed(2)}</span></div>
+                    <div class="stat-item"><span class="label">📌 待结算</span><span class="value">${hide ? '****' : (totalCommissionSum - totalSettledSum).toFixed(2)}</span></div>
+                </div>
+                <div class="m-settle-cards" id="settlementTableWrap">${cardsHtml}</div>
+            </div>
+        `;
+        return;
+    }
+
     // 修改：卡片容器添加 id 和 freeze-enabled 类
     mc.innerHTML = `
         <div class="card ${freezeState ? 'freeze-enabled' : ''}" id="settlementCard" style="flex:1;">
@@ -3042,7 +4533,7 @@ function renderSettlement(mc) {
                 <div class="stat-item"><span class="label">✅ 已发金额：</span><span class="value">${hide ? '****' : totalSettledSum.toFixed(2)}</span></div>
                 <div class="stat-item"><span class="label">📌 待发金额：</span><span class="value">${hide ? '****' : (totalCommissionSum - totalSettledSum).toFixed(2)}</span></div>
             </div>
-            <div class="table-wrap" id="settlementTableWrap">
+            <div class="table-wrap m-cards" id="settlementTableWrap">
                 <table>
                     <thead><tr>
                         <!-- 公司列添加 sticky-col -->
@@ -3283,6 +4774,11 @@ function renderSettlement(mc) {
             renderSettlement(document.getElementById('mainContent')); }
 
         function applySettlementFilter() { renderSettlement(document.getElementById('mainContent')); }
+        function toggleSettleCard(pid) {
+            if (!window._expandedSettleCards) window._expandedSettleCards = {};
+            window._expandedSettleCards[pid] = !window._expandedSettleCards[pid];
+            renderSettlement(document.getElementById('mainContent'));
+        }
 
         function clearSettlementFilter() {
             document.getElementById('settlementSearch').value = '';
@@ -3601,7 +5097,8 @@ function renderSettlement(mc) {
                 allDayText: '全天',
                 firstDay: 1,
                 height: 'parent',
-                aspectRatio: 1.8,
+                fixedWeekCount: true,
+                eventLimit: false,
                 events: getEventData,
                 eventClick: function(event, jsEvent, view) {
                     const tid = event.id;
@@ -3762,6 +5259,55 @@ function renderLogs(mc) {
     const selectedProject = projects.find(p => p.id === window._selectedLogProjectId);
     const selectedName = selectedProject ? `${selectedProject.company} - ${getTplName(selectedProject.templateId)}` : '无';
 
+    // =====【v21.3】移动端日志（下拉框选项目）=====
+    const _isMobile = window.innerWidth <= 768;
+    if (_isMobile) {
+        const projectOpts = projects.map(p =>
+            `<option value="${p.id}" ${window._selectedLogProjectId===p.id?'selected':''}>${esc(p.company)} - ${esc(getTplName(p.templateId))}</option>`
+        ).join('');
+        mc.innerHTML = `
+            <div class="card" style="flex:1;">
+                <div class="card-header">
+                    <h3>📝 工作日志</h3>
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                        <button class="btn btn-primary btn-sm" onclick="openReportTemplateFromLogs('weekly')">📋 周报</button>
+                        <button class="btn btn-primary btn-sm" onclick="openReportTemplateFromLogs('monthly')">📋 月报</button>
+                    </div>
+                </div>
+                <div class="m-log-select-wrap">
+                    <label>📁 关联项目</label>
+                    <select class="m-log-select" onchange="handleLogProjectSelect(this.value)">
+                        <option value="">无关联</option>
+                        ${projectOpts}
+                    </select>
+                </div>
+                <div class="log-input-area" style="margin-top:10px;">
+                    <textarea id="logContent" placeholder="输入工作日志..." style="width:100%;height:120px;padding:12px;border:1px solid var(--m-border);border-radius:10px;font-size:16px;"></textarea>
+                    <button class="btn btn-primary" style="margin-top:8px;width:100%;" onclick="addWorkLog()">保存日志</button>
+                </div>
+                <div style="margin-top:16px;">
+                    <h4 style="color:var(--primary);font-size:14px;margin-bottom:8px;">历史日志</h4>
+                    <div style="overflow-y:auto;max-height:50vh;-webkit-overflow-scrolling:touch;">
+                        ${appData.workLogs.slice().sort((a, b) => b.date.localeCompare(a.date)).map(l => {
+                            const projName = l.projectId ? getProjectName(l.projectId) : '无关联';
+                            return `<div style="padding:8px 10px;border-bottom:1px solid var(--m-border);font-size:13px;">
+                                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                                    <span style="font-weight:600;color:var(--primary);font-size:12px;">${l.date} ${projName!=='无关联'?'['+esc(projName)+']':''}</span>
+                                    <div>
+                                        <button class="btn btn-xs" onclick="editLog('${l.id}')">✎</button>
+                                        <button class="btn btn-xs btn-ghost" onclick="deleteLog('${l.id}')">✕</button>
+                                    </div>
+                                </div>
+                                <span style="color:var(--m-text);">${esc(l.content)}</span>
+                            </div>`;
+                        }).join('') || '<div class="empty-state">暂无日志</div>'}
+                    </div>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
     mc.innerHTML = `
         <div class="card" style="flex:1;">
           <div class="card-header">
@@ -3873,7 +5419,7 @@ function renderShelved(mc) {
               ${appData.templates.map(t => `<option value="${t.id}" ${type===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
             </select>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap m-cards" id="shelvedTableWrap">
             <table>
               <thead><tr><th>项目</th><th>公司</th><th>搁置日期</th><th>原因</th><th>操作</th></tr></thead>
               <tbody>
@@ -3914,7 +5460,7 @@ function renderTerminated(mc) {
               ${appData.templates.map(t => `<option value="${t.id}" ${type===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
             </select>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap m-cards" id="terminatedTableWrap">
             <table>
               <thead><tr><th>项目</th><th>公司</th><th>终止日期</th><th>原因</th><th>操作</th></tr></thead>
               <tbody>
@@ -3955,7 +5501,7 @@ function renderArchived(mc) {
               ${appData.templates.map(t => `<option value="${t.id}" ${type===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
             </select>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap m-cards" id="archivedTableWrap">
             <table>
               <thead><tr><th>项目</th><th>公司</th><th>归档日期</th><th>操作</th></tr></thead>
               <tbody>
@@ -4067,6 +5613,77 @@ function renderDataReport(mc) {
         env = appData.dataReports.environmental[sy] || [];
     const yearPills = [...years].sort().map(y =>
         `<span class="${sy===y?'active':''}" onclick="setRY(${y})">${y}年</span>`).join('');
+    // =====【v21.3】移动端卡片式数据填报=====
+    const _isMobile = window.innerWidth <= 768;
+    if (_isMobile) {
+        const yearOpts = [...years].sort().map(y =>
+            `<option value="${y}" ${sy===y?'selected':''}>${y}年</option>`
+        ).join('');
+        const execCardsHtml = exec.map((r, i) => `
+            <div class="exec-row">
+                <div class="m-data-card-header">
+                    <div class="m-data-card-title">
+                        <input value="${esc(r.company||'')}" class="execC" data-idx="${i}" placeholder="公司名称">
+                    </div>
+                    <button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button>
+                </div>
+                <div class="m-data-quarter-row">
+                    ${['Q1','Q2','Q3','Q4','annual'].map(q => `
+                        <label class="m-data-q-btn ${r[q]?'checked':''}">
+                            <input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="this.parentElement.classList.toggle('checked', this.checked)">
+                            ${q==='annual'?'年报':q}
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+        `).join('') || '<div class="empty-state">暂无数据，点击"+公司"添加</div>';
+        const envCardsHtml = env.map((r, i) => `
+            <div class="env-row">
+                <div class="m-data-card-header">
+                    <div class="m-data-card-title">
+                        <input value="${esc(r.company||'')}" class="envC" data-idx="${i}" placeholder="公司名称">
+                    </div>
+                    <button class="btn btn-xs btn-ghost" onclick="delEnvRow(${sy},${i})">✕</button>
+                </div>
+                <div class="m-data-quarter-row">
+                    ${['Q1','Q2','Q3','Q4'].map(q => `
+                        <label class="m-data-q-btn ${r[q]?'checked':''}">
+                            <input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="this.parentElement.classList.toggle('checked', this.checked)">
+                            ${q}
+                        </label>
+                    `).join('')}
+                </div>
+            </div>
+        `).join('') || '<div class="empty-state">暂无数据，点击"+公司"添加</div>';
+        mc.innerHTML = `
+            <div class="card" id="dataReportCard" style="flex:1;display:flex;flex-direction:column;">
+                <div class="card-header">
+                    <h3>📊 数据填报</h3>
+                    <button class="btn btn-primary btn-sm" onclick="addRY()">+ 年</button>
+                </div>
+                <div class="m-year-bar">
+                    <select onchange="setRY(parseInt(this.value))">${yearOpts}</select>
+                    <button class="btn btn-xs btn-ghost" onclick="delYear(${sy})">🗑️</button>
+                </div>
+                <div style="display:flex;flex-direction:column;flex:1;gap:16px;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+                    <div>
+                        <h4 style="color:var(--primary);margin:0 0 8px 0;font-size:14px;">📋 执行报告</h4>
+                        <div class="m-data-cards">${execCardsHtml}</div>
+                        <button class="btn btn-sm" onclick="addExecRow(${sy})" style="margin-top:8px;width:100%;">+ 添加公司</button>
+                    </div>
+                    <div>
+                        <h4 style="color:var(--primary);margin:0 0 8px 0;font-size:14px;">🌿 环保脸谱</h4>
+                        <div class="m-data-cards">${envCardsHtml}</div>
+                        <button class="btn btn-sm" onclick="addEnvRow(${sy})" style="margin-top:8px;width:100%;">+ 添加公司</button>
+                    </div>
+                </div>
+                <div style="margin-top:12px;">
+                    <button class="btn btn-primary" onclick="saveReportData(${sy})" style="width:100%;">保存</button>
+                </div>
+            </div>
+        `;
+        return;
+    }
     mc.innerHTML = `
         <!-- 修改：卡片容器添加 id 和 freeze-enabled 类 -->
         <div class="card ${freezeState ? 'freeze-enabled' : ''}" id="dataReportCard" style="flex:1;display:flex;flex-direction:column;">
@@ -4094,8 +5711,7 @@ function renderDataReport(mc) {
                   </tr></thead>
                   <tbody id="execTbody">
                     ${exec.map((r, i) => `
-                      <tr>
-                        <!-- 公司输入框列添加 sticky-col -->
+                      <tr class="exec-row">
                         <td class="sticky-col"><input value="${esc(r.company||'')}" class="execC" data-idx="${i}" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
                         ${['Q1','Q2','Q3','Q4','annual'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}"></td>`).join('')}
                         <td><button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button></td>
@@ -4117,7 +5733,7 @@ function renderDataReport(mc) {
                   </tr></thead>
                   <tbody id="envTbody">
                     ${env.map((r, i) => `
-                      <tr>
+                      <tr class="env-row">
                         <!-- 公司输入框列添加 sticky-col -->
                         <td class="sticky-col"><input value="${esc(r.company||'')}" class="envC" data-idx="${i}" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
                         ${['Q1','Q2','Q3','Q4'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}"></td>`).join('')}
@@ -4163,24 +5779,24 @@ function renderDataReport(mc) {
         }
 
         function saveReportData(y) {
-            const execRows = document.querySelectorAll('#execTbody tr');
+            const execRows = document.querySelectorAll('.exec-row');
             const execData = [];
             execRows.forEach(row => {
                 const company = row.querySelector('.execC')?.value || '';
                 const checks = row.querySelectorAll('.execCb');
                 const obj = { company };
-                ['Q1', 'Q2', 'Q3', 'Q4', 'annual'].forEach((q, idx) => { obj[q] = checks[idx].checked; });
+                ['Q1', 'Q2', 'Q3', 'Q4', 'annual'].forEach((q, idx) => { obj[q] = checks[idx] ? checks[idx].checked : false; });
                 execData.push(obj);
             });
             appData.dataReports.execution[y] = execData;
 
-            const envRows = document.querySelectorAll('#envTbody tr');
+            const envRows = document.querySelectorAll('.env-row');
             const envData = [];
             envRows.forEach(row => {
                 const company = row.querySelector('.envC')?.value || '';
                 const checks = row.querySelectorAll('.envCb');
                 const obj = { company };
-                ['Q1', 'Q2', 'Q3', 'Q4'].forEach((q, idx) => { obj[q] = checks[idx].checked; });
+                ['Q1', 'Q2', 'Q3', 'Q4'].forEach((q, idx) => { obj[q] = checks[idx] ? checks[idx].checked : false; });
                 envData.push(obj);
             });
             appData.dataReports.environmental[y] = envData;
@@ -5365,6 +6981,23 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             createModal(html);
         }
 
+        function reconcileCompaniesFromProjects() {
+            // 【v21.7】从所有项目（含归档/搁置/终止）里搜集公司名，确保 appData.companies 都列出它们。
+            // 修复：批量导入只推项目、不登记公司 → 公司成"幽灵"，总表看不到却判"已存在"。
+            // 返回本次新补的公司数，便于调用方决定是否保存。
+            if (!Array.isArray(appData.companies)) appData.companies = [];
+            const missing = [];
+            const add = (name) => {
+                if (name && !appData.companies.includes(name) && !missing.includes(name)) missing.push(name);
+            };
+            (appData.projects || []).forEach(p => add(p.company));
+            (appData.archived || []).forEach(a => add((a.projectData || {}).company));
+            (appData.shelved || []).forEach(s => add((s.projectData || {}).company));
+            (appData.terminated || []).forEach(t => add((t.projectData || {}).company));
+            if (missing.length) appData.companies = appData.companies.concat(missing);
+            return missing.length;
+        }
+
         function executeBatchImport() {
             const input = document.getElementById('batchInput');
             const lines = input.value.split('\n').filter(l => l.trim());
@@ -5394,11 +7027,15 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                     nodes: tpl.nodes.map(n => ({ name: n.name, status: 'pending' })),
                     doneDate: null
                 });
+                // 【v21.7】批量导入必须登记公司，否则总表不显示该公司行
+                if (!appData.companies.includes(comp)) appData.companies.push(comp);
                 imported++;
                 results.push(`✅ ${comp} - ${tplName}${tag ? ' (' + tag + ')' : ''}`);
             });
-            if (imported > 0) { saveData();
-                renderProjects(document.getElementById('mainContent')); }
+            if (imported > 0 || reconcileCompaniesFromProjects() > 0) {
+                saveData();
+                renderProjects(document.getElementById('mainContent'));
+            }
             document.getElementById('batchResult').textContent =
                 `成功导入 ${imported} 项\n${results.join('\n')}\n${errors.length ? '\n错误:\n' + errors.join('\n') : ''}`;
             if (imported > 0) showToast(`成功导入 ${imported} 个项目`);
@@ -5437,10 +7074,32 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             }
         }
 
+        // ===== 【v21.1】移动端卡片展开/收起 =====
+        function toggleMobileProjCard(comp) {
+            const card = document.getElementById('mProjCard_' + comp);
+            if (card) card.classList.toggle('expanded');
+        }
+
+        // ===== 【v21.1】移动端项目类型勾选（复用 toggleProject 逻辑） =====
+        function toggleMProjType(comp, tid, el) {
+            const isChecked = el.classList.contains('checked');
+            toggleProject(comp, tid, !isChecked);
+            // 刷新当前页面
+            renderProjects(document.getElementById('mainContent'));
+        }
+
         function toggleProject(comp, tid, chk) {
             if (chk) {
                 const tpl = appData.templates.find(t => t.id === tid);
                 if (!tpl) { showAlert('模板不存在'); return; }
+                // 【v21.5修复】防重复：同公司 + 同模板 的活动项目已存在时，不再创建第二个
+                const existing = appData.projects.find(pr => pr.company === comp && pr.templateId === tid && !pr
+                    .archived && !pr.shelved && !pr.terminated);
+                if (existing) {
+                    showToast('⚠️ 该公司「' + getTplName(tid) + '」项目已存在，未重复创建');
+                    renderProjects(document.getElementById('mainContent'));
+                    return;
+                }
                 appData.projects.push({
                     id: getNextId(),
                     templateId: tid,
@@ -5456,8 +7115,12 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                 const p = appData.projects.find(pr => pr.company === comp && pr.templateId === tid && !pr.archived && !
                     pr.shelved && !pr.terminated);
                 if (p) {
+                    // 【v21.5修复】记录“墓碑”：上传时从云端精确删除该项目及其子记录，避免“取消后重新创建又出现2个重复”
+                    if (!appData._deletedProjectIds) appData._deletedProjectIds = [];
+                    if (appData._deletedProjectIds.indexOf(p.id) === -1) appData._deletedProjectIds.push(p.id);
                     appData.projects = appData.projects.filter(pr => pr.id !== p.id);
                     appData.tasks = appData.tasks.filter(t => t.projectId !== p.id);
+                    appData.settlements = appData.settlements.filter(s => s.projectId !== p.id);
                 }
             }
             saveData();
@@ -5557,6 +7220,10 @@ grant insert, select, delete on public.snapshots to anon;</pre>
         window.switchReportType = switchReportType;
         window.exportReportTemplate = exportReportTemplate;
         window.importReportTemplate = importReportTemplate;
+        window.toggleTaskComplete = toggleTaskComplete;
+        window.syncMobileBottomNav = syncMobileBottomNav;
+        window.toggleMobileProjCard = toggleMobileProjCard;
+        window.toggleMProjType = toggleMProjType;
 
         console.log('✅ 工作台完整版已启动，所有页面功能可用。');
         console.log('📤 自动上传和自动同步独立控制，默认关闭。');
@@ -5578,5 +7245,15 @@ function toggleFreeze(page) {
     }
 }
  </script>
+    <!-- Service Worker：离线缓存（仅 https / localhost 生效，不影响本地 file:// 调试） -->
+    <script>
+      if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+        window.addEventListener('load', function () {
+          navigator.serviceWorker.register('sw.js').catch(function (e) {
+            console.warn('SW 注册失败（可忽略）:', e);
+          });
+        });
+      }
+    </script>
 </body>
 </html>
