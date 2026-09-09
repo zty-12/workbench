@@ -1,7 +1,19 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.13-mobile-split  2026-09-09  ★ 当前最新稿
+     v21.14-mobile-split  2026-09-09  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.14 追加修复（用户 9-9 反馈的 8 项）：
+     · 工作日志：保存后默认取消关联项目（不再保留上次选择的项目）；支持编辑日期（当天
+       忘记写可补/改期，新增日期输入框 + editLog 弹窗双字段）。
+     · 移动端颜色设置不可用：弹窗内容长时底部"保存/取消"被挤出可视区。修复：操作按钮
+       区 position:sticky 固定在弹窗底部，始终可点。
+     · 任务分配项目卡片节点行距：统一 .m-task-node-row/(status/name) 的 min-height 与
+       line-height，消除"进行中"节点行距异常过大的问题。
+     · 日历事件颜色按任务全局序号轮换（不再按模板，避免连续任务同为红色）。
+     · 结算管理：筛选区(搜索/类型/日期/筛选/清除)单行紧凑横向可滚动；统计摘要
+       (项目数/总提成/已结算/待结算) 单行/两行自适应。
+     · 移动端项目看板筛选区：收紧搜索框宽度与下拉最大宽，消除单行溢出。
 
      v21.13 追加修复（移动端 UI 紧凑化 + 任务 id 碰撞根治）：
      · 【重要】连续两次分配任务后"第二个替换掉第一个"。根因：getNextId() 直接 _idCounter++，
@@ -614,9 +626,9 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     /* ===== 【v21.1】移动端筛选下拉框（v21.13 合并为单行：类型+状态+搜索+新建） ===== */
     .m-filter-bar { display:flex; flex-direction:row; flex-wrap:nowrap; gap:6px; align-items:center; }
     .m-filter-row { display:contents; }
-    .m-filter-select { flex:0 1 auto; min-width:0; height:32px; font-size:12px; padding:0 6px; border-radius:8px; border:1px solid var(--m-border); background:#fff; color:var(--m-text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 5px center; padding-right:16px; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; }
-    .m-filter-search { flex:1 1 auto; min-width:56px; display:flex; gap:4px; }
-    .m-filter-search input { flex:1; min-width:0; height:32px; font-size:12px; padding:0 8px; border-radius:8px; border:1px solid var(--m-border); background:#fff; }
+    .m-filter-select { flex:0 0 auto; min-width:0; max-width:34%; height:32px; font-size:12px; padding:0 6px; border-radius:8px; border:1px solid var(--m-border); background:#fff; color:var(--m-text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 5px center; padding-right:16px; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; }
+    .m-filter-search { flex:0 1 auto; min-width:44px; max-width:120px; display:flex; gap:4px; }
+    .m-filter-search input { flex:1; min-width:0; width:100%; height:32px; font-size:12px; padding:0 8px; border-radius:8px; border:1px solid var(--m-border); background:#fff; }
     .m-filter-search button { width:32px; height:32px; border-radius:8px; border:none; background:var(--m-primary); color:#fff; font-size:12px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
     .m-filter-new { height:32px; padding:0 10px; font-size:12px; border-radius:8px; flex-shrink:0; }
 
@@ -648,7 +660,9 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .drag-handle { font-size:20px; padding:8px 6px; touch-action:none; }
 
     /* ---------- ⑦ 弹窗：接近全屏 ---------- */
-    .modal { max-width:96%; max-height:92vh; padding:16px 14px; margin:8px; border-radius:14px; overflow-y:auto; }
+    .modal { max-width:96%; max-height:92vh; padding:16px 14px; margin:8px; border-radius:14px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+    /* 移动端：操作按钮固定在弹窗底部，保证内容长时（如颜色设置）仍可点到 */
+    .modal .confirm-actions { position:sticky; bottom:-16px; background:#fff; padding:10px 0 0; z-index:3; }
     .modal h2 { font-size:17px; }
     .modal h3 { font-size:15px; }
 
@@ -824,11 +838,14 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .task-layout .top .task-grid { max-height: 40vh !important; }
     .task-layout .bottom .table-wrap { max-height: 35vh; }
 
-    /* 结算筛选栏：移动端各控件全宽 */
-    #settlementCard > div:nth-child(3) { flex-direction: column; align-items: stretch; gap: 6px; padding: 10px; }
-    #settlementCard > div:nth-child(3) input, #settlementCard > div:nth-child(3) select { width: 100% !important; font-size: 16px !important; padding: 6px 12px !important; border-radius: 10px !important; }
-    #settlementCard > div:nth-child(3) label { font-size: 13px; }
-    #settlementCard > div:nth-child(3) .btn { width: 100%; }
+    /* 结算筛选栏：移动端单行紧凑（横向可滚动） */
+    .settle-filter-bar { flex-wrap:nowrap !important; align-items:center; overflow-x:auto; gap:6px !important; -webkit-overflow-scrolling:touch; }
+    .settle-filter-bar input, .settle-filter-bar select { flex:0 0 auto !important; height:34px; }
+    .settle-filter-bar .btn { white-space:nowrap; flex-shrink:0; }
+
+    /* 结算摘要：移动端一行（放不下自动换行成两行） */
+    #settlementCard .settlement-summary { display:flex; flex-wrap:wrap; gap:8px; padding:8px 12px; }
+    #settlementCard .settlement-summary .stat-item { flex:1 1 auto; min-width:70px; justify-content:center; text-align:center; }
 
     /* 日志页 textarea 高度微调 */
     .log-input-area textarea { height: 120px !important; }
@@ -893,12 +910,12 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .m-task-card-detail { display:none; padding-top:10px; margin-top:10px; border-top:1px solid var(--m-border); }
     .m-task-card.expanded .m-task-card-detail { display:block; max-height:46vh; overflow-y:auto; -webkit-overflow-scrolling:touch; }
     .m-task-card.expanded .m-task-card-expand { color:var(--m-danger); }
-    .m-task-node-row { display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px dashed var(--m-border); }
+    .m-task-node-row { display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px dashed var(--m-border); min-height:32px; line-height:32px; }
     .m-task-node-row:last-child { border-bottom:none; }
     .m-task-node-check { width:22px; height:22px; border-radius:6px; border:2px solid var(--m-border); display:flex; align-items:center; justify-content:center; cursor:pointer; flex-shrink:0; background:#fff; transition:all 0.15s; }
     .m-task-node-check.checked { background:var(--m-primary); border-color:var(--m-primary); color:#fff; font-size:14px; }
-    .m-task-node-name { flex:1; font-size:13px; color:var(--m-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .m-task-node-status { font-size:11px; padding:2px 8px; border-radius:8px; flex-shrink:0; }
+    .m-task-node-name { flex:1; font-size:13px; color:var(--m-text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; line-height:20px; }
+    .m-task-node-status { font-size:11px; padding:2px 8px; border-radius:8px; flex-shrink:0; line-height:18px; }
     .m-task-node-status.pending { background:rgba(148,163,184,0.15); color:#64748b; }
     .m-task-node-status.progress { background:rgba(59,130,246,0.15); color:#3b82f6; }
     .m-task-node-status.done { background:rgba(16,185,129,0.15); color:#10b981; }
@@ -3648,14 +3665,29 @@ function toggleTaskComplete(tid, el) {
         function editLog(id) {
             const log = appData.workLogs.find(l => l.id === id);
             if (!log) return;
-            showPrompt('修改日志内容', log.content, function(newContent) {
-                if (newContent !== null && newContent !== undefined && newContent.trim() !== '') {
-                    log.content = newContent.trim();
+            // 支持编辑日期 + 内容（当天忘记可补写/改期）
+            const html = `<div class="modal" style="max-width:440px;"><button class="close-btn" style="position:absolute;top:12px;right:16px;font-size:22px;cursor:pointer;color:#94a3b8;background:none;border:none;">✕</button><h3 style="font-size:16px;margin-bottom:12px;">✏️ 编辑日志</h3>
+              <label style="font-size:13px;color:var(--text-secondary);">📅 日期</label>
+              <input id="editLogDate" type="date" value="${log.date}" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:14px;margin-bottom:12px;">
+              <label style="font-size:13px;color:var(--text-secondary);">内容</label>
+              <textarea id="editLogContent" placeholder="输入工作日志..." style="width:100%;height:120px;padding:10px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:14px;resize:vertical;margin-bottom:16px;">${esc(log.content)}</textarea>
+              <div class="confirm-actions"><button class="btn btn-ghost" id="editLogCancelBtn">取消</button><button class="btn btn-primary" id="editLogOkBtn">确定</button></div></div>`;
+            const overlay = createModal(html, function() {});
+            overlay.querySelector('#editLogDate').value = log.date;
+            overlay.querySelector('#editLogContent').value = log.content;
+            overlay.querySelector('#editLogOkBtn').addEventListener('click', function() {
+                const newDate = overlay.querySelector('#editLogDate').value;
+                const newContent = overlay.querySelector('#editLogContent').value.trim();
+                if (newContent) {
+                    log.date = newDate || log.date;
+                    log.content = newContent;
                     saveData();
                     renderLogs(document.getElementById('mainContent'));
                     showToast('✅ 已更新');
                 }
-            }, function() {});
+                overlay.remove();
+            });
+            overlay.querySelector('#editLogCancelBtn').addEventListener('click', function() { overlay.remove(); });
         }
 
         function removeCompany(i) {
@@ -4606,15 +4638,15 @@ function renderSettlement(mc) {
                         <button class="btn btn-sm" onclick="openSettlementConfig()">⚙️ 配置</button>
                     </div>
                 </div>
-                <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:10px;border:1px solid var(--m-border);">
-                    <input type="text" id="settlementSearch" placeholder="搜索公司..." value="${esc(searchComp)}" style="flex:2;min-width:100px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;">
-                    <select id="settlementTypeFilter" onchange="applySettlementFilter()" style="flex:1;min-width:80px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;">
+                <div class="settle-filter-bar" id="settleFilterBar" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:10px;border:1px solid var(--m-border);">
+                    <input type="text" id="settlementSearch" placeholder="搜索公司..." value="${esc(searchComp)}" style="flex:2;min-width:90px;max-width:140px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:13px;">
+                    <select id="settlementTypeFilter" onchange="applySettlementFilter()" style="flex:1;min-width:70px;max-width:110px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:13px;">
                         <option value="all">全部</option>${typeOpts}
                     </select>
-                    <input type="date" id="settlementStart" value="${startDate}" style="flex:1.5;min-width:100px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;" placeholder="开始日期">
-                    <input type="date" id="settlementEnd" value="${endDate}" style="flex:1.5;min-width:100px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;" placeholder="结束日期">
-                    <button class="btn btn-primary btn-sm" onclick="applySettlementFilter()" style="flex-shrink:0;">筛选</button>
-                    <button class="btn btn-sm btn-ghost" onclick="clearSettlementFilter()" style="flex-shrink:0;">清除</button>
+                    <input type="date" id="settlementStart" value="${startDate}" style="flex:1.5;min-width:90px;max-width:130px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:13px;" placeholder="开始日期">
+                    <input type="date" id="settlementEnd" value="${endDate}" style="flex:1.5;min-width:90px;max-width:130px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:13px;" placeholder="结束日期">
+                    <button class="btn btn-primary btn-sm" onclick="applySettlementFilter()" style="flex-shrink:0;padding:6px 10px;font-size:13px;">筛选</button>
+                    <button class="btn btn-sm btn-ghost" onclick="clearSettlementFilter()" style="flex-shrink:0;padding:6px 10px;font-size:13px;">清除</button>
                 </div>
                 <div class="settlement-summary" style="margin-bottom:10px;">
                     <div class="stat-item"><span class="label">📊 项目数</span><span class="value">${allProjects.length}</span></div>
@@ -5193,13 +5225,13 @@ function renderSettlement(mc) {
                     const project = appData.projects.find(p => p.id === t.projectId);
                     const tpl = project ? appData.templates.find(tm => tm.id === project.templateId) : null;
                     let color = '#3b6df0';
-                    if (tpl) {
-                        const colors = ['#3b6df0', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6',
-                            '#f97316', '#6366f1', '#22c55e'
-                        ];
-                        const idx = appData.templates.indexOf(tpl) % colors.length;
-                        color = colors[idx];
-                    }
+                    // 【v21.14】日历事件颜色轮换：按任务在总表中的全局序号取色，让相邻任务颜色不重复
+                    const colors = ['#3b6df0', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#14b8a6',
+                        '#f97316', '#6366f1', '#22c55e'
+                    ];
+                    const globalIdx = appData.tasks.findIndex(tt => tt.id === t.id);
+                    const colorIdx = (globalIdx >= 0 ? globalIdx : 0) % colors.length;
+                    color = colors[colorIdx];
                     if (t.completed) color = adjustColorBrightness(color, 0.6);
                     const icon = getTaskIcon(t.title);
 
@@ -5413,6 +5445,10 @@ function renderLogs(mc) {
                     </select>
                 </div>
                 <div class="log-input-area" style="margin-top:10px;">
+                    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">
+                        <span style="font-size:13px;color:var(--text-secondary);flex-shrink:0;">📅 日期</span>
+                        <input type="date" id="logDate" value="${new Date().toISOString().split('T')[0]}" style="flex:1;min-width:140px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;color:var(--m-text);">
+                    </div>
                     <textarea id="logContent" placeholder="输入工作日志..." style="width:100%;height:120px;padding:12px;border:1px solid var(--m-border);border-radius:10px;font-size:16px;"></textarea>
                     <button class="btn btn-primary" style="margin-top:8px;width:100%;" onclick="addWorkLog()">保存日志</button>
                 </div>
@@ -5460,6 +5496,10 @@ function renderLogs(mc) {
                 <span style="font-weight:500;font-size:13px;">当前关联：</span>
                 <span id="selectedProjectDisplay" style="color:var(--primary);font-weight:600;">${esc(selectedName)}</span>
                 ${window._selectedLogProjectId ? `<button class="btn btn-xs btn-ghost" onclick="clearSelectedProject()">取消关联</button>` : ''}
+              </div>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
+                <span style="font-weight:500;font-size:13px;">📅 日期</span>
+                <input type="date" id="logDate" value="${new Date().toISOString().split('T')[0]}" style="padding:4px 10px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
               </div>
               <textarea id="logContent" placeholder="输入工作日志..." style="width:100%;height:150px;padding:12px;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;"></textarea>
               <button class="btn btn-primary" style="margin-top:8px;" onclick="addWorkLog()">保存日志</button>
@@ -5511,15 +5551,22 @@ function renderLogs(mc) {
 function addWorkLog() {
     const content = document.getElementById('logContent')?.value.trim();
     if (!content) return;
+    // 读取日期（默认今天），支持补写
+    const dateInput = document.getElementById('logDate');
+    const dateVal = dateInput && dateInput.value ? dateInput.value : new Date().toISOString().split('T')[0];
     const projectId = window._selectedLogProjectId || null;
     appData.workLogs.push({
         id: getNextId(),
-        date: new Date().toISOString().split('T')[0],
+        date: dateVal,
         type: 'daily',
         projectId: projectId,
         content: content
     });
     saveData(true);
+    // 保存后默认取消关联项目，避免下次填写仍关联上次的项目
+    window._selectedLogProjectId = null;
+    const sel = document.getElementById('logDate');
+    if (sel) sel.value = new Date().toISOString().split('T')[0];
     renderLogs(document.getElementById('mainContent'));
     showToast('✅ 日志已保存并同步');
 }
