@@ -12,6 +12,20 @@
        让其参与 flex 收缩；给 FullCalendar 表格加 table-layout:fixed 并允许事件标题换行，
        防止表格内容撑破容器；.fc-calendar-container 保留 overflow-x:auto 作为最后防线。
 
+     v21.17 代码核查修复（用户要求"再核查所有代码"：静态分析 + 双 Agent 分模块审查 + 人工验证）：
+     · 【P1 数据丢失】项目总表公司拖拽：类型筛选激活时隐藏公司不渲染 <tr>，原 onEnd 直接
+       appData.companies = newOrder 会永久删除隐藏公司。改为以原数组为基准仅重排可见公司，
+       隐藏公司保持原相对顺序。
+     · 【P1 崩溃】移动端项目总表：公司名含 ' / " 时，内联 onclick 字符串被引号截断且 id 不一致
+       导致卡片点不开/报错。改为用循环索引作稳定 id，公司名存 data-company，事件从 dataset 读取。
+     · 【P0/P1 崩溃】syncSettlementsWithProjects 假设 installments/ratios 必存在，legacy/导入/手动
+       结算记录缺字段会整页白屏。已对所有 installments/ratios 访问加 || [] 兜底。
+     · 【P1 崩溃】editSettlement 渲染旧分期记录时 inst.amount/inst.ratio 可能缺失导致 toFixed 抛错，
+       已加 (inst.amount||0)/(inst.ratio||0) 兜底。
+     · 【P2 隐患】getNextId 及三处 id 计数器原不含 archived/shelved/terminated 的 projectData.id，
+       恢复归档可能生成碰撞 id 被云端 upsert 覆盖。现已一并纳入扫描。
+     · 【P2 隐患】初始化 loadData 读开关用 JSON.parse 无保护，localStorage 损坏会白屏。已加 try-catch。
+
      v21.15 追加修复（用户 9-9 截图反馈的 8 项移动端/PC 样式问题）：
      · 任务分配 PC 顶部"周期"下拉框改成与按钮同高的圆角白底样式，消除默认浏览器 select 的
        突兀风格。
@@ -2054,7 +2068,10 @@ async function loadFromSupabase() {
             syncSettlementsWithProjects();
             // 更新 id 计数器
             let maxId = 0;
-            [...appData.projects, ...appData.templates, ...appData.tasks, ...appData.workLogs, ...appData.settlements]
+            [...(appData.projects || []), ...(appData.templates || []), ...(appData.tasks || []), ...(appData.workLogs || []), ...(appData.settlements || []),
+                ...(appData.archived || []).map(a => a && a.projectData).filter(Boolean),
+                ...(appData.shelved || []).map(s => s && s.projectData).filter(Boolean),
+                ...(appData.terminated || []).map(t => t && t.projectData).filter(Boolean)]
                 .forEach(item => {
                     if (item.id && item.id.startsWith('id_')) {
                         const num = parseInt(item.id.substring(3));
@@ -2549,10 +2566,12 @@ async function syncToSupabase(createSnapshotFlag = false) {
             console.log('🔵 开始加载数据...');
             const configured = initSupabase();
 
-            const uploadMode = localStorage.getItem('auto_upload_enabled');
-            if (uploadMode !== null) { autoUploadEnabled = JSON.parse(uploadMode); } else { autoUploadEnabled = false; }
-            const syncMode = localStorage.getItem('auto_sync_enabled');
-            if (syncMode !== null) { autoSyncEnabled = JSON.parse(syncMode); } else { autoSyncEnabled = false; }
+            // 【v21.17 修复】localStorage 键值可能被手动改坏，JSON.parse 失败会让 loadData 抛错 → 整页白屏。包 try 兜底。
+            let _uploadMode = null, _syncMode = null;
+            try { _uploadMode = localStorage.getItem('auto_upload_enabled'); } catch (e) {}
+            try { _syncMode = localStorage.getItem('auto_sync_enabled'); } catch (e) {}
+            try { autoUploadEnabled = _uploadMode !== null ? !!JSON.parse(_uploadMode) : false; } catch (e) { autoUploadEnabled = false; }
+            try { autoSyncEnabled = _syncMode !== null ? !!JSON.parse(_syncMode) : false; } catch (e) { autoSyncEnabled = false; }
             updateAutoToggleUI();
 
             if (autoSyncEnabled) {
@@ -2754,9 +2773,14 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                 _byPid[s.projectId] = s;
                 return true;
             });
+            // 【v21.16 审计修复】原只覆盖 active+archived，导致搁置/终止项目的结算记录被
+            // 下方 validIds 过滤掉（同步时本地丢失）。改为覆盖全部四种状态，与归档保持一致，
+            // 避免结算/提成数据因项目状态变更而意外消失。
             const activeAndArchived = [
                 ...appData.projects.map(p => ({ ...p, _status: 'active' })),
-                ...appData.archived.map(a => ({ ...a.projectData, _status: 'archived' }))
+                ...appData.archived.map(a => ({ ...a.projectData, _status: 'archived' })),
+                ...appData.shelved.map(s => ({ ...s.projectData, _status: 'shelved' })),
+                ...appData.terminated.map(t => ({ ...t.projectData, _status: 'terminated' }))
             ];
 
             activeAndArchived.forEach(p => {
@@ -2782,7 +2806,7 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                         doneDate: isDone ? (p.doneDate || new Date().toISOString().split('T')[0]) : '',
                         totalCommission: cfg.total || 0,
                         settledAmount: 0,
-                        installments: cfg.ratios.map(r => ({
+                        installments: (cfg.ratios || []).map(r => ({
                             ratio: r,
                             amount: Math.round((cfg.total || 0) * r / 100 * 100) / 100,
                             paid: false,
@@ -2823,7 +2847,7 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                             });
                             existing.installments = newInstallments;
                         } else {
-                            existing.installments = existing.installments.map((inst, idx) => ({
+                            existing.installments = (existing.installments || []).map((inst, idx) => ({
                                 ...inst,
                                 ratio: newRatios[idx] || 0,
                                 amount: Math.round(newTotal * (newRatios[idx] || 0) / 100 * 100) / 100
@@ -3910,7 +3934,7 @@ function renderProjects(mc) {
                     cards += '<div class="m-proj-type-name">'+esc(t.name)+'</div>';
                     if (proj && hasTags) {
                         const tagOpts = t.tags.map(tg => '<option '+(proj.tag===tg?'selected':'')+'>'+tg+'</option>').join('');
-                        cards += '<select style="font-size:11px;padding:3px 6px;border-radius:8px;border:1px solid var(--m-border);max-width:100px;" onchange="event.stopPropagation();updateTag(\''+esc(comp)+'\',\''+t.id+'\',this.value)">'+tagOpts+'</select>';
+                        cards += '<select style="font-size:11px;padding:3px 6px;border-radius:8px;border:1px solid var(--m-border);max-width:100px;" onchange="event.stopPropagation();updateTagByCard(this,\''+t.id+'\')">'+tagOpts+'</select>';
                     }
                     if (proj) {
                         cards += '<div class="m-proj-type-actions">';
@@ -4021,7 +4045,16 @@ function renderProjects(mc) {
                         if (company) newOrder.push(company);
                     });
                     if (newOrder.length > 0) {
-                        appData.companies = newOrder;
+                        // 【v21.17 修复】类型筛选隐藏的公司不渲染 <tr>，若直接 appData.companies = newOrder
+                        // 会把隐藏公司永久删除。改为以原数组为基准仅重排可见公司，隐藏公司保持原相对顺序。
+                        const orderIdx = new Map(newOrder.map((c, i) => [c, i]));
+                        appData.companies.sort((a, b) => {
+                            const ia = orderIdx.has(a), ib = orderIdx.has(b);
+                            if (ia && ib) return orderIdx.get(a) - orderIdx.get(b);
+                            if (ia) return -1;
+                            if (ib) return 1;
+                            return 0;
+                        });
                         saveData(true);
                         showToast('✅ 公司顺序已更新并同步');
                     }
@@ -4865,7 +4898,7 @@ function renderSettlement(mc) {
                   `;
             });
             html += `
-                    <div id="ratioSumDisplay" style="font-size:12px;color:var(--text-secondary);margin-top:6px;">当前总和：<span id="ratioSum">${installments.reduce((sum, inst) => sum + inst.ratio, 0).toFixed(1)}</span>%</div>
+                    <div id="ratioSumDisplay" style="font-size:12px;color:var(--text-secondary);margin-top:6px;">当前总和：<span id="ratioSum">${installments.reduce((sum, inst) => sum + (inst.ratio||0), 0).toFixed(1)}</span>%</div>
                   </div>
                   <div class="form-group" style="margin-top:12px;">
                     <label>备注</label>
@@ -7310,9 +7343,23 @@ grant insert, select, delete on public.snapshots to anon;</pre>
         }
 
         // ===== 【v21.1】移动端卡片展开/收起 =====
-        function toggleMobileProjCard(comp) {
-            const card = document.getElementById('mProjCard_' + comp);
+        function toggleMobileProjCard(ci) {
+            const card = document.getElementById('mProjCard_' + ci);
             if (card) card.classList.toggle('expanded');
+        }
+        function toggleMProjTypeByCard(el, tid) {
+            const card = el.closest('.m-proj-card');
+            const comp = card && card.dataset.company;
+            if (!comp) return;
+            const isChecked = el.classList.contains('checked');
+            toggleProject(comp, tid, !isChecked);
+            renderProjects(document.getElementById('mainContent'));
+        }
+        function updateTagByCard(el, tid) {
+            const card = el.closest('.m-proj-card');
+            const comp = card && card.dataset.company;
+            if (!comp) return;
+            updateTag(comp, tid, el.value);
         }
 
         // ===== 【v21.1】移动端项目类型勾选（复用 toggleProject 逻辑） =====
