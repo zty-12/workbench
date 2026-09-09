@@ -1,7 +1,23 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.14-mobile-split  2026-09-09  ★ 当前最新稿
+     v21.15-mobile-split  2026-09-09  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.15 追加修复（用户 9-9 截图反馈的 8 项移动端/PC 样式问题）：
+     · 任务分配 PC 顶部"周期"下拉框改成与按钮同高的圆角白底样式，消除默认浏览器 select 的
+       突兀风格。
+     · 移动端项目总表：把"新增/批量导入/颜色设置"按钮与"全部类型"下拉框合并到同一行，
+       避免下拉框独占一行。
+     · 移动端任务分配节点行距：根治"进行中"节点行距异常——给 .m-task-node-status.progress
+       重置 Bootstrap .progress 组件带来的 height/margin/overflow/box-shadow，使进行中/未开始
+       /已完成三态行高完全一致。
+     · 移动端工作日志："关联项目"下拉框与"日期"输入框合并为一行。
+     · 移动端结算管理：统计摘要四指标改为"两两一行"（2×2 网格）。
+     · 移动端结算筛选：搜索/类型/起止日期/筛选/清除改成真正单行不滑动，起止日期并为一个
+       组合 pill，点击两个独立 date 输入分别选择开始/结束日期。
+     · 移动端数据填报：把"+ 年"按钮与年份下拉框合并到同一行。
+     · 移动端报告模板编辑器：取消预览区 max-height 限制，让预览卡片撑满剩余高度，减少
+       底部空白。
 
      v21.14 追加修复（用户 9-9 反馈的 8 项）：
      · 工作日志：保存后默认取消关联项目（不再保留上次选择的项目）；支持编辑日期（当天
@@ -302,6 +318,8 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .archive-filter-bar { display:flex; gap:10px; flex-wrap:wrap; margin-bottom:10px; align-items:center; flex-shrink:0; }
 .archive-filter-bar input, .archive-filter-bar select { padding:6px 14px; border-radius:30px; border:1px solid #e2e8f0; font-size:12px; background:#fff; }
 .archive-filter-bar input { flex:1; min-width:100px; }
+/* ===== PC 端顶部周期下拉框：与按钮同高同圆角，消除默认 select 突兀风格 ===== */
+.task-period-select { height:34px; padding:0 14px; border-radius:30px; border:1px solid #e2e8f0; background:#fff; font-size:13px; color:var(--text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 10px center; padding-right:26px; cursor:pointer; }
 .report-fields-editor { display:flex; flex-wrap:wrap; gap:5px; padding:10px; background:#f8f9fa; border-radius:8px; min-height:50px; border:2px dashed #dde2e8; }
 .report-fields-editor .field-tag { background:white; padding:4px 12px; border-radius:20px; border:1px solid #dde2e8; display:flex; align-items:center; gap:6px; font-size:13px; cursor:grab; box-shadow:0 1px 3px rgba(0,0,0,0.04); }
 .report-fields-editor .field-tag .remove-field { color:#dc3545; cursor:pointer; font-weight:700; font-size:14px; }
@@ -631,6 +649,10 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .m-filter-search input { flex:1; min-width:0; width:100%; height:32px; font-size:12px; padding:0 8px; border-radius:8px; border:1px solid var(--m-border); background:#fff; }
     .m-filter-search button { width:32px; height:32px; border-radius:8px; border:none; background:var(--m-primary); color:#fff; font-size:12px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
     .m-filter-new { height:32px; padding:0 10px; font-size:12px; border-radius:8px; flex-shrink:0; }
+    /* ===== 【v21.15】项目总表头部：按钮+下拉框合并一行 ===== */
+    .m-proj-header-actions { display:flex; gap:6px; align-items:center; flex-wrap:nowrap; }
+    .m-proj-header-actions .btn { height:32px; padding:0 10px; font-size:12px; flex-shrink:0; }
+    .m-proj-header-actions .m-proj-type-select { flex:1; min-width:0; max-width:none; height:32px; }
 
     /* ===== 【v21.1】移动端看板卡片修复 ===== */
     .kanban-grid { overflow-x:hidden !important; width:100%; }
@@ -713,8 +735,8 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .report-fields-editor .field-tag .remove-field { font-size:12px; }
     .report-fields-editor .field-tag .drag-handle { font-size:11px; }
 
-    /* 报告预览：防横向撑破 */
-    .report-preview-box { min-height:200px; max-height:360px; font-size:12px; padding:6px; overflow-x:auto; word-wrap:break-word; width:100%; max-width:100%; box-sizing:border-box; }
+    /* 报告预览：撑满剩余高度，减少底部空白 */
+    .report-preview-box { min-height:50vh; max-height:none; font-size:12px; padding:6px; overflow-x:auto; word-wrap:break-word; width:100%; max-width:100%; box-sizing:border-box; }
     .report-preview-box .field-title { font-size:12px; }
     .report-preview-box .field-content { font-size:11px; padding:2px 4px; white-space:pre-wrap; word-wrap:break-word; word-break:break-word; overflow-x:auto; width:100%; max-width:100%; box-sizing:border-box; }
     .report-preview-box .field-content span { display:block; word-break:break-word; overflow-wrap:break-word; max-width:100%; }
@@ -838,14 +860,17 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .task-layout .top .task-grid { max-height: 40vh !important; }
     .task-layout .bottom .table-wrap { max-height: 35vh; }
 
-    /* 结算筛选栏：移动端单行紧凑（横向可滚动） */
-    .settle-filter-bar { flex-wrap:nowrap !important; align-items:center; overflow-x:auto; gap:6px !important; -webkit-overflow-scrolling:touch; }
-    .settle-filter-bar input, .settle-filter-bar select { flex:0 0 auto !important; height:34px; }
-    .settle-filter-bar .btn { white-space:nowrap; flex-shrink:0; }
+    /* 结算筛选栏：移动端真正单行，不滚动；起止日期合并为一个组合 pill */
+    .settle-filter-bar { display:flex !important; flex-wrap:nowrap !important; align-items:center; gap:6px !important; overflow:visible !important; }
+    .settle-filter-bar > input[type="text"], .settle-filter-bar > select { flex:1 1 auto; min-width:0; height:34px; padding:0 8px; border-radius:8px; border:1px solid var(--m-border); font-size:13px; background:#fff; }
+    .settle-filter-bar .m-settle-date-range { display:flex; align-items:center; flex:1 1 auto; min-width:0; gap:4px; border:1px solid var(--m-border); border-radius:8px; padding:0 6px; background:#fff; }
+    .settle-filter-bar .m-settle-date-range input[type="date"] { flex:1; min-width:0; height:32px; border:none; background:transparent; font-size:12px; padding:0; color:var(--m-text); }
+    .settle-filter-bar .m-settle-date-range span { color:var(--m-text-secondary); font-size:12px; flex-shrink:0; }
+    .settle-filter-bar .btn { white-space:nowrap; flex-shrink:0; height:34px; padding:0 10px; font-size:12px; }
 
-    /* 结算摘要：移动端一行（放不下自动换行成两行） */
-    #settlementCard .settlement-summary { display:flex; flex-wrap:wrap; gap:8px; padding:8px 12px; }
-    #settlementCard .settlement-summary .stat-item { flex:1 1 auto; min-width:70px; justify-content:center; text-align:center; }
+    /* 结算摘要：移动端四指标两两一行（2×2 网格） */
+    #settlementCard .settlement-summary { display:grid; grid-template-columns:1fr 1fr; gap:6px 12px; padding:8px 12px; }
+    #settlementCard .settlement-summary .stat-item { display:flex; align-items:baseline; justify-content:center; gap:4px; font-size:12px; }
 
     /* 日志页 textarea 高度微调 */
     .log-input-area textarea { height: 120px !important; }
@@ -919,6 +944,9 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .m-task-node-status.pending { background:rgba(148,163,184,0.15); color:#64748b; }
     .m-task-node-status.progress { background:rgba(59,130,246,0.15); color:#3b82f6; }
     .m-task-node-status.done { background:rgba(16,185,129,0.15); color:#10b981; }
+    /* 【v21.15】进行中节点 class="progress" 会命中 Bootstrap .progress 组件，导致 height/margin/
+       overflow/box-shadow 异常，行距被撑大。这里显式重置，保证三态行高一致。 */
+    .m-task-node-status.progress { height:auto; min-height:auto; margin:0; overflow:visible; box-shadow:none; }
 
     /* ===== 【v21.3】结算管理卡片化（展开式） ===== */
     .m-settle-cards { display:flex; flex-direction:column; gap:10px; }
@@ -958,6 +986,10 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .m-log-select-wrap { margin-bottom:10px; }
     .m-log-select-wrap label { font-size:13px; font-weight:500; color:var(--m-text-secondary); margin-bottom:4px; display:block; }
     .m-log-select { width:100%; height:40px; font-size:16px; padding:0 12px; border-radius:10px; border:1px solid var(--m-border); background:#fff; color:var(--m-text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 12px center; padding-right:32px; }
+    /* 【v21.15】工作日志：关联项目 + 日期合并一行 */
+    .m-log-meta-row { display:flex; gap:8px; align-items:stretch; margin-bottom:10px; }
+    .m-log-meta-row .m-log-select { height:auto; }
+    .m-log-meta-row input[type="date"] { height:40px; box-sizing:border-box; }
 
     /* ===== 【v21.3】首页看板折叠展开 ===== */
     .m-kanban-folders { display:flex; flex-direction:column; gap:10px; }
@@ -992,10 +1024,10 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .kanban-card > div:last-child .btn { min-height:24px; font-size:10px; padding:2px 6px; flex-shrink:0; }
     .kanban-col { max-height:35vh !important; overflow-y:auto; -webkit-overflow-scrolling:touch; }
 
-    /* 数据填报年筛选：移动端下拉框 */
-    .m-year-bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px; }
+    /* 数据填报年筛选：移动端一行 */
+    .m-year-bar { display:flex; gap:8px; flex-wrap:nowrap; align-items:center; margin-bottom:8px; }
     .m-year-bar select { flex:1; height:36px; font-size:14px; padding:0 10px; border-radius:10px; border:1px solid var(--m-border); background:#fff; }
-    .m-year-bar .btn { flex-shrink:0; }
+    .m-year-bar .btn { flex-shrink:0; height:36px; padding:0 12px; font-size:13px; }
 }
 
 /* ---------- 小屏补充（≤480px）：进一步压缩 ---------- */
@@ -3795,22 +3827,20 @@ function renderProjects(mc) {
         // ===== 【v21.1】移动端卡片式项目总表 =====
         if (_isMobile) {
             let cards = '<div class="card" id="projectsCard" style="flex:1;">';
-            cards += '<div class="card-header"><h3>📁 项目总表</h3><div>';
-            cards += '<button class="btn btn-primary btn-sm" onclick="openAddCompanyModal()">+ 新增公司</button> ';
-            cards += '<button class="btn btn-sm" onclick="openBatchImport()">📋 批量导入</button> ';
-            cards += '<button class="btn btn-sm btn-info" onclick="openProjectStatusColorSettings()">🎨 颜色设置</button> ';
-            if (filterTemplateId !== 'all') cards += '<button class="btn btn-sm btn-ghost" onclick="clearProjectFilter()">清除筛选</button> ';
-            cards += '</div></div>';
-
-            // 移动端筛选下拉框
-            cards += '<div class="m-filter-bar">';
-            cards += '<select class="m-filter-select" onchange="toggleProjectFilter(this.value); renderProjects(document.getElementById(\'mainContent\'));">';
-            cards += '<option value="all"' + (filterTemplateId==='all'?' selected':'') + '>📋 全部类型</option>';
+            cards += '<div class="card-header"><h3>📁 项目总表</h3>';
+            // 【v21.15】移动端：按钮与"全部类型"下拉框合并到同一行
+            cards += '<div class="m-proj-header-actions">';
+            cards += '<button class="btn btn-primary btn-sm" onclick="openAddCompanyModal()" title="新增公司">+</button>';
+            cards += '<button class="btn btn-sm" onclick="openBatchImport()" title="批量导入">📋</button>';
+            cards += '<button class="btn btn-sm btn-info" onclick="openProjectStatusColorSettings()" title="颜色设置">🎨</button>';
+            cards += '<select class="m-filter-select m-proj-type-select" onchange="toggleProjectFilter(this.value); renderProjects(document.getElementById(\'mainContent\'));">';
+            cards += '<option value="all"' + (filterTemplateId==='all'?' selected':'') + '>全部类型</option>';
             appData.templates.forEach(t => {
                 cards += '<option value="'+t.id+'"'+(filterTemplateId===t.id?' selected':'')+'>'+esc(t.name)+'</option>';
             });
             cards += '</select>';
-            cards += '</div>';
+            if (filterTemplateId !== 'all') cards += '<button class="btn btn-sm btn-ghost" onclick="clearProjectFilter()">清除</button>';
+            cards += '</div></div>';
 
             // 公司卡片列表
             cards += '<div class="m-proj-cards">';
@@ -4180,7 +4210,7 @@ function renderProjects(mc) {
                     <div class="top">
                       ${_isMobile ? '' : `
                       <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center;flex-shrink:0;">
-                        <select id="taskPeriod" class="m-filter-select" style="width:auto;min-width:120px;" onchange="onTaskPeriodChange()">
+                        <select id="taskPeriod" class="task-period-select" onchange="onTaskPeriodChange()">
                           <option value="week">本周</option><option value="month">本月</option><option value="nextWeek">下周</option><option value="nextMonth">下月</option><option value="custom">📅 自定义</option>
                         </select>
                         <input type="date" id="taskCustomStart" style="display:none;padding:5px 8px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
@@ -4638,15 +4668,19 @@ function renderSettlement(mc) {
                         <button class="btn btn-sm" onclick="openSettlementConfig()">⚙️ 配置</button>
                     </div>
                 </div>
-                <div class="settle-filter-bar" id="settleFilterBar" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:10px;border:1px solid var(--m-border);">
-                    <input type="text" id="settlementSearch" placeholder="搜索公司..." value="${esc(searchComp)}" style="flex:2;min-width:90px;max-width:140px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:13px;">
-                    <select id="settlementTypeFilter" onchange="applySettlementFilter()" style="flex:1;min-width:70px;max-width:110px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:13px;">
+                <!-- 【v21.15】移动端结算筛选：单行不滚动，起止日期合并为一个组合 pill -->
+                <div class="settle-filter-bar" id="settleFilterBar" style="margin-bottom:10px;padding:10px;background:#f8fafc;border-radius:10px;border:1px solid var(--m-border);">
+                    <input type="text" id="settlementSearch" placeholder="搜索公司..." value="${esc(searchComp)}">
+                    <select id="settlementTypeFilter" onchange="applySettlementFilter()">
                         <option value="all">全部</option>${typeOpts}
                     </select>
-                    <input type="date" id="settlementStart" value="${startDate}" style="flex:1.5;min-width:90px;max-width:130px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:13px;" placeholder="开始日期">
-                    <input type="date" id="settlementEnd" value="${endDate}" style="flex:1.5;min-width:90px;max-width:130px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:13px;" placeholder="结束日期">
-                    <button class="btn btn-primary btn-sm" onclick="applySettlementFilter()" style="flex-shrink:0;padding:6px 10px;font-size:13px;">筛选</button>
-                    <button class="btn btn-sm btn-ghost" onclick="clearSettlementFilter()" style="flex-shrink:0;padding:6px 10px;font-size:13px;">清除</button>
+                    <div class="m-settle-date-range">
+                        <input type="date" id="settlementStart" value="${startDate}" placeholder="开始日期">
+                        <span>~</span>
+                        <input type="date" id="settlementEnd" value="${endDate}" placeholder="结束日期">
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="applySettlementFilter()">筛选</button>
+                    <button class="btn btn-sm btn-ghost" onclick="clearSettlementFilter()">清除</button>
                 </div>
                 <div class="settlement-summary" style="margin-bottom:10px;">
                     <div class="stat-item"><span class="label">📊 项目数</span><span class="value">${allProjects.length}</span></div>
@@ -5437,18 +5471,18 @@ function renderLogs(mc) {
                         <button class="btn btn-primary btn-sm" onclick="openReportTemplateFromLogs('monthly')">📋 月报</button>
                     </div>
                 </div>
-                <div class="m-log-select-wrap">
-                    <label>📁 关联项目</label>
-                    <select class="m-log-select" onchange="handleLogProjectSelect(this.value)">
-                        <option value="">无关联</option>
+                <!-- 【v21.15】移动端：关联项目 + 日期合并为一行 -->
+                <div class="m-log-meta-row">
+                    <select class="m-log-select" style="flex:1;min-width:0;" onchange="handleLogProjectSelect(this.value)">
+                        <option value="">📁 无关联</option>
                         ${projectOpts}
                     </select>
+                    <div style="flex:1;min-width:100px;display:flex;align-items:center;gap:6px;">
+                        <span style="font-size:13px;color:var(--text-secondary);flex-shrink:0;">📅</span>
+                        <input type="date" id="logDate" value="${new Date().toISOString().split('T')[0]}" style="flex:1;min-width:0;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;color:var(--m-text);">
+                    </div>
                 </div>
                 <div class="log-input-area" style="margin-top:10px;">
-                    <div style="display:flex;gap:8px;margin-bottom:8px;align-items:center;flex-wrap:wrap;">
-                        <span style="font-size:13px;color:var(--text-secondary);flex-shrink:0;">📅 日期</span>
-                        <input type="date" id="logDate" value="${new Date().toISOString().split('T')[0]}" style="flex:1;min-width:140px;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;color:var(--m-text);">
-                    </div>
                     <textarea id="logContent" placeholder="输入工作日志..." style="width:100%;height:120px;padding:12px;border:1px solid var(--m-border);border-radius:10px;font-size:16px;"></textarea>
                     <button class="btn btn-primary" style="margin-top:8px;width:100%;" onclick="addWorkLog()">保存日志</button>
                 </div>
@@ -5837,9 +5871,10 @@ function renderDataReport(mc) {
             <div class="card" id="dataReportCard" style="flex:1;display:flex;flex-direction:column;">
                 <div class="card-header">
                     <h3>📊 数据填报</h3>
-                    <button class="btn btn-primary btn-sm" onclick="addRY()">+ 年</button>
                 </div>
+                <!-- 【v21.15】+年按钮与年份下拉框合并到同一行 -->
                 <div class="m-year-bar">
+                    <button class="btn btn-primary btn-sm" onclick="addRY()">+ 年</button>
                     <select onchange="setRY(parseInt(this.value))">${yearOpts}</select>
                     <button class="btn btn-xs btn-ghost" onclick="delYear(${sy})">🗑️</button>
                 </div>
