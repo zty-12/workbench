@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.16-mobile-split  2026-09-09  ★ 当前最新稿
+     v21.18-mobile-split  2026-09-09  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
 
      v21.16 追加修复（用户 9-9 截图反馈：移动端日历视图右侧两处溢出）：
@@ -25,6 +25,13 @@
      · 【P2 隐患】getNextId 及三处 id 计数器原不含 archived/shelved/terminated 的 projectData.id，
        恢复归档可能生成碰撞 id 被云端 upsert 覆盖。现已一并纳入扫描。
      · 【P2 隐患】初始化 loadData 读开关用 JSON.parse 无保护，localStorage 损坏会白屏。已加 try-catch。
+
+     v21.18 体验级小补丁（用户 22:36 确认"继续"——按上次核查报告中的低优先级建议实施）：
+     · renderHome"今天要处理"：原 _moreCount 只算"有日期任务"超出 6 条的部分，把"无日期但重要"
+       任务吞掉——列表显示 6 条但"+N 更多"少算。改为以 slice 前的候选数组为基准，_moreCount =
+       _todayCandidates.length - _todayList.length，让无日期任务超过 6 条的部分也正确计入。
+     · editLog 弹窗的 ✕ 关闭按钮原 HTML 里没绑 onclick（确认了 Agent 报告是真的），只能靠取消
+       按钮/背景关闭。给 button 加 id="editLogCloseBtn" 并在 createModal 后追加 addEventListener 关闭。
 
      v21.15 追加修复（用户 9-9 截图反馈的 8 项移动端/PC 样式问题）：
      · 任务分配 PC 顶部"周期"下拉框改成与按钮同高的圆角白底样式，消除默认浏览器 select 的
@@ -3279,7 +3286,10 @@ function renderHome(mc) {
         const _todayISO = new Date().toISOString().split('T')[0];
         const _tomorrowISO = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]; })();
         const _unfinishedTasks = (appData.tasks || []).filter(t => !t.completed);
-        const _todayList = _unfinishedTasks
+        // 【v21.18 修复】原 _moreCount 只算"有日期任务"超出 6 条的部分，把"无日期任务"吞了。
+        // 这里把 filter+sort 的候选数组先存一份，_moreCount 用候选总数减 _todayList.length，
+        // 让无日期任务超过 6 条的部分也能正常计入"+N 更多"。
+        const _todayCandidates = _unfinishedTasks
             .map(t => {
                 const dd = t.dueDate || '';
                 let prio = 3, tag = '';
@@ -3289,12 +3299,9 @@ function renderHome(mc) {
                 return { ...t, _prio: prio, _tag: tag };
             })
             .filter(t => t._prio <= 2 || !t.dueDate)  // 只保留 逾期/今日/明日/无日期
-            .sort((a, b) => (a._prio - b._prio) || (a.dueDate || 'zz').localeCompare(b.dueDate || 'zz'))
-            .slice(0, 6);
-        const _moreCount = Math.max(0, _unfinishedTasks.filter(t => {
-            const dd = t.dueDate || '';
-            return (dd && dd < _todayISO) || dd === _todayISO || dd === _tomorrowISO;
-        }).length - _todayList.length);
+            .sort((a, b) => (a._prio - b._prio) || (a.dueDate || 'zz').localeCompare(b.dueDate || 'zz'));
+        const _todayList = _todayCandidates.slice(0, 6);
+        const _moreCount = Math.max(0, _todayCandidates.length - _todayList.length);
         const _todayItemsHtml = _todayList.length === 0
             ? `<div class="todo-empty">🎉 今天暂无待办任务</div>`
             : _todayList.map(t => {
@@ -3744,7 +3751,7 @@ function toggleTaskComplete(tid, el) {
             const log = appData.workLogs.find(l => l.id === id);
             if (!log) return;
             // 支持编辑日期 + 内容（当天忘记可补写/改期）
-            const html = `<div class="modal" style="max-width:440px;"><button class="close-btn" style="position:absolute;top:12px;right:16px;font-size:22px;cursor:pointer;color:#94a3b8;background:none;border:none;">✕</button><h3 style="font-size:16px;margin-bottom:12px;">✏️ 编辑日志</h3>
+            const html = `<div class="modal" style="max-width:440px;"><button class="close-btn" id="editLogCloseBtn" style="position:absolute;top:12px;right:16px;font-size:22px;cursor:pointer;color:#94a3b8;background:none;border:none;">✕</button><h3 style="font-size:16px;margin-bottom:12px;">✏️ 编辑日志</h3>
               <label style="font-size:13px;color:var(--text-secondary);">📅 日期</label>
               <input id="editLogDate" type="date" value="${log.date}" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:14px;margin-bottom:12px;">
               <label style="font-size:13px;color:var(--text-secondary);">内容</label>
@@ -3766,6 +3773,8 @@ function toggleTaskComplete(tid, el) {
                 overlay.remove();
             });
             overlay.querySelector('#editLogCancelBtn').addEventListener('click', function() { overlay.remove(); });
+            // 【v21.18 修复】补上 ✕ 关闭按钮的点击监听，否则用户只能靠取消/背景关闭
+            overlay.querySelector('#editLogCloseBtn').addEventListener('click', function() { overlay.remove(); });
         }
 
         function removeCompany(i) {
