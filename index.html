@@ -1,7 +1,18 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.12-mobile-split  2026-09-09  ★ 当前最新稿
+     v21.13-mobile-split  2026-09-09  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.13 追加修复（移动端 UI 紧凑化 + 任务 id 碰撞根治）：
+     · 【重要】连续两次分配任务后"第二个替换掉第一个"。根因：getNextId() 直接 _idCounter++，
+       若计数器被某条加载/快照路径置为 NaN 或低于实际最大值，会生成相同 id（如 id_NaN）；
+       云端 tasks 表按 conflict:'id' upsert，两条相同 id → 后者覆盖前者 → 只剩一条。
+       修复：getNextId() 从真实数据重算最大序号并防 NaN，彻底规避 id 碰撞。
+     · "今日要处理"标题被挤压只剩一半。根因：主内容区是有界高度 flex 列，today-todo-card
+       默认 flex-shrink:1 被压扁裁切。修复：移动端卡片组统一 flex-shrink:0，按内容撑开。
+     · 项目看板筛选区（类型/状态/搜索/新建）由两行合并为一行。
+     · 任务分配筛选取(全部类型/本周/分配任务/颜色设置)由两行合并为一行，全部类型不再占整行。
+     · 项目卡片展开的节点列表可滚动查看全部，不再被裁切。
 
      v21.12 追加修复（数据一致性漏洞）：
      · 【重要】看板修改节点状态后显示"同步成功"，但任务分配页对应节点状态不同步、
@@ -483,6 +494,7 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
         background: var(--m-card); border-radius: var(--m-radius);
         box-shadow: var(--m-shadow-md); padding: 12px 14px; margin-bottom: 4px;
         border-left: 4px solid var(--m-warning);
+        flex-shrink: 0; /* 【v21.13】主内容区是有界高度 flex 列，卡片默认 flex-shrink:1 会被压扁裁切标题 */
     }
     .today-todo-card .card-title { font-size: 15px; font-weight: 600; color: var(--m-primary); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; line-height: 1.4; }
     .today-todo-card .todo-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--m-border); font-size: 13px; }
@@ -592,21 +604,21 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .m-proj-card.terminated { border-left:4px solid #dc3545; background:rgba(220,53,69,0.04); }
 
     /* 防止移动端卡片内容溢出（首页/总表/看板） */
-    .m-proj-card, .today-todo-card, .m-settle-card, .m-data-card, .m-task-card { overflow:hidden; word-wrap:break-word; overflow-wrap:break-word; }
+    .m-proj-card, .today-todo-card, .m-settle-card, .m-data-card, .m-task-card { overflow:hidden; word-wrap:break-word; overflow-wrap:break-word; flex-shrink:0; }
     .m-proj-card-header { flex-wrap:wrap; gap:6px; min-width:0; }
     .m-proj-card-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .m-proj-card-prog { min-width:0; flex:1; }
     .m-proj-card-detail { min-width:0; }
     .m-proj-type-name { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 
-    /* ===== 【v21.1】移动端筛选下拉框（v21.12 固定两行：行1 类型+状态+新建 / 行2 搜索） ===== */
-    .m-filter-bar { display:flex; flex-direction:column; gap:6px; }
-    .m-filter-row { display:flex; gap:6px; align-items:center; }
-    .m-filter-select { flex:1 1 0; min-width:0; height:34px; font-size:14px; padding:0 8px; border-radius:8px; border:1px solid var(--m-border); background:#fff; color:var(--m-text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 6px center; padding-right:22px; }
-    .m-filter-search { flex:1 1 0; min-width:120px; display:flex; gap:4px; }
-    .m-filter-search input { flex:1; min-width:0; height:34px; font-size:14px; padding:0 10px; border-radius:8px; border:1px solid var(--m-border); background:#fff; }
-    .m-filter-search button { width:34px; height:34px; border-radius:8px; border:none; background:var(--m-primary); color:#fff; font-size:13px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-    .m-filter-new { height:34px; padding:0 12px; font-size:13px; border-radius:8px; flex-shrink:0; }
+    /* ===== 【v21.1】移动端筛选下拉框（v21.13 合并为单行：类型+状态+搜索+新建） ===== */
+    .m-filter-bar { display:flex; flex-direction:row; flex-wrap:nowrap; gap:6px; align-items:center; }
+    .m-filter-row { display:contents; }
+    .m-filter-select { flex:0 1 auto; min-width:0; height:32px; font-size:12px; padding:0 6px; border-radius:8px; border:1px solid var(--m-border); background:#fff; color:var(--m-text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 5px center; padding-right:16px; text-overflow:ellipsis; white-space:nowrap; overflow:hidden; }
+    .m-filter-search { flex:1 1 auto; min-width:56px; display:flex; gap:4px; }
+    .m-filter-search input { flex:1; min-width:0; height:32px; font-size:12px; padding:0 8px; border-radius:8px; border:1px solid var(--m-border); background:#fff; }
+    .m-filter-search button { width:32px; height:32px; border-radius:8px; border:none; background:var(--m-primary); color:#fff; font-size:12px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .m-filter-new { height:32px; padding:0 10px; font-size:12px; border-radius:8px; flex-shrink:0; }
 
     /* ===== 【v21.1】移动端看板卡片修复 ===== */
     .kanban-grid { overflow-x:hidden !important; width:100%; }
@@ -861,7 +873,7 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .m-data-card-actions { display:flex; justify-content:flex-end; margin-top:8px; }
 
     /* ===== 【v21.3】任务分配卡片化（总表样式） ===== */
-    .m-task-cards { display:flex; flex-direction:column; gap:10px; }
+    .m-task-cards { display:flex; flex-direction:column; gap:10px; flex-shrink:0; }
     .m-task-card {
         background:var(--m-card); border-radius:var(--m-radius); padding:14px;
         border:1px solid var(--m-border); box-shadow:var(--m-shadow-sm);
@@ -879,7 +891,7 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .m-task-card-count { font-size:12px; color:var(--text-muted); margin-bottom:6px; }
     .m-task-card-expand { font-size:11px; color:var(--m-primary); padding:4px 0; display:flex; align-items:center; gap:4px; }
     .m-task-card-detail { display:none; padding-top:10px; margin-top:10px; border-top:1px solid var(--m-border); }
-    .m-task-card.expanded .m-task-card-detail { display:block; }
+    .m-task-card.expanded .m-task-card-detail { display:block; max-height:46vh; overflow-y:auto; -webkit-overflow-scrolling:touch; }
     .m-task-card.expanded .m-task-card-expand { color:var(--m-danger); }
     .m-task-node-row { display:flex; align-items:center; gap:8px; padding:8px 0; border-bottom:1px dashed var(--m-border); }
     .m-task-node-row:last-child { border-bottom:none; }
@@ -1321,7 +1333,26 @@ async function mergeCloudStateBeforeUpload() {
                 g = parseInt(hex.slice(3, 5), 16),
                 b = parseInt(hex.slice(5, 7), 16); return `rgba(${r},${g},${b},${alpha})`; }
 
-        function getNextId() { appData._idCounter++; saveData(); return 'id_' + appData._idCounter; }
+        function getNextId() {
+            // 【v21.13】保证 id 唯一：自愈计数器，杜绝"连续分配任务后第二条顶掉第一条"。
+            // 根因：旧实现直接 _idCounter++，若计数器因某条加载/快照路径变成 NaN 或低于实际最大值，
+            // 会生成相同 id（如 'id_NaN'）；云端 tasks 表按 conflict:'id' upsert，两条相同 id 的任务
+            // 会后者覆盖前者，下次拉取只剩一条 → 表现为"第二个任务替换掉第一个"。
+            // 此处从真实数据重算最大序号并防 NaN，彻底规避 id 碰撞。
+            if (appData._idCounter === undefined || isNaN(appData._idCounter)) appData._idCounter = 0;
+            let maxNum = 0;
+            [...appData.projects, ...appData.templates, ...appData.tasks, ...appData.workLogs, ...appData.settlements]
+                .forEach(it => {
+                    if (it.id && it.id.startsWith('id_')) {
+                        const n = parseInt(it.id.substring(3));
+                        if (!isNaN(n) && n > maxNum) maxNum = n;
+                    }
+                });
+            if (appData._idCounter <= maxNum) appData._idCounter = maxNum;
+            appData._idCounter++;
+            saveData();
+            return 'id_' + appData._idCounter;
+        }
 
         function updateBadges() {
             const sb = document.getElementById('shelvedBadge');
@@ -3218,26 +3249,22 @@ function renderHome(mc) {
         if (_isMobile && !window._expandedKanbanCols) window._expandedKanbanCols = { pending: false, progress: false, done: false };
         const filterHtml = _isMobile ? `
             <div class="m-filter-bar">
-              <div class="m-filter-row">
-                <select class="m-filter-select" onchange="setHF('type',this.value); renderHome(document.getElementById('mainContent'));">
-                  <option value="all" ${ft==='all'?'selected':''}>📋 全部类型</option>
-                  ${appData.templates.map(t => `<option value="${t.id}" ${ft===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
-                </select>
-                <select class="m-filter-select" onchange="setHF('status',this.value); renderHome(document.getElementById('mainContent'));">
-                  <option value="all" ${fs==='all'?'selected':''}>📊 全部状态</option>
-                  <option value="pending" ${fs==='pending'?'selected':''}>⏳ 未开始</option>
-                  <option value="progress" ${fs==='progress'?'selected':''}>🔄 进行中</option>
-                  <option value="done" ${fs==='done'?'selected':''}>✅ 已完成</option>
-                </select>
-                <button class="btn btn-primary btn-sm m-filter-new" onclick="openProjectModal()">+ 新建</button>
+              <select class="m-filter-select" onchange="setHF('type',this.value); renderHome(document.getElementById('mainContent'));">
+                <option value="all" ${ft==='all'?'selected':''}>📋 全部类型</option>
+                ${appData.templates.map(t => `<option value="${t.id}" ${ft===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+              </select>
+              <select class="m-filter-select" onchange="setHF('status',this.value); renderHome(document.getElementById('mainContent'));">
+                <option value="all" ${fs==='all'?'selected':''}>📊 全部状态</option>
+                <option value="pending" ${fs==='pending'?'selected':''}>⏳ 未开始</option>
+                <option value="progress" ${fs==='progress'?'selected':''}>🔄 进行中</option>
+                <option value="done" ${fs==='done'?'selected':''}>✅ 已完成</option>
+              </select>
+              <div class="m-filter-search">
+                <input id="companySearch" placeholder="🔍 搜索公司" value="${esc(compKeyword)}"
+                       oninput="clearTimeout(window._hfT); window._hfT=setTimeout(function(){ window._hcomp=document.getElementById('companySearch').value; renderHome(document.getElementById('mainContent')); }, 400);"
+                       onkeydown="if(event.key==='Enter'){ window._hcomp=this.value; renderHome(document.getElementById('mainContent')); }">
               </div>
-              <div class="m-filter-row">
-                <div class="m-filter-search">
-                  <input id="companySearch" placeholder="🔍 搜索公司..." value="${esc(compKeyword)}"
-                         onkeydown="if(event.key==='Enter'){ window._hcomp=this.value; renderHome(document.getElementById('mainContent')); }">
-                  <button onclick="window._hcomp=document.getElementById('companySearch').value; renderHome(document.getElementById('mainContent'));">🔍</button>
-                </div>
-              </div>
+              <button class="btn btn-primary btn-sm m-filter-new" onclick="openProjectModal()">+ 新建</button>
             </div>
           ` : `
             <div class="filter-pills">
@@ -4092,23 +4119,36 @@ function renderProjects(mc) {
                     <h3>📋 任务分配 <span style="font-size:12px;color:var(--text-secondary);font-weight:400;">（🔥重要紧急优先）</span></h3>
                     <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
                       ${_isMobile ? `
-                        <select class="m-filter-select" onchange="setTF('type',this.value)">
-                          <option value="all" ${ft==='all'?'selected':''}>全部类型</option>
-                          ${appData.templates.map(t => `<option value="${t.id}" ${ft===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
-                        </select>
+                        <div style="display:flex;gap:6px;flex-wrap:nowrap;align-items:center;width:100%;">
+                          <select class="m-filter-select" onchange="setTF('type',this.value)">
+                            <option value="all" ${ft==='all'?'selected':''}>全部类型</option>
+                            ${appData.templates.map(t => `<option value="${t.id}" ${ft===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+                          </select>
+                          <select id="taskPeriod" class="m-filter-select" onchange="onTaskPeriodChange()">
+                            <option value="week">本周</option><option value="month">本月</option><option value="nextWeek">下周</option><option value="nextMonth">下月</option><option value="custom">📅 自定义</option>
+                          </select>
+                          <button class="btn btn-primary m-filter-new" onclick="assignFromSelection()">分配任务</button>
+                          <button class="btn btn-sm btn-info m-filter-new" onclick="openTaskColorSettings()" title="颜色设置">🎨</button>
+                        </div>
+                        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px;width:100%;">
+                          <input type="date" id="taskCustomStart" style="display:none;padding:5px 8px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
+                          <span id="taskCustomSep" style="display:none;font-size:12px;color:#94a3b8;">~</span>
+                          <input type="date" id="taskCustomEnd" style="display:none;padding:5px 8px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
+                        </div>
                       ` : `
                       <div class="filter-pills">
                         <span class="${ft==='all'?'active':''}" onclick="setTF('type','all')">全部</span>
                         ${appData.templates.map(t => `<span class="${ft===t.id?'active':''}" onclick="setTF('type','${t.id}')">${esc(t.name)}</span>`).join('')}
                       </div>
-                      `}
                       <button class="btn btn-sm btn-info" onclick="openTaskColorSettings()">🎨 颜色设置</button>
+                      `}
                     </div>
                   </div>
                   <div class="task-layout">
                     <div class="top">
+                      ${_isMobile ? '' : `
                       <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center;flex-shrink:0;">
-                        <select id="taskPeriod" onchange="onTaskPeriodChange()" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;">
+                        <select id="taskPeriod" class="m-filter-select" style="width:auto;min-width:120px;" onchange="onTaskPeriodChange()">
                           <option value="week">本周</option><option value="month">本月</option><option value="nextWeek">下周</option><option value="nextMonth">下月</option><option value="custom">📅 自定义</option>
                         </select>
                         <input type="date" id="taskCustomStart" style="display:none;padding:5px 8px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
@@ -4117,6 +4157,7 @@ function renderProjects(mc) {
                         <button class="btn btn-primary" onclick="assignFromSelection()">分配任务</button>
                         <span style="font-size:12px;color:#94a3b8;">选择项目卡片中的节点，然后点击分配</span>
                       </div>
+                      `}
                       ${_isMobile ? `
                       <div class="m-task-cards" id="taskGrid">
                         ${elig.map(p => {
