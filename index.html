@@ -1,7 +1,16 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.10-mobile-split  2026-09-08  ★ 当前最新稿
+     v21.11-mobile-split  2026-09-08  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.11 追加修复：
+     · 移动端首页"今天要处理"标题加 line-height，防止视觉上被挤压截断。
+     · 移动端项目看板筛选/搜索/新建按钮压缩到 1~2 行（新建移入 m-filter-bar）。
+     · 移动端日历视图筛选下拉框改单行横排。
+     · 移动端日历容器从固定 58vh 改为自适应高度，FullCalendar 在窄屏用 height:'auto'
+       + fixedWeekCount:false，消除底部额外网格溢出。
+     · 已完成任务在日历上最多显示到完成日；缺失完成日时按今天截断，并从云端同步
+       完成状态时同步修正 endDate。
 
      v21.10 追加修复：
      · 日历视图月网格错乱（日期竖排成单列）：移除对 .fc-view/.fc-view-container/
@@ -465,7 +474,7 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
         box-shadow: var(--m-shadow-md); padding: 12px 14px; margin-bottom: 4px;
         border-left: 4px solid var(--m-warning);
     }
-    .today-todo-card .card-title { font-size: 15px; font-weight: 600; color: var(--m-primary); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+    .today-todo-card .card-title { font-size: 15px; font-weight: 600; color: var(--m-primary); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; line-height: 1.4; }
     .today-todo-card .todo-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--m-border); font-size: 13px; }
     .today-todo-card .todo-item:last-child { border-bottom: none; }
     .today-todo-card .todo-item.overdue { color: var(--m-danger); font-weight: 500; }
@@ -580,12 +589,14 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .m-proj-card-detail { min-width:0; }
     .m-proj-type-name { min-width:0; overflow:hidden; text-overflow:ellipsis; }
 
-    /* ===== 【v21.1】移动端筛选下拉框 ===== */
-    .m-filter-bar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
-    .m-filter-select { flex:1; min-width:100px; height:38px; font-size:16px; padding:0 10px; border-radius:10px; border:1px solid var(--m-border); background:#fff; color:var(--m-text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 8px center; padding-right:28px; }
-    .m-filter-search { flex:2; min-width:120px; display:flex; gap:4px; }
-    .m-filter-search input { flex:1; height:38px; font-size:16px; padding:0 12px; border-radius:10px; border:1px solid var(--m-border); background:#fff; }
-    .m-filter-search button { width:38px; height:38px; border-radius:10px; border:none; background:var(--m-primary); color:#fff; font-size:14px; display:flex; align-items:center; justify-content:center; }
+    /* ===== 【v21.1】移动端筛选下拉框（v21.12 固定两行：行1 类型+状态+新建 / 行2 搜索） ===== */
+    .m-filter-bar { display:flex; flex-direction:column; gap:6px; }
+    .m-filter-row { display:flex; gap:6px; align-items:center; }
+    .m-filter-select { flex:1 1 0; min-width:0; height:34px; font-size:14px; padding:0 8px; border-radius:8px; border:1px solid var(--m-border); background:#fff; color:var(--m-text); appearance:none; -webkit-appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%2364748b' d='M6 8L1 3h10z'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 6px center; padding-right:22px; }
+    .m-filter-search { flex:1 1 0; min-width:120px; display:flex; gap:4px; }
+    .m-filter-search input { flex:1; min-width:0; height:34px; font-size:14px; padding:0 10px; border-radius:8px; border:1px solid var(--m-border); background:#fff; }
+    .m-filter-search button { width:34px; height:34px; border-radius:8px; border:none; background:var(--m-primary); color:#fff; font-size:13px; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+    .m-filter-new { height:34px; padding:0 12px; font-size:13px; border-radius:8px; flex-shrink:0; }
 
     /* ===== 【v21.1】移动端看板卡片修复 ===== */
     .kanban-grid { overflow-x:hidden !important; width:100%; }
@@ -619,18 +630,20 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .modal h2 { font-size:17px; }
     .modal h3 { font-size:15px; }
 
-    /* ---------- ⑧ 日历：压缩高度防溢出 ---------- */
-    .fc-calendar-container { height:58vh; min-height:300px; }
-    .fc-calendar-container .fc-day-grid .fc-row { min-height:30px !important; }
+    /* ---------- ⑧ 日历：自适应高度 + 筛选器一行（v21.11） ---------- */
+    .fc-calendar-container { height:auto; min-height:320px; overflow:visible; }
+    .fc-calendar-container .fc { height:auto !important; }
+    .fc-calendar-container .fc-day-grid .fc-row { min-height:34px !important; }
     .fc-calendar-container .fc-day-number { font-size:10px !important; padding:1px 2px; }
     .fc-calendar-container .fc-day-grid-event { font-size:8px !important; padding:1px 3px !important; margin:1px 2px !important; }
     .fc-calendar-container .fc-day-grid-event .fc-title { font-size:7px !important; }
     .fc-calendar-container .fc-day-header { font-size:10px !important; padding:2px 0 !important; }
-    .cal-toolbar { flex-direction:column; align-items:stretch; gap:8px; padding:4px 0 8px; }
-    .cal-toolbar .filter-group { margin-left:0; flex-wrap:wrap; }
-    .cal-toolbar .filter-group select, .cal-toolbar .filter-group input { width:100%; height:38px; font-size:16px; }
-    .cal-toolbar .view-group button { font-size:12px; padding:6px 14px; min-height:36px; }
+    .cal-toolbar { flex-direction:column; align-items:stretch; gap:6px; padding:4px 0 8px; }
+    .cal-toolbar .filter-group { margin-left:0; display:flex; flex-wrap:nowrap; gap:6px; }
+    .cal-toolbar .filter-group select, .cal-toolbar .filter-group input { flex:1 1 0; min-width:0; width:auto; height:34px; font-size:14px; padding:0 8px; }
+    .cal-toolbar .view-group button { font-size:12px; padding:6px 14px; min-height:34px; }
     .cal-toolbar .nav-group .month-label { font-size:14px; min-width:70px; }
+    .cal-card { flex:none !important; height:auto !important; min-height:auto !important; }
 
     /* ---------- ⑨ 各工具页 ---------- */
     .task-grid { grid-template-columns:1fr; }
@@ -1162,7 +1175,12 @@ async function mergeCloudStateBeforeUpload() {
         if (!ct) return;
         if (ct.completed && !localTask.completed) {
             localTask.completed = true;
-            localTask.completedDate = ct.completed_date || null;
+            const todayStr = new Date().toISOString().split('T')[0];
+            localTask.completedDate = ct.completed_date || todayStr;
+            // 已完成任务截断结束日到完成日，避免日历仍显示原长条
+            if (!localTask.endDate || localTask.endDate > localTask.completedDate) {
+                localTask.endDate = localTask.completedDate;
+            }
             taskMerged++;
         }
     });
@@ -3186,20 +3204,25 @@ function renderHome(mc) {
         if (_isMobile && !window._expandedKanbanCols) window._expandedKanbanCols = { pending: false, progress: false, done: false };
         const filterHtml = _isMobile ? `
             <div class="m-filter-bar">
-              <select class="m-filter-select" onchange="setHF('type',this.value); renderHome(document.getElementById('mainContent'));">
-                <option value="all" ${ft==='all'?'selected':''}>📋 全部类型</option>
-                ${appData.templates.map(t => `<option value="${t.id}" ${ft===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
-              </select>
-              <select class="m-filter-select" onchange="setHF('status',this.value); renderHome(document.getElementById('mainContent'));">
-                <option value="all" ${fs==='all'?'selected':''}>📊 全部状态</option>
-                <option value="pending" ${fs==='pending'?'selected':''}>⏳ 未开始</option>
-                <option value="progress" ${fs==='progress'?'selected':''}>🔄 进行中</option>
-                <option value="done" ${fs==='done'?'selected':''}>✅ 已完成</option>
-              </select>
-              <div class="m-filter-search">
-                <input id="companySearch" placeholder="🔍 搜索公司..." value="${esc(compKeyword)}"
-                       onkeydown="if(event.key==='Enter'){ window._hcomp=this.value; renderHome(document.getElementById('mainContent')); }">
-                <button onclick="window._hcomp=document.getElementById('companySearch').value; renderHome(document.getElementById('mainContent'));">🔍</button>
+              <div class="m-filter-row">
+                <select class="m-filter-select" onchange="setHF('type',this.value); renderHome(document.getElementById('mainContent'));">
+                  <option value="all" ${ft==='all'?'selected':''}>📋 全部类型</option>
+                  ${appData.templates.map(t => `<option value="${t.id}" ${ft===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+                </select>
+                <select class="m-filter-select" onchange="setHF('status',this.value); renderHome(document.getElementById('mainContent'));">
+                  <option value="all" ${fs==='all'?'selected':''}>📊 全部状态</option>
+                  <option value="pending" ${fs==='pending'?'selected':''}>⏳ 未开始</option>
+                  <option value="progress" ${fs==='progress'?'selected':''}>🔄 进行中</option>
+                  <option value="done" ${fs==='done'?'selected':''}>✅ 已完成</option>
+                </select>
+                <button class="btn btn-primary btn-sm m-filter-new" onclick="openProjectModal()">+ 新建</button>
+              </div>
+              <div class="m-filter-row">
+                <div class="m-filter-search">
+                  <input id="companySearch" placeholder="🔍 搜索公司..." value="${esc(compKeyword)}"
+                         onkeydown="if(event.key==='Enter'){ window._hcomp=this.value; renderHome(document.getElementById('mainContent')); }">
+                  <button onclick="window._hcomp=document.getElementById('companySearch').value; renderHome(document.getElementById('mainContent'));">🔍</button>
+                </div>
               </div>
             </div>
           ` : `
@@ -3227,7 +3250,7 @@ function renderHome(mc) {
                 <h3>📌 项目看板</h3>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex:1;justify-content:space-between;">
                   ${filterHtml}
-                  <button class="btn btn-primary btn-sm" onclick="openProjectModal()" style="margin-left:auto;">+ 新建</button>
+                  ${_isMobile ? '' : '<button class="btn btn-primary btn-sm" onclick="openProjectModal()" style="margin-left:auto;">+ 新建</button>'}
                 </div>
               </div>
               ${_isMobile ? `
@@ -3472,6 +3495,35 @@ function deleteTask(tid) {
                     showToast('✅ 已更新');
                 }
             }, function() {});
+        }
+
+        // 【v21.12】编辑已分配任务的开始/结束日期（日历条与各视图随之更新）
+        function editTaskDates(tid) {
+            const t = appData.tasks.find(tt => tt.id === tid);
+            if (!t) return;
+            const html =
+                `<div class="modal" style="max-width:440px;"><button class="close-btn" style="position:absolute;top:12px;right:16px;font-size:22px;cursor:pointer;color:#94a3b8;background:none;border:none;">✕</button><h3 style="font-size:16px;margin-bottom:8px;">📅 编辑任务时间</h3><p style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;word-break:break-all;">${esc(t.title)}</p><div style="margin-bottom:10px;"><label style="font-size:12px;color:#64748b;display:block;margin-bottom:4px;">开始日期</label><input id="teStart" type="date" value="${t.startDate||t.planDate||''}" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:14px;"></div><div style="margin-bottom:16px;"><label style="font-size:12px;color:#64748b;display:block;margin-bottom:4px;">结束日期</label><input id="teEnd" type="date" value="${t.endDate||t.dueDate||''}" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:14px;"></div><div class="confirm-actions"><button class="btn btn-ghost" id="teCancelBtn">取消</button><button class="btn btn-primary" id="teOkBtn">确定</button></div></div>`;
+            const overlay = createModal(html, function() {});
+            overlay.querySelector('#teOkBtn').addEventListener('click', function() {
+                const s = overlay.querySelector('#teStart').value;
+                const e = overlay.querySelector('#teEnd').value;
+                if (!s || !e) { showAlert('请选择开始和结束日期'); return; }
+                if (s > e) { showAlert('开始日期不能晚于结束日期'); return; }
+                t.startDate = s;
+                t.endDate = e;
+                t.planDate = s;
+                t.dueDate = e;
+                // 关联节点同步计划日期
+                if (t.projectId && t.nodeIndex !== undefined && t.nodeIndex >= 0) {
+                    const p = appData.projects.find(pr => pr.id === t.projectId);
+                    if (p && p.nodes[t.nodeIndex]) p.nodes[t.nodeIndex].planDate = s;
+                }
+                saveData();
+                overlay.remove();
+                renderPage(currentPage);
+                showToast('✅ 起止时间已更新并同步');
+            });
+            overlay.querySelector('#teCancelBtn').addEventListener('click', function() { overlay.remove(); });
         }
 
 function toggleTask(tid, chk) {
@@ -4042,9 +4094,12 @@ function renderProjects(mc) {
                   <div class="task-layout">
                     <div class="top">
                       <div style="display:flex;gap:12px;margin-bottom:12px;flex-wrap:wrap;align-items:center;flex-shrink:0;">
-                        <select id="taskPeriod" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;">
-                          <option value="week">本周</option><option value="month">本月</option><option value="nextWeek">下周</option><option value="nextMonth">下月</option>
+                        <select id="taskPeriod" onchange="onTaskPeriodChange()" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;">
+                          <option value="week">本周</option><option value="month">本月</option><option value="nextWeek">下周</option><option value="nextMonth">下月</option><option value="custom">📅 自定义</option>
                         </select>
+                        <input type="date" id="taskCustomStart" style="display:none;padding:5px 8px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
+                        <span id="taskCustomSep" style="display:none;font-size:12px;color:#94a3b8;">~</span>
+                        <input type="date" id="taskCustomEnd" style="display:none;padding:5px 8px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
                         <button class="btn btn-primary" onclick="assignFromSelection()">分配任务</button>
                         <span style="font-size:12px;color:#94a3b8;">选择项目卡片中的节点，然后点击分配</span>
                       </div>
@@ -4118,7 +4173,7 @@ function renderProjects(mc) {
                         <tbody>${appData.tasks.map(t => {
                           const p = t.projectId ? appData.projects.find(pr=>pr.id===t.projectId) : null;
                           const pct = p ? getProgressPercent(p.nodes) : 0;
-                          return `<tr><td>${esc(t.title)}</td><td>${p ? esc(p.company)+'-'+esc(getTplName(p.templateId)) : '-'}</td><td><div class="progress-bar"><div class="progress-fill ${progressClass(pct)}" style="width:${pct}%;"></div></div></td><td>${t.weekLabel||t.monthLabel||'-'}</td><td>${t.dueDate||''}</td><td>${t.completed?'<span style="color:#10b981;">✅完成</span>':'<span style="color:#94a3b8;">⏳待办</span>'}</td><td><button class="btn btn-xs" onclick="editTask('${t.id}')">✎</button><button class="btn btn-xs btn-ghost" onclick="deleteTask('${t.id}')">✕</button></td></tr>`;
+                          return `<tr><td>${esc(t.title)}</td><td>${p ? esc(p.company)+'-'+esc(getTplName(p.templateId)) : '-'}</td><td><div class="progress-bar"><div class="progress-fill ${progressClass(pct)}" style="width:${pct}%;"></div></div></td><td>${t.weekLabel||t.monthLabel||'-'}</td><td>${(t.startDate||t.endDate) ? `${t.startDate||''} ~ ${t.endDate||t.dueDate||''}` : (t.dueDate||'')}</td><td>${t.completed?'<span style="color:#10b981;">✅完成</span>':'<span style="color:#94a3b8;">⏳待办</span>'}</td><td><button class="btn btn-xs" onclick="editTaskDates('${t.id}')" title="编辑起止时间">📅</button><button class="btn btn-xs" onclick="editTask('${t.id}')">✎</button><button class="btn btn-xs btn-ghost" onclick="deleteTask('${t.id}')">✕</button></td></tr>`;
                         }).join('')}</tbody>
                       </table>
                     </div>
@@ -4223,6 +4278,16 @@ function renderProjects(mc) {
             renderTasks(document.getElementById('mainContent'));
         }
 
+        // 【v21.12】任务分配：切换周期时显示/隐藏自定义日期输入框
+        function onTaskPeriodChange() {
+            const period = document.getElementById('taskPeriod')?.value;
+            const show = period === 'custom';
+            ['taskCustomStart', 'taskCustomEnd', 'taskCustomSep'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.style.display = show ? '' : 'none';
+            });
+        }
+
         function assignFromSelection() {
             const pid = window._selPid;
             if (!pid) { showAlert('请先点击选择项目卡片'); return; }
@@ -4269,6 +4334,14 @@ function renderProjects(mc) {
                 startDate = firstDay.toISOString().split('T')[0];
                 endDate = lastDay.toISOString().split('T')[0];
                 ml = getMonthLabel(nextMonth);
+            } else if (period === 'custom') {
+                // 【v21.12】自定义开始/结束日期
+                const cs = document.getElementById('taskCustomStart')?.value;
+                const ce = document.getElementById('taskCustomEnd')?.value;
+                if (!cs || !ce) { showAlert('请先选择自定义的开始和结束日期'); return; }
+                if (cs > ce) { showAlert('开始日期不能晚于结束日期'); return; }
+                startDate = cs;
+                endDate = ce;
             } else {
                 startDate = endDate = now.toISOString().split('T')[0];
             }
@@ -5009,7 +5082,7 @@ function renderSettlement(mc) {
                 `<div style="font-size:11px;color:var(--text-secondary);padding:8px 0 0;flex-shrink:0;display:flex;gap:12px;flex-wrap:wrap;" id="calStats"><span>📌 加载中...</span></div>`;
 
             mc.innerHTML = `
-                <div class="card" style="flex:1;display:flex;flex-direction:column;min-height:0;padding:12px 16px;">
+                <div class="card cal-card" style="flex:1;display:flex;flex-direction:column;min-height:0;padding:12px 16px;">
                   ${toolbarHtml}
                   ${containerHtml}
                   ${statsHtml}
@@ -5053,9 +5126,11 @@ function renderSettlement(mc) {
                     let startDate = t.startDate || t.planDate || t.dueDate;
                     let endDate = t.endDate || t.dueDate || startDate;
                     if (!startDate) return;
-                    if (t.completed && t.completedDate) {
-                        const compDate = t.completedDate;
-                        if (compDate < endDate) endDate = compDate;
+                    if (t.completed) {
+                        // 已完成任务：最多显示到完成日；若缺失完成日，按今天截断，避免显示到原结束日
+                        const todayStr = new Date().toISOString().split('T')[0];
+                        const compDate = t.completedDate || todayStr;
+                        if (compDate && compDate < endDate) endDate = compDate;
                     }
                     if (startDate > endDate) { [startDate, endDate] = [endDate, startDate]; }
                     const endMoment = moment(endDate).add(1, 'days');
@@ -5089,6 +5164,7 @@ function renderSettlement(mc) {
                 callback(events);
             }
 
+            const _calMobile = window.innerWidth <= 768;
             $(container).fullCalendar({
                 header: false,
                 defaultView: viewName,
@@ -5096,8 +5172,8 @@ function renderSettlement(mc) {
                 allDaySlot: true,
                 allDayText: '全天',
                 firstDay: 1,
-                height: 'parent',
-                fixedWeekCount: true,
+                height: _calMobile ? 'auto' : 'parent',
+                fixedWeekCount: !_calMobile,
                 eventLimit: false,
                 events: getEventData,
                 eventClick: function(event, jsEvent, view) {
