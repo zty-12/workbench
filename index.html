@@ -1,7 +1,16 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.15-mobile-split  2026-09-09  ★ 当前最新稿
+     v21.16-mobile-split  2026-09-09  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.16 追加修复（用户 9-9 截图反馈：移动端日历视图右侧两处溢出）：
+     · 根因：.cal-card / .cal-toolbar / .fc-calendar-container 在移动端 flex 链路上
+       min-width:auto，被日历表格/工具栏子元素撑宽，导致卡片整体超出视口右侧，
+       出现白条/可横向滚动。
+     · 修复：移动端给 .cal-card / .cal-toolbar / .fc-calendar-container 加 min-width:0、
+       width/max-width:100%、box-sizing:border-box；覆盖 #calCompanyFilter 的 inline width
+       让其参与 flex 收缩；给 FullCalendar 表格加 table-layout:fixed 并允许事件标题换行，
+       防止表格内容撑破容器；.fc-calendar-container 保留 overflow-x:auto 作为最后防线。
 
      v21.15 追加修复（用户 9-9 截图反馈的 8 项移动端/PC 样式问题）：
      · 任务分配 PC 顶部"周期"下拉框改成与按钮同高的圆角白底样式，消除默认浏览器 select 的
@@ -690,7 +699,7 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 
     /* ---------- ⑧ 日历：自适应高度 + 筛选器一行（v21.11） ---------- */
     .fc-calendar-container { height:auto; min-height:320px; overflow:visible; }
-    .fc-calendar-container .fc { height:auto !important; }
+    .fc-calendar-container .fc { height:auto !important; width:100% !important; min-width:0 !important; box-sizing:border-box; }
     .fc-calendar-container .fc-day-grid .fc-row { min-height:34px !important; }
     .fc-calendar-container .fc-day-number { font-size:10px !important; padding:1px 2px; }
     .fc-calendar-container .fc-day-grid-event { font-size:8px !important; padding:1px 3px !important; margin:1px 2px !important; }
@@ -702,6 +711,19 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .cal-toolbar .view-group button { font-size:12px; padding:6px 14px; min-height:34px; }
     .cal-toolbar .nav-group .month-label { font-size:14px; min-width:70px; }
     .cal-card { flex:none !important; height:auto !important; min-height:auto !important; }
+
+    /* 【v21.16】移动端日历右侧溢出修复：防止卡片/工具栏/表格被撑宽 */
+    .cal-card { min-width:0 !important; width:100% !important; max-width:100% !important; box-sizing:border-box !important; overflow-x:hidden; }
+    .cal-toolbar { min-width:0; width:100%; max-width:100%; box-sizing:border-box; }
+    .cal-toolbar .view-group, .cal-toolbar .nav-group, .cal-toolbar .filter-group { min-width:0; max-width:100%; box-sizing:border-box; }
+    .cal-toolbar .filter-group input#calCompanyFilter { width:auto !important; min-width:0 !important; }
+    .fc-calendar-container { min-width:0 !important; width:100% !important; max-width:100% !important; overflow-x:auto !important; -webkit-overflow-scrolling:touch; box-sizing:border-box; }
+    .fc-calendar-container .fc { width:100% !important; min-width:0 !important; box-sizing:border-box; }
+    .fc-calendar-container .fc-view-container,
+    .fc-calendar-container .fc-view,
+    .fc-calendar-container .fc-day-grid-container { min-width:0 !important; width:100% !important; }
+    .fc-calendar-container .fc-day-grid { width:100% !important; table-layout:fixed !important; }
+    .fc-calendar-container .fc-day-grid-event { white-space:normal !important; word-break:break-word !important; overflow:hidden; }
 
     /* ---------- ⑨ 各工具页 ---------- */
     .task-grid { grid-template-columns:1fr; }
