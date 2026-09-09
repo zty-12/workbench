@@ -1,5 +1,5 @@
 // sw.js - 离线缓存（导航请求优先走网络，确保修改后的 index.html 能及时生效）
-const CACHE_NAME = 'workbench-v5';
+const CACHE_NAME = 'workbench-v6';
 const urlsToCache = [
   '.',
   'manifest.json',
