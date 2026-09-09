@@ -1,7 +1,17 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.11-mobile-split  2026-09-08  ★ 当前最新稿
+     v21.12-mobile-split  2026-09-09  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.12 追加修复（数据一致性漏洞）：
+     · 【重要】看板修改节点状态后显示"同步成功"，但任务分配页对应节点状态不同步、
+       切回看板修改丢失（回滚）。根因：syncToSupabase 上传成功后无条件
+       await loadFromSupabase()，用云端旧数据/旧快照整体覆盖本地 appData，
+       把用户刚改的节点状态覆盖回去（任务分配页读的也是被覆盖后的 nodes，故显示旧状态）。
+     · 修复：上传成功后不再回读覆盖本地 appData（清除待上传标记 + 可选创建版本快照 +
+       更新状态）；需要"以云端为准"的拉取，统一由 manualSync()（手动同步）与
+       startAutoSync()（30s 定时同步）显式调用 loadFromSupabase()。
+     · 保证只朝单向"本地修改 → 云端"，杜绝"上传后再被云端/快照覆盖回滚"。
 
      v21.11 追加修复：
      · 移动端首页"今天要处理"标题加 line-height，防止视觉上被挤压截断。
@@ -2378,9 +2388,13 @@ async function syncToSupabase(createSnapshotFlag = false) {
                     }
                 }
             }
-            await loadFromSupabase();
+            // 【修复 v21.12】上传成功后不再用云端/快照数据覆盖本地。
+            // 根因：自动上传的目的只是把本地修改推到云端，但这里却在推完后回读 loadFromSupabase()，
+            // 用云端旧数据/旧快照整体覆盖 appData，导致用户刚改的节点状态被覆盖回滚、任务分配页显示旧状态。
+            // 需要"以云端为准"的拉取，统一由 manualSync()（手动同步）和 startAutoSync()（30s 定时）显式调用 loadFromSupabase()。
+            // 上传成功仅：清除待上传标记 + 可选创建版本快照 + 更新状态。本地 appData 保持用户最新修改。
             updateSyncStatus(snapshotWarning ? ('同步成功（快照失败）' + (snapshotHint ? '：' + snapshotHint : '')) : '已同步', snapshotWarning ? 'error' : 'success');
-            console.log('✅ 所有数据同步完成');
+            console.log('✅ 所有数据同步完成（上传成功，未覆盖本地修改）');
         }
     } catch (err) {
         updateSyncStatus('上传失败', 'error');
