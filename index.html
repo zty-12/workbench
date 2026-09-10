@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.18-mobile-split  2026-09-09  ★ 当前最新稿
+     v21.19-mobile-split  2026-09-10  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
 
      v21.16 追加修复（用户 9-9 截图反馈：移动端日历视图右侧两处溢出）：
@@ -26,7 +26,20 @@
        恢复归档可能生成碰撞 id 被云端 upsert 覆盖。现已一并纳入扫描。
      · 【P2 隐患】初始化 loadData 读开关用 JSON.parse 无保护，localStorage 损坏会白屏。已加 try-catch。
 
-     v21.18 体验级小补丁（用户 22:36 确认"继续"——按上次核查报告中的低优先级建议实施）：
+     v21.19 追加修复（用户 9-10 反馈：控制台 settlements pkey 409 + 任务消失）：
+     · 【P0 崩溃】syncToSupabase 上传 settlements 时按 project_id dedupe，但 pkey(id) 仍要求唯一。
+       历史数据可能存在"两个不同 project_id 的 settlement 恰好 id 相同"（旧 getNextId 未扫
+       描归档/搁置/终止项目时生成碰撞 id），导致 `duplicate key value violates unique constraint
+       "settlements_pkey"` 整批 409 失败。本版在 syncToSupabase 与 syncSettlementsWithProjects
+       两端都补一道按 id 去重（_manual=true 优先），确保 settlementsData 上传前无重复 pkey。
+     · 【P0 根因】getNextId 扫描范围漏掉 archived/shelved/terminated 里的 projectData.id，
+       导致 _idCounter 偏小，新生成的 settlement id 与归档项目 id 撞车。v21.19 改为显式
+       提取 projectData 后再扫描，彻底消除 id 碰撞源头。
+     · 【P1 多实例警告】initSupabase 每次刷新都新建 supabase-js GoTrueClient，触发
+       `Multiple GoTrueClient instances detected` 警告，并可能在同一 storage key 下产生
+       并发未定义行为。v21.19 加守卫：已存在有效 client 直接复用。
+     · 【P1 PWA 图标 404】manifest.json 引用的 icon-192.png/icon-512.png 从未部署，
+       浏览器控制台报 GET 404。已生成 #1a3a5c 主题色 + 白色"工"字的 192/512 PNG。
      · renderHome"今天要处理"：原 _moreCount 只算"有日期任务"超出 6 条的部分，把"无日期但重要"
        任务吞掉——列表显示 6 条但"+N 更多"少算。改为以 slice 前的候选数组为基准，_moreCount =
        _todayCandidates.length - _todayList.length，让无日期任务超过 6 条的部分也正确计入。
@@ -1430,16 +1443,27 @@ async function mergeCloudStateBeforeUpload() {
             // 根因：旧实现直接 _idCounter++，若计数器因某条加载/快照路径变成 NaN 或低于实际最大值，
             // 会生成相同 id（如 'id_NaN'）；云端 tasks 表按 conflict:'id' upsert，两条相同 id 的任务
             // 会后者覆盖前者，下次拉取只剩一条 → 表现为"第二个任务替换掉第一个"。
-            // 此处从真实数据重算最大序号并防 NaN，彻底规避 id 碰撞。
+            // 【v21.19 强化】扫描范围必须覆盖 archived/shelved/terminated 里的 projectData.id，
+            // 否则归档项目 id 可能大于 _idCounter，新生成的 id 与归档项目/历史 settlements id 撞上，
+            // 上传时 settlements 表触发 duplicate key value violates unique constraint "settlements_pkey"。
             if (appData._idCounter === undefined || isNaN(appData._idCounter)) appData._idCounter = 0;
             let maxNum = 0;
-            [...appData.projects, ...appData.templates, ...appData.tasks, ...appData.workLogs, ...appData.settlements]
-                .forEach(it => {
-                    if (it.id && it.id.startsWith('id_')) {
-                        const n = parseInt(it.id.substring(3));
-                        if (!isNaN(n) && n > maxNum) maxNum = n;
-                    }
-                });
+            const _allIds = [
+                ...(appData.projects || []),
+                ...(appData.templates || []),
+                ...(appData.tasks || []),
+                ...(appData.workLogs || []),
+                ...(appData.settlements || [])
+            ];
+            (appData.archived || []).forEach(a => { if (a && a.projectData) _allIds.push(a.projectData); });
+            (appData.shelved || []).forEach(s => { if (s && s.projectData) _allIds.push(s.projectData); });
+            (appData.terminated || []).forEach(t => { if (t && t.projectData) _allIds.push(t.projectData); });
+            _allIds.forEach(it => {
+                if (it && it.id && typeof it.id === 'string' && it.id.startsWith('id_')) {
+                    const n = parseInt(it.id.substring(3));
+                    if (!isNaN(n) && n > maxNum) maxNum = n;
+                }
+            });
             if (appData._idCounter <= maxNum) appData._idCounter = maxNum;
             appData._idCounter++;
             saveData();
@@ -1552,6 +1576,14 @@ async function mergeCloudStateBeforeUpload() {
         }
 
         function initSupabase() {
+            // 【v21.19 修复】initSupabase 多次调用会创建多个 supabase-js GoTrueClient 实例，
+            // 触发 `Multiple GoTrueClient instances detected` 警告，并可能导致并发写入同一
+            // storage key 产生未定义行为（同一浏览器内多客户端共享 sb-*-auth-token）。
+            // 改为：已存在有效 client 直接复用，仅在配置变化或显式重置时才重建。
+            if (supabaseClient) {
+                const _cur = getSupabaseConfig();
+                if (_cur && _cur.url && _cur.anonKey) return true;
+            }
             const config = getSupabaseConfig();
             if (!config || !config.url || !config.anonKey) {
                 supabaseClient = null;
@@ -2359,6 +2391,22 @@ async function syncToSupabase(createSnapshotFlag = false) {
         });
         settlementsData = Object.values(_settlementByProject);
 
+        // 【v21.19 修复】settlements 表 id 主键去重。
+        // 历史数据中可能存在"两个不同 project_id 的 settlement 记录恰好有相同 id"（旧版
+        // getNextId 未扫描 archived/shelved/terminated 时生成的碰撞 id、跨设备离线同步等）。
+        // upsert 时虽然指定 onConflict='project_id'，但 pkey(id) 仍要求唯一 → 整批 409 失败，
+        // 表现就是日志里的 `duplicate key value violates unique constraint "settlements_pkey"`。
+        // 这里再做一次按 id 去重：_manual=true 优先，否则保留先出现的（与上面 byProject 一致）。
+        const _bySettleId = {};
+        settlementsData = settlementsData.filter(s => {
+            if (!s.id) return true;  // 无 id 的边角记录保留（理论上不存在）
+            const prev = _bySettleId[s.id];
+            if (!prev) { _bySettleId[s.id] = s; return true; }
+            if (s._manual && !prev._manual) { _bySettleId[s.id] = s; return true; }
+            console.warn('⚠️ settlements 上传前去重：发现重复 id', s.id, '丢弃一条');
+            return false;
+        });
+
         const dataReportsData = [];
         const years = new Set([...Object.keys(appData.dataReports.execution), ...Object.keys(appData.dataReports
             .environmental)]);
@@ -2779,6 +2827,18 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                 }
                 _byPid[s.projectId] = s;
                 return true;
+            });
+            // 【v21.19 修复】按 id 主键再去重一次：旧版 getNextId 未扫描归档数组时可能生成
+            // 与归档项目 id 撞车的 settlement id，导致云端 settlements_pkey 冲突、上传整批失败。
+            // _manual=true 优先，否则保留先出现的那条。
+            const _bySid = {};
+            appData.settlements = appData.settlements.filter(s => {
+                if (!s.id) return true;
+                const prev = _bySid[s.id];
+                if (!prev) { _bySid[s.id] = s; return true; }
+                if (s._manual && !prev._manual) { _bySid[s.id] = s; return true; }
+                console.warn('⚠️ 本地 settlements 重复 id 去重:', s.id);
+                return false;
             });
             // 【v21.16 审计修复】原只覆盖 active+archived，导致搁置/终止项目的结算记录被
             // 下方 validIds 过滤掉（同步时本地丢失）。改为覆盖全部四种状态，与归档保持一致，
