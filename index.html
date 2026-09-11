@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.19-mobile-split  2026-09-10  ★ 当前最新稿
+     v21.20-mobile-split  2026-09-11  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
 
      v21.16 追加修复（用户 9-9 截图反馈：移动端日历视图右侧两处溢出）：
@@ -45,6 +45,17 @@
        _todayCandidates.length - _todayList.length，让无日期任务超过 6 条的部分也正确计入。
      · editLog 弹窗的 ✕ 关闭按钮原 HTML 里没绑 onclick（确认了 Agent 报告是真的），只能靠取消
        按钮/背景关闭。给 button 加 id="editLogCloseBtn" 并在 createModal 后追加 addEventListener 关闭。
+
+     v21.20 追加修复（用户 9-11 反馈：桌面看板勾选完成，网页自动上传把完成态覆盖回未完成）：
+     · 【P0 数据回退】根因：桌面看板勾选完成 → PATCH 云端 tasks.completed=true（成功）；但网页工作台
+       30s 自动上传时，syncToSupabase 开头的 mergeCloudStateBeforeUpload 一旦因网络/权限波动抛错会被
+       try/catch 静默吞掉，网页随即用本地陈旧 completed=false 把整行 upsert 回云端 → 云端变 false →
+       桌面看板自动同步（load_data 读 tasks 表）被还原成"未完成"，网页刷新也显示未完成（用户 1b 现象）。
+     · 修复：在 syncToSupabase 中把任务完成态改为"云端 OR 本地"的独立单调合并——merge 之后、映射上传前
+       再读一次云端 tasks(completed)，只要云端已是完成就强制本地 completed=true 并落地 localStorage，
+       从而网页自动上传绝不会把看板刚勾选的完成态回退。该合并独立于原 merge，即使原 merge 抛错也生效。
+     · 桌面端联动：_sync_task_to_cloud 的 tasks PATCH 现同时回写 completed_date，使网页侧能拿到完成日期，
+       避免日历/统计显示错位。
 
      v21.15 追加修复（用户 9-9 截图反馈的 8 项移动端/PC 样式问题）：
      · 任务分配 PC 顶部"周期"下拉框改成与按钮同高的圆角白底样式，消除默认浏览器 select 的
