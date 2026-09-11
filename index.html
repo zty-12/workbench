@@ -26,7 +26,7 @@
        恢复归档可能生成碰撞 id 被云端 upsert 覆盖。现已一并纳入扫描。
      · 【P2 隐患】初始化 loadData 读开关用 JSON.parse 无保护，localStorage 损坏会白屏。已加 try-catch。
 
-     v21.19 追加修复（用户 9-10 反馈：控制台 settlements pkey 409 + 任务消失）：
+     v21.20 追加修复（用户 9-11 反馈：桌面看板勾选完成，网页自动上传把完成态覆盖回未完成）：
      · 【P0 崩溃】syncToSupabase 上传 settlements 时按 project_id dedupe，但 pkey(id) 仍要求唯一。
        历史数据可能存在"两个不同 project_id 的 settlement 恰好 id 相同"（旧 getNextId 未扫
        描归档/搁置/终止项目时生成碰撞 id），导致 `duplicate key value violates unique constraint
@@ -2259,6 +2259,22 @@ async function syncToSupabase(createSnapshotFlag = false) {
         // （最后写入者胜出）。此处按记录级时间戳判定谁更新，只接受更新的值。
         try { await mergeCloudStateBeforeUpload(); }
         catch (e) { console.warn('⚠️ 云端合并失败，按原逻辑上传:', e); }
+
+        // ===== 【v21.20修复】任务完成态"云端OR本地"单调合并（独立于上面的 merge，杜绝被静默吞错后覆盖）=====
+        // 根因：桌面看板勾选完成 → PATCH 云端 tasks.completed=true；但网页 30s 自动上传时，
+        // 若 mergeCloudStateBeforeUpload 因网络/权限波动抛错被上面 catch 静默吞掉，网页会用本地
+        // 陈旧 completed=false 把云端刚写入的 true 整行 upsert 回 false → 看板下次同步被还原成"未完成"。
+        // 此处独立再读一次云端完成态并做 OR，保证"云端已是完成"时网页上传绝不回退为未完成。
+        try {
+            const _doneRes = await supabaseClient.from('tasks').select('id, completed');
+            if (!_doneRes.error && _doneRes.data) {
+                const _cloudDone = new Map();
+                _doneRes.data.forEach(t => { if (t.completed) _cloudDone.set(t.id, true); });
+                appData.tasks.forEach(t => { if (_cloudDone.get(t.id)) t.completed = true; });
+                // 同步落地本地缓存，刷新后也能保持完成态
+                try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e2) {}
+            }
+        } catch (e2) { console.warn('⚠️ 云端完成态合并失败（不影响本次其他字段上传）:', e2); }
 
         // ===== 数据映射函数 =====
         const mapProject = (p) => ({
