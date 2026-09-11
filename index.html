@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.20-mobile-split  2026-09-11  ★ 当前最新稿
+     v21.22-mobile-split  2026-09-11  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
 
      v21.16 追加修复（用户 9-9 截图反馈：移动端日历视图右侧两处溢出）：
@@ -45,6 +45,16 @@
        _todayCandidates.length - _todayList.length，让无日期任务超过 6 条的部分也正确计入。
      · editLog 弹窗的 ✕ 关闭按钮原 HTML 里没绑 onclick（确认了 Agent 报告是真的），只能靠取消
        按钮/背景关闭。给 button 加 id="editLogCloseBtn" 并在 createModal 后追加 addEventListener 关闭。
+
+     v21.22 追加修复（用户 9-11 反馈：桌面看板勾选完成，网页工作台不显示完成）：
+     · 【P0 数据滞后】根因：loadFromSupabase 快照分支里"项目合并 + 去重 + 任务重建"全包在同一个
+       try/catch(e3) 中。若项目/去重任一环节抛错，异常被 e3 静默吞掉并直接 return，导致任务重建
+       （appData.tasks = pfTasks 即云端 true）被跳过，appData.tasks 停留在陈旧快照的 completed=false，
+       网页"已分配的任务 / 今日待办"迟迟不显示完成——而云端 tasks 表其实早已是 true。
+     · 修复：新增 reconcileTasksFromCloud(cloudTasks) 单调合并函数（云端 completed=true 时本地必为 true，
+       绝不回退，并补回云端有而本地缺失的任务行）；在快照分支与旧版分表分支两处"合并完 / 落盘前"
+       无条件调用，且独立 try/catch 包裹。无论上方合并是否异常，任务完成态都由云端 tasks 表兜底修正。
+     · 效果：桌面看板勾选完成 → 云端 tasks.completed=true → 网页任意一次同步/刷新后必显示 ✅完成。
 
      v21.20 追加修复（用户 9-11 反馈：桌面看板勾选完成，网页自动上传把完成态覆盖回未完成）：
      · 【P0 数据回退】根因：桌面看板勾选完成 → PATCH 云端 tasks.completed=true（成功）；但网页工作台
@@ -1780,6 +1790,9 @@ async function loadFromSupabase() {
                 } catch (e3) {
                     console.warn('⚠️ 合并云端项目/任务失败:', e3);
                 }
+                // 【v21.22】任务完成态最终保障：即便上方合并因异常被跳过，也用云端 tasks 表单调合并，
+                // 确保"桌面勾选完成 → 网页必显示完成"（true 不回退），并补回缺失的任务行
+                try { reconcileTasksFromCloud(pfTasks); } catch (e5) { console.warn('⚠️ 任务完成态最终保障合并失败:', e5); }
                 // 【v2修复】同步后比对：本地原有项目若在同步结果中消失，弹横幅警告并提供一键恢复
                 checkPostPullProjectLoss(_v2PrePullIds, _v2BackupJson);
                 return;
@@ -2093,6 +2106,8 @@ async function loadFromSupabase() {
         // 【v21.7】云端拉取后再同步一次"幽灵公司"，确保有项目的公司都登记进 companies，下次上传也会带上
         reconcileCompaniesFromProjects();
 
+        // 【v21.22】任务完成态最终保障：用云端 tasks 表单调合并（true 不回退），与快照分支保持一致
+        try { reconcileTasksFromCloud(pfTasks); } catch (e5) { console.warn('⚠️ 任务完成态最终保障合并失败:', e5); }
         // 保存到本地
         localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
         console.log('✅ 数据加载完成，共加载项目:', appData.projects.length);
@@ -2130,6 +2145,47 @@ async function loadFromSupabase() {
                 });
             appData._idCounter = maxId;
             localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+        }
+
+        // 【v21.22】任务完成态最终保障：云端 tasks.completed 是桌面看板直接 PATCH 的目标列，
+        // 也是"任务是否完成"的唯一权威来源。快照（snapshots 表）由网页上传时生成，桌面看板直接改
+        // tasks 表不会更新快照，因此快照里的 completed 可能滞后为 false。这里把云端 tasks 表与本地做
+        // 单调合并（云端为 true 时本地必为 true，且绝不把已完成回退为未完成），并补回云端有而本地缺失
+        // 的任务行。无论上方"项目/任务合并"是否因异常被跳过，本函数都会让完成任务正确显示。
+        function reconcileTasksFromCloud(cloudTasks) {
+            if (!appData.tasks) appData.tasks = [];
+            if (!cloudTasks || !cloudTasks.length) return;
+            const cloudById = new Map();
+            cloudTasks.forEach(t => { if (t && t.id) cloudById.set(t.id, t); });
+            if (!cloudById.size) return;
+
+            // 1) 单调合并：本地已存在的任务，云端为完成 → 本地置完成（不回退）
+            appData.tasks.forEach(local => {
+                const ct = cloudById.get(local.id);
+                if (ct && ct.completed && !local.completed) {
+                    local.completed = true;
+                    const cd = ct.completed_date || local.completedDate || new Date().toISOString().split('T')[0];
+                    local.completedDate = cd;
+                    // 已完成任务截断结束日到完成日，避免日历仍显示原长条
+                    if (!local.endDate || local.endDate > cd) local.endDate = cd;
+                }
+            });
+
+            // 2) 云端有而本地缺失的任务行补回（防止快照漏行导致网页完全看不到该任务）
+            const localIds = new Set(appData.tasks.map(t => t.id));
+            cloudTasks.forEach(ct => {
+                if (!ct || !ct.id || localIds.has(ct.id)) return;
+                appData.tasks.push({
+                    id: ct.id, projectId: ct.project_id, nodeIndex: ct.node_index, title: ct.title,
+                    dueDate: ct.due_date || null, completed: ct.completed || false,
+                    weekLabel: ct.week_label || '', monthLabel: ct.month_label || '',
+                    planDate: ct.plan_date || null,
+                    startDate: ct.start_date || ct.plan_date || ct.due_date || null,
+                    endDate: ct.end_date || ct.due_date || null, completedDate: ct.completed_date || null
+                });
+            });
+
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
         }
 
         async function createSnapshot() {
