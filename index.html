@@ -1,7 +1,29 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.22-mobile-split  2026-09-11  ★ 当前最新稿
+     v21.23-mobile-split  2026-09-12  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.23 追加修复（用户 9-12 反馈：保存工作日志后显示同步成功，但再添加日志时之前的日志消失）：
+     · 【P0 数据丢失】拉取工作日志原为 `appData.workLogs = 云端.map(...)` 整体覆盖。只要本次
+       上传没把新日志写进云端（上传失败/仍在防抖/整批被外键拒绝），下一次拉取就用云端旧数据
+       把本地新日志整批抹掉。改为 mergeWorkLogsFromCloud() 按 id 合并：云端有→采用云端版本；
+       本地有而云端没有→保留本地（多为未上传成功的新日志）；云端返回空而本地非空→判定为查询
+       异常，保留本地不丢数据。快照分支与分表分支两处均已替换。
+     · 【P0 上传整批失败】PostgREST 的 upsert 是整批事务：只要有一条日志的 project_id 违反
+       work_logs_project_id_fkey（实测 409 insert or update ... violates foreign key constraint），
+       整批日志都写不进去。现新增 upsertRowsOneByOne() 降级重试——批量失败后退化为逐条写入，
+       能写多少写多少，坏记录单独报错，不再拖垮整批。
+     · 【P1 静默丢弃】上传前原本把"关联项目不在主表"的日志直接 filter 掉，该日志永远同步不上。
+       改为把 project_id 置 null 后上传，内容一个字不丢且必定能写进云端（并打印告警）。
+     · 【P1 假成功提示】addWorkLog 无条件弹"日志已保存并同步"，实际同步还在后台且可能失败。
+       改为：先本地落盘 → 显式 syncToSupabase() → 按真实结果二次提示成功/失败原因。
+     · 【P1 草稿丢失】选择/取消关联项目、自动同步刷新都会重建整个日志卡片 DOM，导致用户已输入
+       未保存的正文被清空。新增 _captureLogDraft/_restoreLogDraft/safeRenderPage：重绘前后保住
+       草稿，并恢复原焦点与 TEXTAREA 光标位置。
+     · 【P1 必须强刷】startAutoSync 原为"检测到正在输入就跳过 renderPage"，用户停在输入框时
+       自动同步拉到了新数据也刷不出来，只能 Ctrl+Shift+R。改用 safeRenderPage 后照常刷新且
+       不打断输入，连带解决"数据更新必须手动强刷"的问题。
+
 
      v21.16 追加修复（用户 9-9 截图反馈：移动端日历视图右侧两处溢出）：
      · 根因：.cal-card / .cal-toolbar / .fc-calendar-container 在移动端 flex 链路上
@@ -1250,18 +1272,69 @@ function sortProjectsByOrder(projects) {
 }
 
 function selectLogProject(projectId) {
+    // 【v21.23】重绘会重建整个日志卡片，用户已经敲进去的正文/日期会被清掉。
+    // 表现为"选完关联项目回头想继续写，发现刚才的内容没了"。重绘前后取回填。
+    const _draft = _captureLogDraft();
     window._selectedLogProjectId = projectId;
     renderLogs(document.getElementById('mainContent'));
+    _restoreLogDraft(_draft);
 }
 
 function clearSelectedProject() {
+    const _draft = _captureLogDraft();
     window._selectedLogProjectId = null;
     renderLogs(document.getElementById('mainContent'));
+    _restoreLogDraft(_draft);
 }
 
 function handleLogProjectSelect(val) {
+    const _draft = _captureLogDraft();
     window._selectedLogProjectId = val || null;
     renderLogs(document.getElementById('mainContent'));
+    _restoreLogDraft(_draft);
+}
+
+// 【v21.23】工作日志草稿保护：页面/卡片重绘前取出尚未保存的输入，重绘后回填。
+// 覆盖场景：选择/取消关联项目、自动同步 renderPage、其它任何重建日志 DOM 的操作。
+function _captureLogDraft() {
+    try {
+        const ta = document.getElementById('logContent');
+        const dt = document.getElementById('logDate');
+        return { content: ta ? ta.value : '', date: dt ? dt.value : '' };
+    } catch (e) { return null; }
+}
+function _restoreLogDraft(draft) {
+    if (!draft) return;
+    try {
+        const ta = document.getElementById('logContent');
+        if (ta && draft.content) ta.value = draft.content;
+        const dt = document.getElementById('logDate');
+        if (dt && draft.date) dt.value = draft.date;
+    } catch (e) {}
+}
+// 【v21.23】安全刷新页面：无论用户是否正在输入都可以刷新，因为会
+// 1) 保住尚未保存的日志草稿 2) 恢复原焦点与光标位置。
+// 之前的实现是"检测到正在输入就跳过刷新"，结果是用户停在输入框里时，
+// 自动同步拉到了新数据也刷不出来，只能手动 Ctrl+Shift+R 强刷。
+function safeRenderPage(page) {
+    const draft = _captureLogDraft();
+    const ae = document.activeElement;
+    const aeId = (ae && ae.id) ? ae.id : null;
+    let s = null, e2 = null;
+    if (ae && ae.tagName === 'TEXTAREA') {
+        try { s = ae.selectionStart; e2 = ae.selectionEnd; } catch (err) {}
+    }
+    try { renderPage(page); } catch (err) { console.error('渲染失败:', err); }
+    _restoreLogDraft(draft);
+    if (aeId) {
+        try {
+            const el = document.getElementById(aeId);
+            if (el && typeof el.focus === 'function') {
+                el.focus();
+                if (s !== null && typeof el.setSelectionRange === 'function') el.setSelectionRange(s, e2);
+            }
+        } catch (err) {}
+    }
 }
 
 function formatDateISO(dateStr) {
@@ -1671,13 +1744,9 @@ async function loadFromSupabase() {
                 try {
                     const { data: wlData, error: wlErr } = await supabaseClient.from('work_logs').select('*');
                     if (!wlErr && wlData) {
-                        appData.workLogs = (wlData || []).map(w => ({
-                            id: w.id,
-                            date: w.date,
-                            type: w.type || 'daily',
-                            projectId: w.project_id || null,
-                            content: w.content || ''
-                        }));
+                        // 【v21.23】改为按 id 合并：本地有而云端没有的日志（多半是尚未上传成功的新日志）
+                        // 不再被抹掉，避免"保存成功但过一会儿日志消失"
+                        mergeWorkLogsFromCloud(wlData, '【快照】');
                     } else if (wlErr) {
                         console.warn('⚠️ 合并云端工作日志失败:', wlErr.message);
                     }
@@ -2043,7 +2112,8 @@ async function loadFromSupabase() {
             projectId: w.project_id || null,
             content: w.content || ''
         })) || [];
-        appData.workLogs = logs;
+        // 【v21.23】同上：改用安全合并，避免本地尚未上传的日志被整体覆盖丢失
+        mergeWorkLogsFromCloud(logs, '【分表】');
 
         // ===== 加载结算记录 =====
         let settlements = settlementsRes.data?.map(s => ({
@@ -2195,6 +2265,52 @@ async function loadFromSupabase() {
             });
 
             try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+        }
+
+        // 【v21.23】工作日志安全合并：以 id 为键把云端 work_logs 并入本地，
+        // 取代原来的 `appData.workLogs = 云端.map(...)` 整体覆盖。
+        // 原实现的致命处：只要本次上传没把新日志写进云端（上传失败/还在防抖/被外键判失败），
+        // 下一次拉取就会用云端旧数据把本地新日志整体抹掉 → "保存成功的日志过一会儿消失了"。
+        // 合并规则：
+        //   1) 云端有 → 采用云端版本（保持多端一致）
+        //   2) 本地有且云端没有 → 保留本地（很可能是尚未上传成功的新日志）
+        //      但若该 id 在 _deletedWorkLogIds 中（用户明确删过），则不复活
+        //   3) 云端返回空而本地非空 → 判定为查询异常/表级故障，保留本地不丢数据
+        function mergeWorkLogsFromCloud(cloudRows, contextLabel) {
+            if (!Array.isArray(appData.workLogs)) appData.workLogs = [];
+            const before = appData.workLogs.length;
+            if (!cloudRows || cloudRows.length === 0) {
+                if (before > 0) {
+                    console.warn('⚠️ ' + contextLabel + '：云端 work_logs 返回 0 条，但本地有 ' + before +
+                        ' 条日志，已保留本地数据（若确实要清空请逐条删除）');
+                }
+                return;
+            }
+            const deleted = new Set((appData._deletedWorkLogIds || []).filter(x => x));
+            const merged = [];
+            const seen = new Set();
+            cloudRows.forEach(w => {
+                if (!w || !w.id || seen.has(w.id)) return;
+                merged.push({
+                    id: w.id,
+                    date: w.date,
+                    type: w.type || 'daily',
+                    projectId: w.project_id || null,
+                    content: w.content || ''
+                });
+                seen.add(w.id);
+            });
+            let kept = 0, killed = 0;
+            appData.workLogs.forEach(l => {
+                if (!l || !l.id || seen.has(l.id)) return;
+                if (deleted.has(l.id)) { killed++; return; }
+                merged.push(l);
+                seen.add(l.id);
+                kept++;
+            });
+            appData.workLogs = merged;
+            console.log('📥 ' + contextLabel + ' 工作日志合并：云端 ' + seen.size + ' 条 / 本地原有 ' + before +
+                ' 条 → 合并后 ' + merged.length + ' 条（本地独有的 ' + kept + ' 条已保留，' + killed + ' 条因已删除未复活）');
         }
 
         async function createSnapshot() {
@@ -2467,8 +2583,22 @@ async function syncToSupabase(createSnapshotFlag = false) {
         let settlementsData = appData.settlements.map(mapSettlement);
 
         tasksData = tasksData.filter(t => projectIds.has(t.project_id));
-        // 过滤掉指向已不存在项目的日志，避免违反 work_logs.project_id 外键约束
-        workLogsData = workLogsData.filter(w => !w.project_id || projectIds.has(w.project_id));
+        // 【v21.23 修复】原来把"指向不存在项目的日志"直接丢弃。这样不仅该日志永远同步不上
+        // （每次拉取又被云端旧数据覆盖），更糟的是：只要漏过一条，它会带着 project_id 进入
+        // batch upsert，PostgREST 的 upsert 是**整批事务**，任意一条违反 work_logs_project_id_fkey
+        // 就会让整批 409 失败 → 所有日志都上传不了。
+        // 改为：把 project_id 置空后上传（内容一个字不丢，且必定能写进云端）。
+        const _badRefLogs = [];
+        workLogsData = workLogsData.map(w => {
+            if (w.project_id && !projectIds.has(w.project_id)) {
+                _badRefLogs.push(w.id + '→' + w.project_id);
+                return { ...w, project_id: null };
+            }
+            return w;
+        });
+        if (_badRefLogs.length) {
+            console.warn('⚠️ ' + _badRefLogs.length + ' 条日志关联的项目不在主表中，已改为"无关联"上传（内容保留）：' + _badRefLogs.join(', '));
+        }
         settlementsData = settlementsData.filter(s => projectIds.has(s.project_id));
 
         // 结算记录按 project_id 去重：数据库对 project_id 有唯一约束（一个项目一条结算），
@@ -2574,6 +2704,25 @@ async function syncToSupabase(createSnapshotFlag = false) {
             }
         } catch (err) { console.warn('⚠️ 清理已删除项目异常:', err); }
 
+        // 【v21.23】整批 upsert 失败后的降级重试：PostgREST 的 upsert 是整批事务，
+        // 一条坏数据（外键/约束）会让同批的其它正常记录全部写不进去。这里退化为逐条写入，
+        // 保证"能写进多少写多少"，坏记录单独报告而不是拖垮整批。
+        async function upsertRowsOneByOne(tableName, rows, onConflict) {
+            const ok = [], failed = [];
+            for (const row of rows) {
+                try {
+                    const { error } = await supabaseClient
+                        .from(tableName)
+                        .upsert(row, { onConflict: onConflict });
+                    if (error) failed.push({ row, err: error });
+                    else ok.push(row);
+                } catch (e) {
+                    failed.push({ row, err: e });
+                }
+            }
+            return { ok, failed };
+        }
+
         // ===== 执行上传 =====
         const tableConfigs = [
             { name: 'companies', data: companiesData, conflict: 'name' },
@@ -2597,11 +2746,26 @@ async function syncToSupabase(createSnapshotFlag = false) {
                     .from(table.name)
                     .upsert(table.data, { onConflict: table.conflict });
                 if (error) {
+                    // 【v21.23】work_logs 整批失败时降级逐条重试：日志是最容易因为
+                    // project_id 外键失效而整批 409 的表，一旦整批失败，用户新写的日志
+                    // 永远到不了云端，并在下次拉取时被旧数据覆盖 → "日志保存后消失"。
+                    if (table.name === 'work_logs' && table.data.length > 0) {
+                        console.warn('⚠️ work_logs 批量上传失败，降级为逐条重试:', error.message || error);
+                        const { ok, failed } = await upsertRowsOneByOne('work_logs', table.data, table.conflict);
+                        if (failed.length) {
+                            console.error('❌ work_logs 逐条重试后仍有 ' + failed.length + ' 条失败:');
+                            failed.forEach(f => console.error('   - ' + (f.row && f.row.id) + ':', (f.err && (f.err.message || f.err)) || f.err));
+                        }
+                        if (ok.length > 0) {
+                            console.log(`✅ work_logs 降级逐条写入：${ok.length}/${table.data.length} 条成功`);
+                            continue;  // 已抢救回大部分，不再判定为整体失败
+                        }
+                    }
                     console.error(`❌ ${table.name} 同步失败:`, error);
                     errors.push({ table: table.name, error });
                     hasError = true;
                 } else {
-                    console.log(`✅ ${table.name} 同步成功`);
+                    console.log(`✅ ${table.name} 同步成功（${table.data.length} 条）`);
                 }
             } catch (err) {
                 console.error(`❌ ${table.name} 同步异常:`, err);
@@ -3181,7 +3345,9 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
      	                 const ae = document.activeElement;
       	                 const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
       	                     ae.tagName === 'SELECT' || ae.isContentEditable);
-      	                 if (!typing) renderPage(currentPage);
+      	                 // 【v21.23】原逻辑：正在输入就跳过刷新 → 用户停在输入框时永远刷不出新数据，
+      	                 // 只能手动 Ctrl+Shift+R。改用 safeRenderPage：保住草稿/焦点后照常刷新。
+      	                 safeRenderPage(currentPage);
      	                 updateSyncStatus('已同步', 'success');
      	                 console.log('✅ 自动同步完成（已上传本地修改）');
      	            } else {
@@ -3193,14 +3359,13 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
       	                      const ae = document.activeElement;
       	                      const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
       	                          ae.tagName === 'SELECT' || ae.isContentEditable);
-      	                      if (typing) {
-      	                          console.log('⏸ 检测到正在输入（' + ae.tagName + '），本次自动同步跳过页面刷新（数据已更新）');
-      	                          updateSyncStatus('已同步', 'success');
-      	                      } else {
-      	                          renderPage(currentPage);
-      	                          updateSyncStatus('已同步', 'success');
-      	                          console.log('🔄 已重新渲染页面: ' + currentPage);
-        	                  }
+                      if (typing) {
+                          // 输入中同样刷新：草稿与光标已由 safeRenderPage 保护，不会打断输入
+                          console.log('🖊 正在输入（' + ae.tagName + '），仍执行刷新（草稿与焦点已保护）');
+                      }
+                      safeRenderPage(currentPage);
+                      updateSyncStatus('已同步', 'success');
+                      console.log('🔄 已重新渲染页面: ' + currentPage);
         	              console.log('✅ 自动拉取完成');
     	                  } catch (e) {
      	                      console.warn('⚠️ 自动拉取失败:', e);
@@ -5806,6 +5971,7 @@ function addWorkLog() {
     const dateInput = document.getElementById('logDate');
     const dateVal = dateInput && dateInput.value ? dateInput.value : new Date().toISOString().split('T')[0];
     const projectId = window._selectedLogProjectId || null;
+    if (!appData.workLogs) appData.workLogs = [];
     appData.workLogs.push({
         id: getNextId(),
         date: dateVal,
@@ -5813,13 +5979,30 @@ function addWorkLog() {
         projectId: projectId,
         content: content
     });
-    saveData(true);
+    // 【v21.23】原实现无条件弹“日志已保存并同步”，但同步其实在后台进行且**可能失败**，
+    // 导致用户以为已入库。真实情况是：若 work_logs 上传失败（例如整批被外键约束拒绝），
+    // 日志只存在于本地，下一次自动拉取就会被云端旧数据覆盖 → 表现为“日志消失”。
+    // 改为：先确保本地持久化，再显式上传并按真实结果反馈。
+    ensureColors();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+    updateBadges();
+    _pendingUpload = true;
     // 保存后默认取消关联项目，避免下次填写仍关联上次的项目
     window._selectedLogProjectId = null;
     const sel = document.getElementById('logDate');
     if (sel) sel.value = new Date().toISOString().split('T')[0];
     renderLogs(document.getElementById('mainContent'));
-    showToast('✅ 日志已保存并同步');
+    showToast('💾 日志已保存到本地，正在同步…');
+    if (supabaseClient && getSupabaseConfig()) {
+        syncToSupabase(true).then(() => {
+            showToast('✅ 日志已保存并同步到云端');
+        }).catch(err => {
+            console.error('❌ 日志同步失败（数据仍保留在本地，不会丢失）:', err);
+            showToast('⚠️ 日志已存本地，同步失败：' + (err && err.message ? err.message.substring(0, 60) : '未知错误'));
+        });
+    } else {
+        showToast('💾 日志已保存到本地（未配置云同步）');
+    }
 }
 
 
