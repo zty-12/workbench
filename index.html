@@ -2160,10 +2160,12 @@ async function loadFromSupabase() {
             if (!cloudById.size) return;
 
             // 1) 双向合并：以云端 completed 为权威，双向同步（true→true，false→false）
+            let _dbgChanged = 0;
             appData.tasks.forEach(local => {
                 const ct = cloudById.get(local.id);
                 if (ct && ct.completed !== local.completed) {
                     local.completed = !!ct.completed;
+                    _dbgChanged++;
                     if (ct.completed) {
                         const cd = ct.completed_date || local.completedDate || new Date().toISOString().split('T')[0];
                         local.completedDate = cd;
@@ -2176,6 +2178,7 @@ async function loadFromSupabase() {
                     }
                 }
             });
+            if (_dbgChanged > 0) console.log('🔧 reconcileTasks: 修正了 ' + _dbgChanged + ' 条任务的完成态（云端→本地）');
 
             // 2) 云端有而本地缺失的任务行补回（防止快照漏行导致网页完全看不到该任务）
             const localIds = new Set(appData.tasks.map(t => t.id));
@@ -3191,11 +3194,12 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
       	                      const typing = ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' ||
       	                          ae.tagName === 'SELECT' || ae.isContentEditable);
       	                      if (typing) {
-      	                          console.log('⏸ 检测到正在输入，本次自动同步跳过页面刷新（数据已更新）');
+      	                          console.log('⏸ 检测到正在输入（' + ae.tagName + '），本次自动同步跳过页面刷新（数据已更新）');
       	                          updateSyncStatus('已同步', 'success');
       	                      } else {
       	                          renderPage(currentPage);
-        	                      updateSyncStatus('已同步', 'success');
+      	                          updateSyncStatus('已同步', 'success');
+      	                          console.log('🔄 已重新渲染页面: ' + currentPage);
         	                  }
         	              console.log('✅ 自动拉取完成');
     	                  } catch (e) {
