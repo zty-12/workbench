@@ -2149,9 +2149,9 @@ async function loadFromSupabase() {
 
         // 【v21.22】任务完成态最终保障：云端 tasks.completed 是桌面看板直接 PATCH 的目标列，
         // 也是"任务是否完成"的唯一权威来源。快照（snapshots 表）由网页上传时生成，桌面看板直接改
-        // tasks 表不会更新快照，因此快照里的 completed 可能滞后为 false。这里把云端 tasks 表与本地做
-        // 单调合并（云端为 true 时本地必为 true，且绝不把已完成回退为未完成），并补回云端有而本地缺失
-        // 的任务行。无论上方"项目/任务合并"是否因异常被跳过，本函数都会让完成任务正确显示。
+        // tasks 表不会更新快照，因此快照里的 completed 可能滞后。这里把云端 tasks 表与本地做
+        // 双向合并（以云端为权威：云端 true → 本地 true，云端 false → 本地 false），并补回云端有
+        // 而本地缺失的任务行。无论上方"项目/任务合并"是否因异常被跳过，本函数都会让完成态正确显示。
         function reconcileTasksFromCloud(cloudTasks) {
             if (!appData.tasks) appData.tasks = [];
             if (!cloudTasks || !cloudTasks.length) return;
@@ -2159,15 +2159,21 @@ async function loadFromSupabase() {
             cloudTasks.forEach(t => { if (t && t.id) cloudById.set(t.id, t); });
             if (!cloudById.size) return;
 
-            // 1) 单调合并：本地已存在的任务，云端为完成 → 本地置完成（不回退）
+            // 1) 双向合并：以云端 completed 为权威，双向同步（true→true，false→false）
             appData.tasks.forEach(local => {
                 const ct = cloudById.get(local.id);
-                if (ct && ct.completed && !local.completed) {
-                    local.completed = true;
-                    const cd = ct.completed_date || local.completedDate || new Date().toISOString().split('T')[0];
-                    local.completedDate = cd;
-                    // 已完成任务截断结束日到完成日，避免日历仍显示原长条
-                    if (!local.endDate || local.endDate > cd) local.endDate = cd;
+                if (ct && ct.completed !== local.completed) {
+                    local.completed = !!ct.completed;
+                    if (ct.completed) {
+                        const cd = ct.completed_date || local.completedDate || new Date().toISOString().split('T')[0];
+                        local.completedDate = cd;
+                        // 已完成任务截断结束日到完成日，避免日历仍显示原长条
+                        if (!local.endDate || local.endDate > cd) local.endDate = cd;
+                    } else {
+                        local.completedDate = null;
+                        // 取消完成时恢复原始结束日（若有）
+                        if (ct.end_date) local.endDate = ct.end_date;
+                    }
                 }
             });
 
