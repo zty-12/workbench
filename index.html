@@ -1,7 +1,176 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.23-mobile-split  2026-09-12  ★ 当前最新稿
+     v21.35-mobile-split  2026-09-12  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.35 修复（专项：模板中心顺序保存）：
+     · 【P0 模板顺序保存后再次同步恢复原样】applyCloudSideTablesFromRes（快照分支）漏写
+       template_order 处理 → 走快照路径时模板顺序被云端 templates 表的主键顺序覆盖。
+       与非快照路径（loadFromSupabase 第 2334-2343 行）保持一致，应用 settings.template_order。
+     · 【顺带验证】company_order 已在该函数正确处理。
+     · 【P1 _dataVersion 数据污染】importData 将模块级 _dataVersion 设为数组 [] → 导出后污染。
+       已从删除列表移除。
+     · 【P0 item.id 存储型 XSS】viewReportHistory / viewReportDetail 中 item.id 裸插 onclick →
+       importData 导入恶意 JSON 可注入。改用 escAttr 转义（3 处）。
+     · 【P1 addReportField 重复字段】无去重检测 → 同名字段导致 querySelectorAll 覆盖。加检测。
+     · 【P1 importReportTemplate 无校验】type/fields/contents 无类型检查 → 可创建无效模板。
+       加 weekly/monthly 限制 + Array/object 校验。
+     · 【P2 tpl.tags[0] 空值】executeBatchImport / toggleProject 直接访问 tpl.tags[0] →
+       导入模板缺 tags 时 TypeError。加 (tpl.tags &&) 保护。
+     · 【P2 批量导入未同步结算】executeBatchImport 未调用 syncSettlementsWithProjects →
+       结算数据不更新。已补调用。
+     · 【P2 Blob URL 泄漏】exportData / exportReportTemplate 未 revoke → 长期内存泄漏。
+       已加 URL.revokeObjectURL。
+     · 【P1 批量导入标签缺失】executeBatchImport 存在性检查不含 tag → 同公司同模板不同标签被拒绝。
+       toggleProject 同问题。均已加 tag 维度。
+     · 【P1 导入内部字段污染】importData 未剥离墓碑/时间戳/版本号 → 跨设备导入后目标设备
+       继承源设备墓碑 → 上传时从云端删除目标设备独立创建的项目。已加内部字段剥离。
+       列表项已用 data-ckey 但编辑弹窗漏改。改用 data-ckey + getAttribute 安全模式。
+     · 【P1 公司云端复活】removeCompany 只记了项目墓碑，公司名本身无墓碑 → 上传只 upsert 不删行，
+       下次拉取用云端列表覆盖本地 → 公司"复活"。新增 _deletedCompanyNames 墓碑 + 上传删除 + 拉取过滤。
+     · 【P1 editSettlement 崩溃】v21.17 声明已修 inst.amount/inst.ratio 兜底但实际未落地。
+       旧分期记录缺 amount 字段时 toFixed 抛错 → 按钮静默无响应。加 ?? 0 兜底。
+     · 【P1 assignFromSelection 状态回退】无条件 node.status='progress'，已完成节点被误选时
+       done→progress 静默回退。加 done 检查跳过。
+     · 【P1 assignFromSelection 重复任务】同一节点可反复分配，产生多任务同 nodeIndex。
+       cycleNode/completeAllNodes 只 find 第一条。加已有未完成任务检查跳过。
+     · 【P1 日历完成日截断】completedDate 缺失时退到 todayStr，已完成任务长条跨月到当下。
+       改为缺失时不截断（用原结束日）。
+     · 【P1 统计口径不一致】柱图/折线用 p.status 判完成，饼图用 calcStatus(p.nodes)。
+       桌面看板只 PATCH nodes 不 PATCH status 时，同一项目同一页面出现两个相反数字。
+       统一为 calcStatus(nodes) || p.status === 'done'。
+     · 【P1 周起始日不一致】图表用周日(getDay()=0)为周起始，getWeekLabel 用周一。
+       周日完成任务在图表算"本周"、任务列表归"上周"。统一为周一，并加上周日上限。
+     · 【P2 提成模板负数比例】ratios 只过滤 NaN 不过滤负数。120,-20 总和 100 通过校验，
+       calcInstallmentAmounts 算出负金额。加 r >= 0 过滤。
+     · 【P1 XSS esc() 不转义引号】esc() 用 textContent→innerHTML 只转 & < >，不转引号。
+       公司名/标签名等用户数据放入 value="..." 属性时可注入新属性（如 X"onmouseover="alert(1)）。
+       已在 esc() 内统一补 &quot; 与 &#39; 转义，11+ 处调用点一次覆盖。
+     · 【P1 墓碑拉取侧不过滤 - 项目】_deletedProjectIds 在删除时记入，但云端拉取时（快照分支
+       + 分表分支）从不检查 → 云端删除失败的项目被下次同步复活。已在两处 filter 加墓碑排除。
+     · 【P1 墓碑拉取侧不过滤 - 任务】_deletedTaskIds 同上问题：safeAssignArray 覆盖本地前不
+       检查墓碑，reconcileTasksFromCloud 补回云端任务时也不检查。已在两处加墓碑过滤。
+     · 【P1 快照 payload 墓碑复活】applySnapshotPayload 合并了墓碑（local ∪ snapshot），
+       但合并后未用合并后的墓碑过滤 payload 数据 → 旧快照含已删项目/任务/日志时复活。
+       已补 projects/tasks/workLogs/archived/shelved/terminated 的墓碑过滤。
+     · 【P1 doneDate 时区回退】拉取快照/分表分支用 p.updated_at.split('T')[0] 取完成日期，
+       updated_at 为 UTC，本地 00:00–08:00 会退一天（如 09-12 02:00 本地 → 云端 09-11T18:00Z
+       → doneDate=09-11）。改为 fmtLocal(new Date(p.updated_at))，按本地时区取日期。
+     · 【P1 work_logs 未分页】快照分支合并云端日志用裸 select('*')（1000 行上限静默截断），
+       日志超千条时云端多出部分被丢弃。改为 fetchAllRows('work_logs') 分页拉全表。
+
+     v21.29 修复（专项：上传链路一致性 —— 改动标记清除时机）：
+     · 【P0 改动标记清除过早致双端回退】clearDoneEdits / clearNodesEdits 原本在
+       per-table 成功时即清除 _doneAt / _nodesAt。若本表成功、后续其它表失败使整批抛错，
+       标记已在内存中被清除但未落盘 → 重试时 hasFreshDoneEdit 为假，失去“本地新鲜改动优先”
+       保护，用户刚勾选/取消的完成态会被云端旧值或看板的相反操作静默顶回。
+       改为：仅当“全部表上传成功”后在成功分支统一清除，并立即 localStorage 落盘；
+       另补清 archived/shelved/terminated 的节点标记，避免重载后标记“复活”。
+
+     v21.28 修复（专项：双端协同复查 —— 补齐上传防线与分页盲区）：
+     · 【P1 nodes 无第二道防线】syncToSupabase 里任务完成态有独立的第二道防线
+       （mergeCloudStateBeforeUpload 失败被 catch 吞掉时兜底），但 projects.nodes
+       没有 —— 极端网络下网页会用陈旧 nodes 整行 upsert，把看板刚 PATCH 的节点
+       完成/取消顶回去。现抽取共享函数 mergeCloudProjectsIntoLocal，新增对称的
+       项目节点第二道防线（轻量列子集 id,nodes,status,done_date 再合并一次）。
+     · 【P1 合并与防线无分页】mergeCloudStateBeforeUpload 与任务防线原先直接
+       select('*')（1000 行上限静默截断），改用 fetchAllRows 分页 + 列裁剪。
+     v21.27 修复（专项：双端协同冲突 —— 工作台 ↔ 桌面看板互相覆盖）：
+     · 【P0 节点取消完成无效】mergeCloudStateBeforeUpload → mergeProjectNodes 只做
+       "云端 done → 本地 done"的单调合并，配合"已 done 项目不回退"，网页把节点
+       改回 progress/pending（cycleNode / 取消勾选）后，上传前合并又把节点改回 done
+       写回云端 → 用户操作被静默撤销。改为与 tasks 完全同构的双向合并
+       （云端为权威 + 本地新鲜改动优先），并新增 _nodesAt 改动标记（TTL 10 分钟）：
+       cycleNode / toggleTask / completeAllNodes / 分配任务 四处改节点时打标，
+       上传成功后清除，拉取时 capture/restore 回填。快照 payload 剔除 _nodesAt。
+     · 【P0 节点状态被快照回滚】applySnapshotPayload 与分表分支都会用云端行整体替换
+       appData.projects → 本地刚改、尚未上传的节点状态被抹掉。新增
+       capturePendingNodeEdits / restorePendingNodeEdits 在拉取前后保活。
+     · 【P0 项目状态自相矛盾】桌面看板只 PATCH projects.nodes 不写 status →
+       云端出现"status=done 但 nodes 未全完成"，网页显示已完成而进度条不满。
+       桌面侧已补 status/done_date 回写（并禁止覆盖 archived/shelved/terminated）。
+     · 【P1 完成日期漂移】mapProject 的 done_date 取 p.doneDate，为空就写 null；
+       而拉取侧在"status=done 且 done_date 空"时用 updated_at 兜底，网页每次上传都会
+       刷新 updated_at → 完成日期漂移成"最近一次上传日"（看板同样被污染）。
+       改为 status=done 时必定写出 done_date。
+     · 【P1 取消完成残留】toggleTask 取消最后一个任务后 p.doneDate 未清空
+       （与 cycleNode 行为不一致），结算页/月度统计仍按旧完成日期计入。
+     · 【P1 状态语义对齐】桌面 calc_status 对 [pending, progress] 混合节点判为 pending，
+       工作台判为 progress → 看板统计卡与工作台对不上。桌面已对齐网页 semantics。
+
+     v21.26 修复（全量代码审查第三批 + 剩余 P1/P2 全量清理）：
+     · 【P1 快照回滚】快照分支原先只合并 projects/tasks/workLogs，companies/templates/
+       settlements/data_reports/report_templates/commission_templates 直接取自快照 ——
+       云端期间有变更就会被回滚，随后 syncSettlementsWithProjects 还会把"云端有、快照没有"
+       的结算整条重建为未收款。现以云端表为权威重新合并（applyCloudSideTablesFromRes）。
+     · 【P1 并发】loadFromSupabase 无重入锁（并发拉取互相覆盖、先结束者提前解除
+       _disableAutoUpload → 半新半旧数据被推上云端）。新增 _loadingFromCloud 锁。
+     · 【P1 假成功】syncToSupabase 在 _uploading 时静默 return（调用方仍弹"✅ 已上传"）。
+       改为抛错，调用方按真实结果提示并可重试。
+     · 【P1 去重误删】上传/拉取去重键只含「公司+模板」，把「同公司同模板不同标签」的真实项目
+       当重复项 → 记入墓碑 → 云端行被物理删除。去重键补上 tag。
+     · 【P1 归档丢任务】归档/搁置/终止直接把任务从本地删掉，恢复项目时又分配新 id →
+       原任务 projectId 永久失配，日历与"已分配任务"再无任务。现归档前把任务快照存入
+       projectData，恢复时挂回（并对无备份的旧数据按旧 id 兜底认领）。
+     · 【P1 空数据覆盖】分表分支对 companies/templates/tasks/settlements/data_reports/
+       report_templates/commission_templates 直接赋云端空数组（RLS 拒绝即清空本地）。
+       新增 safeAssignArray() 空数据保护。
+     · 【P1 墓碑丢失】applySnapshotPayload 整体赋值会把本设备的 _deletedXxxIds 清空 →
+       已取消的项目/任务/日志复活。墓碑数组改为「本地 ∪ 快照」并集。
+     · 【P2 分页截断】select('*') 默认上限 1000 行，数据量大时被静默截断。
+       新增 fetchAllRows() 分页拉全表（projects/tasks/work_logs/settlements 等）。
+     · 【P2 分期尾差】各期金额分别四舍五入导致合计 ≠ 总提成。新增 calcInstallmentAmounts()，
+       尾差补到最后一个比例>0 的期上（0 占位期仍为 0）。
+     · 【P2 统计虚高】结算页"总提成/已结算"未过滤未完工项目。现只统计已完成项目。
+     · 【P2 索引错位】提成模板比例过滤掉了 0 占位期（50,0,50 → 2 期），
+       分期数变化导致已付状态按索引整体前移。改为保留 0 占位。
+     · 【P2 周标签跨年】getWeekLabel 不含年份，两年同一周标签完全相同。标签补年份。
+     · 【P2 完成日残留】取消节点完成后未清 p.doneDate，结算页仍按旧完成日期显示。
+     · 【P2 移动端静默失效】移动端项目卡片缺 data-company，updateTagByCard /
+       toggleMProjTypeByCard 直接 return（改标签/勾选类型完全无反应）。卡片补 data-company，
+       内联 onclick 里的公司名改为 this 传递。
+     · 【P2 XSS/取错值】标签与模板名未转义写入 <option value>；提成模板 key 裸插内联 JS；
+       移动端卡片 onclick 拼公司名。全部改为 escAttr 转义 + data-* 承载。
+     · 【P2 导入白屏】importData 整体替换 appData 且不补结构，导入旧备份后进页面即崩。
+       新增结构补全与类型兜底。
+     · 【P2 性能】getProjectName 每次全量重建项目数组（日志多时 O(n²)）。改为按数据版本
+       缓存索引（saveData 递增 _dataVersion 失效）。
+     · 【P2 重复定义】closeModal 在文件里定义两次，改错位置会静默失效。已去重。
+     · 【P2 缓存写失败】saveData 的 setItem 无 try，配额写满会打断调用链。已加 try。
+     · 【P2 快照互串】loadLatestSnapshot 只取全局最新，多设备会互相套用对方快照。
+       改为优先取本设备快照，没有再回退全局最新。
+     · 【P2 列自适应】tasks.completed_date 若云端已加列则一并上传（先探测，缺列自动不携带）。
+     · 【P2 取消语义】同公司同模板多项目（标签不同）时"取消勾选"二义，改为提示到总表按标签处理。
+
+     v21.25 修复（全量代码审查第二批）：
+     · 【P0 存储型 XSS】报告模板的 contenteditable 内容原样以 innerHTML 存进
+       appData.reportContents / reportHistory 并随快照进云端 —— 粘贴 <img src=x onerror=...>
+       后任何设备打开「📚 历史」都会执行任意 JS。现改为：输入统一存 textContent(innerText)；
+       渲染统一走 reportContentToSafeHtml()（DOMParser 惰性解析 → 纯文本 + <br> 后重新转义）。
+       历史里已存的 HTML 内容同样被安全显示，不再有执行风险。
+     · 【P1 金额被清零】syncSettlementsWithProjects 里"缺提成模板"与"模板金额为 0"都退化成
+       {total:0, ratios:[]}，导致删除提成模板后，已有结算的已付分期被整条重建为空、
+       settledAmount 归零（历史收款凭空消失）。现区分 cfgMissing：缺配置时只同步
+       项目名/标签/完成日期，绝不动 totalCommission / installments / settledAmount。
+     · 【P1 取消完成无效】上传前的云端完成态合并只做"false→true"单向 OR，网页端把任务勾掉
+       后又被云端 true 顶回来。现新增本地改动标记 _doneAt（仅本地、TTL 10 分钟）：
+       有新鲜本地改动时以本地为准（允许 false 覆盖云端 true），否则以云端为权威双向同步；
+       上传成功即清除标记；拉取时先 capture/restore，避免一次拉取把用户刚做的改动静默回滚。
+     · 快照 payload 会剔除 _doneAt（避免别的设备误判自己有待上传改动）。
+
+     v21.24 修复（全量代码审查第一批：日期时区 / id 计数 / XSS / 渲染容错）：
+     · 【P0 日期偏移】toISOString() 走 UTC，在 UTC+8 下所有"今天"在 00:00-08:00 会被记成
+       前一天；`new Date(y,m,1).toISOString()` 取月首更是 100% 退一天（09-01 → 08-31），
+       导致"本月/下月"分配任务、完成日、归档日、日志日期、结算期全部错位。新增
+       fmtLocal()/fmtLocalYM() 本地日期函数，全站 46 处 toISOString().split('T')[0] 已替换。
+     · 【P0 id 回退】applySnapshotPayload / 分表拉取里 `appData._idCounter = maxId` 改为
+       Math.max(旧值, maxId) 只增不减 —— 快照越旧值越小，回退后会复用云端已占用的 id，
+       upsert 按 conflict:'id' 会顶掉别人的行（历史"第二个任务替换第一个"同源漏洞）。
+     · 【P0 XSS】PC 项目总表把公司名裸插进内联 onchange（含 ' 截断 JS、含 " 闭合属性可注入）。
+       改为 data-company + data-tid 读值，事件与数据分离；新增 escAttr() 转义属性引号。
+     · 【P1 渲染容错】renderPage 加统一 try-catch，任一页面渲染抛错（如某条日志 date 为空
+       触发 localeCompare 报错）不再让"点菜单没反应"，改为渲染可见错误提示。
+     · 加固 workLogs / 项目总表的 localeCompare 排序，date/company 为空不再抛错。
 
      v21.23 追加修复（用户 9-12 反馈：保存工作日志后显示同步成功，但再添加日志时之前的日志消失）：
      · 【P0 数据丢失】拉取工作日志原为 `appData.workLogs = 云端.map(...)` 整体覆盖。只要本次
@@ -1337,26 +1506,206 @@ function safeRenderPage(page) {
     }
 }
 
+// 【v21.24】本地日期格式化 —— 日期铁律
+// toISOString() 永远按 UTC 输出，本地 2026-09-12 00:30 会被记成 09-11（00:00-08:00 全中招）；
+// new Date(y, m, 1) 这种"本地月首"再 toISOString() 更是 100% 退一天（09-01 → 08-31）。
+// 所有"今天 / 某天"的日期取值一律走 fmtLocal / fmtLocalYM，禁止再用 toISOString().split('T')[0]。
+function fmtLocal(d) {
+    const dt = (d instanceof Date && !isNaN(d.getTime())) ? d : new Date();
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+function fmtLocalYM(d) {
+    const dt = (d instanceof Date && !isNaN(d.getTime())) ? d : new Date();
+    return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// 【v21.25】本地完成态改动标记 —— 让"网页端取消完成"也能生效
+// 背景：上传前的云端合并（mergeCloudStateBeforeUpload / _doneRes）只做"false→true"单调合并，
+// 导致网页把任务勾掉（false）后又被云端 true 顶回来，"取消完成永远无效"。
+// 方案：网页端每次改任务完成态时打一个本地时间戳 _doneAt（只存 localStorage，不上传、不进快照）；
+//      合并时若发现本地有"新鲜"的改动，就尊重本地（允许 false 覆盖云端 true）；
+//      没有本地改动时才以云端为权威。TTL 兜底，避免一次失败让本地永久偏离云端。
+const _DONE_EDIT_TTL = 10 * 60 * 1000;   // 10 分钟
+function markTaskDoneEdited(t) { if (t && t.id) t._doneAt = Date.now(); }
+function hasFreshDoneEdit(t) {
+    return !!(t && t._doneAt && (Date.now() - t._doneAt) < _DONE_EDIT_TTL);
+}
+function clearDoneEdits(list) {
+    (list || appData.tasks || []).forEach(t => { if (t) delete t._doneAt; });
+}
+// 拉取会整体替换 appData.tasks，先用它把"尚未上传的本地完成态改动"存下来，拉取后回填
+function capturePendingDoneEdits() {
+    const m = {};
+    (appData.tasks || []).forEach(t => {
+        if (t && t.id && hasFreshDoneEdit(t)) {
+            m[t.id] = { completed: !!t.completed, completedDate: t.completedDate || null,
+                        endDate: t.endDate || null, _doneAt: t._doneAt };
+        }
+    });
+    return m;
+}
+function restorePendingDoneEdits(m) {
+    if (!m || !Object.keys(m).length) return;
+    (appData.tasks || []).forEach(t => {
+        if (!t || !t.id || !m[t.id]) return;
+        t.completed = m[t.id].completed;
+        t.completedDate = m[t.id].completedDate;
+        t.endDate = m[t.id].endDate;
+        t._doneAt = m[t.id]._doneAt;
+    });
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+}
+
+// 【v21.27】项目节点改动标记 —— 与上面的任务 _doneAt 完全同构，解决"双端互相覆盖"。
+// 背景（实测冲突）：
+//   ① 网页把节点从 done 改回 progress/pending（cycleNode、取消勾选）→ 上传前的
+//      mergeProjectNodes 只做"云端 done → 本地 done"的单调合并 → 又把节点改回 done 写回云端，
+//      用户操作被静默撤销（工作台"取消完成无效"的节点版）。
+//   ② 桌面看板取消节点完成 → PATCH projects.nodes → 网页下次上传又按单调合并把 done 顶回去。
+//   ③ 桌面看板读的是快照，快照由网页上传时才生成，因此桌面自己写的节点状态会被旧快照回滚。
+// 方案：本地改节点时打 _nodesAt 时间戳（只存本机 localStorage，不上传、不进快照）；
+//      合并时若本地新鲜 → 尊重本地（允许 false 覆盖云端 true）；否则以云端为权威做双向同步。
+const _NODES_EDIT_TTL = 10 * 60 * 1000;   // 10 分钟
+function markProjectNodesEdited(p) { if (p && p.id) p._nodesAt = Date.now(); }
+function hasFreshNodesEdit(p) {
+    return !!(p && p._nodesAt && (Date.now() - p._nodesAt) < _NODES_EDIT_TTL);
+}
+function clearNodesEdits(list) {
+    (list || appData.projects || []).forEach(p => { if (p) delete p._nodesAt; });
+}
+// 拉取会整体替换 appData.projects，先存下"尚未上传的本地节点改动"，拉取后回填
+function capturePendingNodeEdits() {
+    const m = {};
+    (appData.projects || []).forEach(p => {
+        if (p && p.id && hasFreshNodesEdit(p)) {
+            m[p.id] = {
+                nodes: JSON.parse(JSON.stringify(p.nodes || [])),
+                status: p.status, doneDate: p.doneDate || null, _nodesAt: p._nodesAt
+            };
+        }
+    });
+    return m;
+}
+function restorePendingNodeEdits(m) {
+    if (!m || !Object.keys(m).length) return;
+    (appData.projects || []).forEach(p => {
+        if (!p || !p.id || !m[p.id]) return;
+        p.nodes = m[p.id].nodes;
+        p.status = m[p.id].status;
+        p.doneDate = m[p.id].doneDate;
+        p._nodesAt = m[p.id]._nodesAt;
+    });
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+}
+
 function formatDateISO(dateStr) {
     if (!dateStr) return '';
     try {
         const d = new Date(dateStr);
         if (isNaN(d.getTime())) return dateStr;
-        return d.toISOString().split('T')[0];
+        return fmtLocal(d);
     } catch { return dateStr; }
 }
 
+// 【v21.26 / P2】原实现每次调用都重建包含全部项目（含归档/搁置/终止展开拷贝）的数组再 find，
+// 日志/任务列表渲染时是 O(n²) 级开销（数据一多就卡）。这里改为「按数据版本号缓存的索引表」，
+// 数据一旦经 saveData 落盘即失效重建，渲染期间多次取用只付一次代价。
+let _projNameIndex = null;
+let _projNameIndexVersion = -1;
+
 function getProjectName(projectId) {
     if (!projectId) return '未绑定';
-    const allProjects = [
-        ...appData.projects.map(p => ({ ...p, _type: 'active' })),
-        ...appData.archived.map(a => ({ ...a.projectData, _type: 'archived' })),
-        ...appData.shelved.map(s => ({ ...s.projectData, _type: 'shelved' })),
-        ...appData.terminated.map(t => ({ ...t.projectData, _type: 'terminated' }))
-    ];
-    const p = allProjects.find(pr => pr.id === projectId);
-    if (p) return `${p.company}-${getTplName(p.templateId)}`;
-    return '已删除项目';
+    if (!_projNameIndex || _projNameIndexVersion !== _dataVersion) {
+        const map = new Map();
+        const put = (p) => {
+            if (!p || !p.id || map.has(p.id)) return;
+            map.set(p.id, `${p.company}-${getTplName(p.templateId)}`);
+        };
+        (appData.projects || []).forEach(put);
+        (appData.archived || []).forEach(a => put(a && a.projectData));
+        (appData.shelved || []).forEach(s => put(s && s.projectData));
+        (appData.terminated || []).forEach(t => put(t && t.projectData));
+        _projNameIndex = map;
+        _projNameIndexVersion = _dataVersion;
+    }
+    return _projNameIndex.get(projectId) || '已删除项目';
+}
+
+// ============================================================
+// 【v21.28】云端 projects 行 → 本地节点/状态双向合并（共享核心，两处调用）：
+//   1) mergeCloudStateBeforeUpload —— 上传前的第一道合并（读全表）；
+//   2) syncToSupabase 里的"项目节点第二道防线" —— 第一道因网络/权限波动被
+//      catch 静默吞掉时，用轻量列子集（id,nodes,status,done_date）再独立合并一次，
+//      防止本地陈旧 nodes 把桌面看板刚 PATCH 的节点完成态/取消操作整行 upsert 顶回去
+//      （此前只有 tasks.completed 有第二道防线，nodes 没有 —— 双端"取消节点完成"
+//      在极端网络下仍可能被撤销）。
+// 合并策略与 tasks 同构：本地新鲜改动（_nodesAt 未过期）优先，否则云端为权威双向同步。
+// ============================================================
+function mergeCloudProjectsIntoLocal(cloudProjects) {
+    if (!Array.isArray(cloudProjects) || !cloudProjects.length) return 0;
+    const pById = new Map(cloudProjects.map(p => [p.id, p]));
+    let projMerged = 0;
+
+    const mergeProjectNodes = (localProject) => {
+        if (!localProject || !Array.isArray(localProject.nodes)) return;
+        const cp = pById.get(localProject.id);
+        if (!cp || !Array.isArray(cp.nodes)) return;
+        if (hasFreshNodesEdit(localProject)) { projMerged++; return; }
+
+        if (cp.nodes.length === localProject.nodes.length) {
+            localProject.nodes.forEach((ln, i) => {
+                const cn = cp.nodes[i];
+                if (!cn || !ln) return;
+                if ((cn.status || 'pending') !== (ln.status || 'pending')) {
+                    ln.status = cn.status || 'pending';
+                    projMerged++;
+                }
+            });
+        } else {
+            console.warn('ℹ️ 项目 ' + localProject.id + ' 云端节点数(' + cp.nodes.length +
+                ')与本地(' + localProject.nodes.length + ')不一致，本次跳过节点状态合并（避免错位）');
+        }
+
+        // 项目整体状态：以云端为权威（双向）。云端 status 未维护（仍是 active）时用 nodes 推断。
+        let cloudStatus = cp.status || 'active';
+        if (cloudStatus === 'active') {
+            cloudStatus = (cp.nodes.length && cp.nodes.every(n => n && n.status === 'done')) ? 'done' : calcStatus(cp.nodes);
+        }
+        // 归档/搁置/终止项目不在主表里流转，只做节点同步，绝不改它们的 status / doneDate。
+        if (cloudStatus === 'archived' || cloudStatus === 'shelved' || cloudStatus === 'terminated') return;
+        if (cloudStatus && cloudStatus !== localProject.status) {
+            localProject.status = cloudStatus;
+            projMerged++;
+        }
+        if (cloudStatus === 'done') {
+            if (cp.done_date) localProject.doneDate = cp.done_date;
+            else if (!localProject.doneDate) localProject.doneDate = fmtLocal();
+        } else if (localProject.doneDate) {
+            localProject.doneDate = null;
+            projMerged++;
+        }
+    };
+
+    appData.projects.forEach(mergeProjectNodes);
+    (appData.archived || []).forEach(a => a.projectData && mergeProjectNodes(a.projectData));
+    (appData.shelved || []).forEach(s => s.projectData && mergeProjectNodes(s.projectData));
+    (appData.terminated || []).forEach(t => t.projectData && mergeProjectNodes(t.projectData));
+
+    // 合并后按本地 nodes 重算项目整体状态：云端权威合并已做完，
+    // 此处只是把 status/doneDate 与 nodes 收敛到一致（取消完成必须能回退）。
+    appData.projects.forEach(p => {
+        const calc = calcStatus(p.nodes);
+        if (p.status !== calc) { p.status = calc; projMerged++; }
+        if (calc === 'done') {
+            if (!p.doneDate) { p.doneDate = fmtLocal(); projMerged++; }
+        } else if (p.doneDate) {
+            p.doneDate = null;
+            projMerged++;
+        }
+    });
+
+    return projMerged;
 }
 
 // ============================================================
@@ -1374,81 +1723,44 @@ function getProjectName(projectId) {
 // ============================================================
 async function mergeCloudStateBeforeUpload() {
     if (!supabaseClient) return;
-    const [pRes, tRes] = await Promise.all([
-        supabaseClient.from('projects').select('*'),
-        supabaseClient.from('tasks').select('*')
+    // 【v21.28】改用 fetchAllRows 分页拉全表：PostgREST 单次上限 1000 行，
+    // 数据量过千时 select('*') 会被静默截断 → 合并遗漏 → 上传反而把云端新状态覆盖回旧值
+    // （与拉取侧 loadFromSupabase 的 _safeFetch 保持一致）。
+    const [cloudProjects, cloudTasks] = await Promise.all([
+        fetchAllRows('projects'),
+        fetchAllRows('tasks')
     ]);
-    if (pRes.error) throw new Error('读取云端 projects 失败: ' + (pRes.error.message || ''));
-    if (tRes.error) throw new Error('读取云端 tasks 失败: ' + (tRes.error.message || ''));
-    const cloudProjects = pRes.data || [];
-    const cloudTasks = tRes.data || [];
     if (!cloudProjects.length && !cloudTasks.length) return;
 
-    const pById = new Map(cloudProjects.map(p => [p.id, p]));
     const tById = new Map(cloudTasks.map(t => [t.id, t]));
 
     let taskMerged = 0;
-    let projMerged = 0;
 
-    // ===== 任务：完成状态单调合并 =====
+    // ===== 任务：完成状态合并 =====
+    // 【v21.25】本地有"刚改过完成态"的标记（_doneAt 且未过期）时尊重本地，
+    // 否则以云端为权威做双向同步（云端 false 也能纠正本地陈旧的 true）。
     appData.tasks.forEach(localTask => {
         const ct = tById.get(localTask.id);
         if (!ct) return;
-        if (ct.completed && !localTask.completed) {
-            localTask.completed = true;
-            const todayStr = new Date().toISOString().split('T')[0];
-            localTask.completedDate = ct.completed_date || todayStr;
+        if (hasFreshDoneEdit(localTask)) return;   // 本地改动优先，交由本次上传写回云端
+        const cloudDone = !!ct.completed;
+        if (cloudDone === !!localTask.completed) return;
+        localTask.completed = cloudDone;
+        if (cloudDone) {
+            const cd = ct.completed_date || fmtLocal();
+            localTask.completedDate = cd;
             // 已完成任务截断结束日到完成日，避免日历仍显示原长条
-            if (!localTask.endDate || localTask.endDate > localTask.completedDate) {
-                localTask.endDate = localTask.completedDate;
-            }
-            taskMerged++;
+            if (!localTask.endDate || localTask.endDate > cd) localTask.endDate = cd;
+        } else {
+            localTask.completedDate = null;
+            localTask.endDate = ct.end_date || localTask.dueDate || localTask.planDate || null;
         }
+        taskMerged++;
     });
 
-    // ===== 项目节点：完成状态单调合并 =====
-    const mergeProjectNodes = (localProject) => {
-        if (!localProject || !Array.isArray(localProject.nodes)) return;
-        const cp = pById.get(localProject.id);
-        if (!cp || !Array.isArray(cp.nodes)) return;
-        localProject.nodes.forEach((ln, i) => {
-            const cn = cp.nodes[i];
-            if (!cn) return;
-            // 完成态单调：云端 done 优先采纳，绝不回退
-            if (cn.status === 'done' && ln.status !== 'done') {
-                ln.status = 'done';
-                projMerged++;
-            }
-        });
-        // 项目整体状态同步：云端 done 且本地未 done → 采纳
-        if (cp.status === 'done' && localProject.status !== 'done') {
-            localProject.status = 'done';
-            if (cp.done_date && !localProject.doneDate) {
-                localProject.doneDate = cp.done_date;
-            }
-            projMerged++;
-        }
-    };
-
-    appData.projects.forEach(mergeProjectNodes);
-    (appData.archived || []).forEach(a => a.projectData && mergeProjectNodes(a.projectData));
-    (appData.shelved || []).forEach(s => s.projectData && mergeProjectNodes(s.projectData));
-    (appData.terminated || []).forEach(t => t.projectData && mergeProjectNodes(t.projectData));
-
-    // 节点合并后重算项目整体状态（保持单调：已完成项目不回退）
-    appData.projects.forEach(p => {
-        const calc = calcStatus(p.nodes);
-        if (p.status === 'done') {
-            // 已 done 的项目保持 done，不回退
-            if (!p.doneDate) p.doneDate = new Date().toISOString().split('T')[0];
-        } else if (calc === 'done') {
-            p.status = 'done';
-            if (!p.doneDate) p.doneDate = new Date().toISOString().split('T')[0];
-            projMerged++;
-        } else if (calc !== p.status) {
-            p.status = calc;
-        }
-    });
+    // 【v21.28】项目节点/状态合并逻辑已抽取为共享函数（与 syncToSupabase 的
+    // "项目节点第二道防线"共用同一份实现，杜绝两处逻辑漂移）。
+    const projMerged = mergeCloudProjectsIntoLocal(cloudProjects);
 
     if (taskMerged || projMerged) {
         console.log(`🔁 云端合并：${taskMerged} 条任务完成态、${projMerged} 处节点/项目完成态已同步到本地（防止上传覆盖）`);
@@ -1459,6 +1771,15 @@ async function mergeCloudStateBeforeUpload() {
 	let _uploading = false;              // 上传锁
 	let _disableAutoUpload = false;      // 禁止自动上传（用于同步/加载时）
 	let _pendingUpload = false;          // 本地有待上传的修改（用于自动同步上传优先）
+	// 【v21.26】拉取重入锁：并发 loadFromSupabase 会互相覆盖；且先结束者会提前把
+	// _disableAutoUpload 置回 false，导致后一次拉取进行中 saveData 触发上传，
+	// 把"半新半旧"的数据推到云端。加锁后同一时刻只允许一次拉取。
+	let _loadingFromCloud = false;
+	// 【v21.26 / P2】云端 tasks 表是否有 completed_date 列（null=未探测）。
+	// 当前云端没有该列，带该字段上传会被 PostgREST 400 拒绝（PGRST204），故先探测再决定是否携带。
+	let _tasksHasCompletedDate = null;
+	// 【v21.26】数据版本号：每次 saveData 递增，用于让 getProjectName 等处的一次性索引缓存失效
+	let _dataVersion = 0;
         let calViewMode = 'month';
         let calFilterProject = 'all';
         let calFilterStatus = 'all';
@@ -1499,11 +1820,21 @@ async function mergeCloudStateBeforeUpload() {
             projectTypeColors: {},
             _idCounter: 0,
             _deletedProjectIds: [],   // 【v21.5修复】已取消项目的墓碑：上传时从云端精确删除
+            _deletedTaskIds: [],
+            _deletedWorkLogIds: [],
+            _deletedCompanyNames: [],  // 【v21.32】已删除公司的墓碑：上传时从云端精确删除
         };
 
         // ---------- 辅助函数 ----------
         function esc(s) { if (!s) return ''; const d = document.createElement('div');
-            d.textContent = s; return d.innerHTML; }
+            d.textContent = s; return d.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
+
+        // 【v21.24】属性值转义：esc() 只处理 & < >，不处理引号。公司名/标签名等用户数据
+        // 写进 HTML 属性时必须再转义引号，否则含 " 的值会提前闭合属性（可注入），
+        // 含 ' 的值写进内联事件则截断 JS 字符串（点击报错）。读取时浏览器会自动还原实体。
+        function escAttr(s) {
+            return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
 
         function getTplName(id) { const t = appData.templates.find(tp => tp.id === id); return t ? t.name : '未知'; }
 
@@ -1524,7 +1855,10 @@ async function mergeCloudStateBeforeUpload() {
 
         function getWeekLabel(d) { const date = new Date(d); const day = date.getDay(); const mon = new Date(date);
             mon.setDate(date.getDate() - (day === 0 ? 6 : day - 1)); const sun = new Date(mon);
-            sun.setDate(mon.getDate() + 6); return `W:${mon.getMonth()+1}/${mon.getDate()}-${sun.getMonth()+1}/${sun.getDate()}`; }
+            // 【v21.26 / P2】标签带年份：旧格式 `W:9/7-9/13` 不含年份，跨年时两周标签完全相同
+            // （如 2026/1/1 与 2027/1/1 所在周），导致两年的任务被归到同一组。
+            sun.setDate(mon.getDate() + 6);
+            return `W:${mon.getFullYear()}/${mon.getMonth()+1}/${mon.getDate()}-${sun.getFullYear()}/${sun.getMonth()+1}/${sun.getDate()}`; }
 
         function getMonthLabel(d) { const date = new Date(d); return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}`; }
 
@@ -1638,7 +1972,11 @@ async function mergeCloudStateBeforeUpload() {
 
         function saveData(force = false) {
             ensureColors();
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+            // 【v21.26 / P2】setItem 加 try：localStorage 配额写满会抛 QuotaExceededError，
+            // 原代码不捕获会让整个调用链中断（其它写入点都已有 try，唯独此处漏了）。
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); }
+            catch (e) { console.warn('⚠️ 本地缓存写入失败（可能超出配额）:', e); }
+            _dataVersion++;   // 【v21.26】让 getProjectName 等索引缓存失效
             updateBadges();
             // 标记本地有待上传的修改（加载/同步过程中产生的写入不标记，避免误触发上传）
             if (!_disableAutoUpload) _pendingUpload = true;
@@ -1699,13 +2037,33 @@ async function mergeCloudStateBeforeUpload() {
         // ---------- 从 Supabase 加载 ----------
 async function loadFromSupabase() {
     if (!supabaseClient) throw new Error('Supabase 未初始化');
+    // 【v21.26】重入保护：已有拉取在进行时直接跳过本次（不能再设 _disableAutoUpload，
+    // 否则本次 return 后运行中的那次 finally 会把它置回 false，反而提前解锁）
+    if (_loadingFromCloud) {
+        console.warn('⚠️ 已有数据拉取进行中，跳过本次拉取');
+        return false;
+    }
+    _loadingFromCloud = true;
     _disableAutoUpload = true;
+    // 【v21.25】记住"尚未上传的本地完成态改动"（网页端刚勾选/取消的完成态），
+    // 拉取会整体替换 appData.tasks，结束后回填，避免这次拉取把用户的改动静默抹掉
+    const _pendingDoneEdits = capturePendingDoneEdits();
+    // 【v21.27】同理记住"尚未上传的本地节点改动"（cycleNode / 取消勾选节点都会打 _nodesAt）。
+    // 拉取分支里 appData.projects 会被云端行整体替换，若不回填，用户刚取消的节点完成态
+    // 会被云端旧值覆盖回来 —— 表现为"取消完成无效"（桌面看板侧同理）。
+    const _pendingNodeEdits = capturePendingNodeEdits();
     // 【v2修复】记录拉取前的本地项目全集 + 完整数据备份，用于同步后检测“项目被云端数据抹掉”的情况
     const _v2PrePullIds = collectAllProjectIds();
     let _v2BackupJson = null;
     try { _v2BackupJson = JSON.stringify(appData); } catch (e) {}
     try {
         console.log('🔵 开始从 Supabase 加载数据...');
+
+        // 【v21.26】统一封装：分页拉全表（避免 1000 行截断），失败时返回 {data:[], error}
+        const _safeFetch = async (table) => {
+            try { return { data: await fetchAllRows(table), error: null }; }
+            catch (e) { return { data: [], error: e }; }
+        };
 
         // 连接测试
         try {
@@ -1722,8 +2080,8 @@ async function loadFromSupabase() {
         // 2) 云端项目为空但本地有项目 → 视为异常（云端数据可能被误删/未上传成功），中止并保留本地。
         // 只有预检通过，才允许应用快照 / 用云端数据覆盖本地。
         const [pfProjRes, pfTaskRes] = await Promise.all([
-            supabaseClient.from('projects').select('*'),
-            supabaseClient.from('tasks').select('*')
+            _safeFetch('projects'),
+            _safeFetch('tasks')
         ]);
         if (pfProjRes.error) {
             throw new Error('云端 projects 表查询失败: ' + (pfProjRes.error.message || JSON.stringify(pfProjRes.error)));
@@ -1742,13 +2100,11 @@ async function loadFromSupabase() {
                 // 工作日志以云端 work_logs 表为准：dashboard 等外部入口也直接写入该表，
                 // 而快照仅包含工作台上传时的本地日志，因此需单独拉取最新日志合并进来
                 try {
-                    const { data: wlData, error: wlErr } = await supabaseClient.from('work_logs').select('*');
-                    if (!wlErr && wlData) {
+                    const wlData = await fetchAllRows('work_logs');
+                    if (wlData && wlData.length) {
                         // 【v21.23】改为按 id 合并：本地有而云端没有的日志（多半是尚未上传成功的新日志）
                         // 不再被抹掉，避免"保存成功但过一会儿日志消失"
                         mergeWorkLogsFromCloud(wlData, '【快照】');
-                    } else if (wlErr) {
-                        console.warn('⚠️ 合并云端工作日志失败:', wlErr.message);
                     }
                 } catch (e2) {
                     console.warn('⚠️ 合并云端工作日志异常:', e2);
@@ -1766,7 +2122,9 @@ async function loadFromSupabase() {
                         // 结果：所有"未开始/进行中"项目在每次拉取后从本地消失，反复触发
                         // "云端缺失"横幅。改为反向排除已移出主表的三种状态（它们由下方
                         // archived/shelved/terminated 分支单独处理），其余状态全部保留。
-                        appData.projects = allP.filter(p => p.status !== 'archived' && p.status !== 'shelved' && p.status !== 'terminated').map(p => {
+                        // 【v21.31】墓碑过滤：已取消的项目（云端删除失败仍存）不应被拉回
+                        const _dPS_snap = new Set((appData._deletedProjectIds || []).filter(Boolean));
+                        appData.projects = allP.filter(p => p.status !== 'archived' && p.status !== 'shelved' && p.status !== 'terminated' && !_dPS_snap.has(p.id)).map(p => {
                             // 兼容旧数据：之前 sync 会把 done 项目强制写成 active，若 done_date 存在则恢复为 done
                             let status = (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active');
                             const nodes = p.nodes || [];
@@ -1775,7 +2133,7 @@ async function loadFromSupabase() {
                             let doneDate = p.done_date || null;
                             // 已完成项目必须保留完成日期；若云端没有 done_date，用 updated_at 或今天兜底
                             if (status === 'done' && !doneDate) {
-                                doneDate = p.updated_at ? p.updated_at.split('T')[0] : new Date().toISOString().split('T')[0];
+                                doneDate = p.updated_at ? fmtLocal(new Date(p.updated_at)) : fmtLocal();
                             }
                             return {
                                 id: p.id, templateId: p.template_id, company: p.company,
@@ -1813,7 +2171,9 @@ async function loadFromSupabase() {
                         const seen = {};
                         const dupIds = [];
                         appData.projects = (appData.projects || []).filter(pr => {
-                            const k = pr.company + '||' + pr.templateId;
+                            // 【v21.26 / #24】去重键必须含 tag：「A公司+环评+新建」与「A公司+环评+扩建」是
+                            // 两个真实项目，旧键（公司+模板）会把后者当重复项 → 记入墓碑 → 云端行被物理删除。
+                            const k = pr.company + '||' + pr.templateId + '||' + (pr.tag || '');
                             if (seen[k]) { dupIds.push(pr.id); return false; }
                             seen[k] = true;
                             return true;
@@ -1852,6 +2212,30 @@ async function loadFromSupabase() {
                         }
                         appData.tasks = tasks;
                     }
+                    // 【v21.26 / #5】补齐"非项目类表"：快照只包含上次上传时的本地数据，
+                    // 若云端期间有变更（桌面端 / 另一设备），仅靠快照会把本地回滚并落盘。
+                    // 这里以云端表为权威重新合并（带空数据保护），避免结算收款记录被重建清零。
+                    try {
+                        const [_rComp, _rTpl, _rSettle, _rDR, _rRT, _rCT, _rSet] = await Promise.all([
+                            _safeFetch('companies'),
+                            _safeFetch('templates'),
+                            _safeFetch('settlements'),
+                            _safeFetch('data_reports'),
+                            _safeFetch('report_templates'),
+                            _safeFetch('commission_templates'),
+                            _safeFetch('settings')
+                        ]);
+                        applyCloudSideTablesFromRes({
+                            cRes: _rComp, tRes: _rTpl, sRes: _rSettle, dRes: _rDR,
+                            rRes: _rRT, ctRes: _rCT, stRes: _rSet
+                        });
+                        if (_rSet && !_rSet.error && Array.isArray(_rSet.data)) {
+                            const _ks = _rSet.data.find(x => x.key === 'knowledgeUrl');
+                            if (_ks) appData.knowledgeUrl = _ks.value || '';
+                        }
+                    } catch (eSide) {
+                        console.warn('⚠️ 快照分支回拉云端表失败（保留快照数据）:', eSide);
+                    }
                     // 合并完成后持久化到本地缓存，避免刷新页面后丢失 dashboard 等外部入口的更新
                     ensureColors();
                     syncSettlementsWithProjects();
@@ -1872,16 +2256,16 @@ async function loadFromSupabase() {
 
         // 并行查询所有表
         const queries = [
-            supabaseClient.from('companies').select('*'),
-            supabaseClient.from('templates').select('*'),
-            supabaseClient.from('projects').select('*'),
-            supabaseClient.from('tasks').select('*'),
-            supabaseClient.from('work_logs').select('*'),
-            supabaseClient.from('settlements').select('*'),
-            supabaseClient.from('data_reports').select('*'),
-            supabaseClient.from('report_templates').select('*'),
-            supabaseClient.from('commission_templates').select('*'),
-            supabaseClient.from('settings').select('*'),
+            _safeFetch('companies'),
+            _safeFetch('templates'),
+            _safeFetch('projects'),
+            _safeFetch('tasks'),
+            _safeFetch('work_logs'),
+            _safeFetch('settlements'),
+            _safeFetch('data_reports'),
+            _safeFetch('report_templates'),
+            _safeFetch('commission_templates'),
+            _safeFetch('settings'),
         ];
 
         const results = await Promise.allSettled(queries);
@@ -1926,7 +2310,9 @@ async function loadFromSupabase() {
         let templateOrder = templateOrderSetting ? JSON.parse(templateOrderSetting.value) : null;
 
         // ===== 加载公司列表并应用顺序 =====
-        let cloudCompanies = companiesRes.data?.map(c => c.name) || [];
+        // 【v21.32】墓碑过滤：已删除的公司（云端删除失败仍存）不应被拉回
+        const _dCS_snap = new Set((appData._deletedCompanyNames || []).filter(Boolean));
+        let cloudCompanies = (companiesRes.data?.map(c => c.name) || []).filter(n => !_dCS_snap.has(n));
         if (companyOrder && Array.isArray(companyOrder) && companyOrder.length > 0) {
             // 只保留存在的公司
             const validCompanies = companyOrder.filter(name => cloudCompanies.includes(name));
@@ -1935,9 +2321,10 @@ async function loadFromSupabase() {
             cloudCompanies.forEach(name => {
                 if (!ordered.includes(name)) ordered.push(name);
             });
-            appData.companies = ordered;
+            // 【v21.26 / #23】空数据保护：查询失败/RLS 拒绝时云端返回 []，不能直接清空本地公司表
+            appData.companies = safeAssignArray(appData.companies, ordered, 'companies');
         } else {
-            appData.companies = cloudCompanies;
+            appData.companies = safeAssignArray(appData.companies, cloudCompanies, 'companies');
         }
 
         // ===== 加载模板列表并应用顺序 =====
@@ -1958,9 +2345,9 @@ async function loadFromSupabase() {
             cloudTemplates.forEach(t => {
                 if (!ordered.find(o => o.id === t.id)) ordered.push(t);
             });
-            appData.templates = ordered;
+            appData.templates = safeAssignArray(appData.templates, ordered, 'templates');
         } else {
-            appData.templates = cloudTemplates;
+            appData.templates = safeAssignArray(appData.templates, cloudTemplates, 'templates');
         }
 
         // ===== 加载项目（保持原有逻辑） =====
@@ -1972,7 +2359,9 @@ async function loadFromSupabase() {
         // pending/progress/done，导致"未开始/进行中"项目每次拉取后从本地消失、
         // 反复触发"云端缺失"横幅。改为反向排除三种已移出主表的状态，
         // 它们由下方 archived/shelved/terminated 分支单独处理。
-        let activeProjects = allProjects.filter(p => p.status !== 'archived' && p.status !== 'shelved' && p.status !== 'terminated').map(p => {
+        // 【v21.31】墓碑过滤：已取消的项目（云端删除失败仍存）不应被拉回
+        const _dPS_tab = new Set((appData._deletedProjectIds || []).filter(Boolean));
+        let activeProjects = allProjects.filter(p => p.status !== 'archived' && p.status !== 'shelved' && p.status !== 'terminated' && !_dPS_tab.has(p.id)).map(p => {
             // 兼容旧数据：之前 sync 会把 done 项目强制写成 active，若 done_date 存在则恢复为 done
             let status = (p.status === 'active' && p.done_date) ? 'done' : (p.status || 'active');
             const nodes = p.nodes || [];
@@ -1981,7 +2370,7 @@ async function loadFromSupabase() {
             let doneDate = p.done_date || null;
             // 已完成项目必须保留完成日期；若云端没有 done_date，用 updated_at 或今天兜底
             if (status === 'done' && !doneDate) {
-                doneDate = p.updated_at ? p.updated_at.split('T')[0] : new Date().toISOString().split('T')[0];
+                doneDate = p.updated_at ? fmtLocal(new Date(p.updated_at)) : fmtLocal();
             }
             return {
                 id: p.id,
@@ -2102,7 +2491,15 @@ async function loadFromSupabase() {
                 }
             } catch (e) {}
         }
-        appData.tasks = tasks;
+        // 【v21.26 / #23】tasks 同样不能无条件覆盖：查询失败时 tasksRes.data 为 []，
+        // 直接赋值会把本地任务全部清空（随后 reconcileTasksFromCloud 也救不回来）。
+        if (tasksRes.error) {
+            console.warn('⚠️ tasks 表查询失败，保留本地任务:', tasksRes.error.message || tasksRes.error);
+        } else {
+            // 【v21.31】墓碑过滤：已删除的任务（云端删除失败仍存）不应被拉回
+            const _dTS = new Set((appData._deletedTaskIds || []).filter(Boolean));
+            appData.tasks = safeAssignArray(appData.tasks, _dTS.size ? tasks.filter(t => !_dTS.has(t.id)) : tasks, 'tasks');
+        }
 
         // ===== 加载工作日志 =====
         let logs = workLogsRes.data?.map(w => ({
@@ -2130,7 +2527,12 @@ async function loadFromSupabase() {
             fullySettled: s.fully_settled || false,
             _manual: s._manual || false
         })) || [];
-        appData.settlements = settlements;
+        // 【v21.26 / #23】结算记录含历史收款，绝不能被云端空数组清空
+        if (settlementsRes.error) {
+            console.warn('⚠️ settlements 表查询失败，保留本地结算:', settlementsRes.error.message || settlementsRes.error);
+        } else {
+            appData.settlements = safeAssignArray(appData.settlements, settlements, 'settlements');
+        }
 
         // ===== 加载数据报告 =====
         const execMap = {},
@@ -2139,20 +2541,35 @@ async function loadFromSupabase() {
             if (row.execution) execMap[row.year] = row.execution;
             if (row.environmental) envMap[row.year] = row.environmental;
         });
-        appData.dataReports.execution = execMap;
-        appData.dataReports.environmental = envMap;
+        if (dataReportsRes.error || ((dataReportsRes.data || []).length === 0 &&
+                Object.keys(appData.dataReports.execution || {}).length)) {
+            console.warn('⚠️ data_reports 表不可用或为空，保留本地数据');
+        } else {
+            appData.dataReports.execution = execMap;
+            appData.dataReports.environmental = envMap;
+        }
 
         // ===== 加载报告模板 =====
         const rtMap = {};
         (reportTemplatesRes.data || []).forEach(row => { rtMap[row.type] = row.fields; });
-        appData.reportTemplates = rtMap;
+        if (reportTemplatesRes.error || ((reportTemplatesRes.data || []).length === 0 &&
+                Object.keys(appData.reportTemplates || {}).length)) {
+            console.warn('⚠️ report_templates 表不可用或为空，保留本地数据');
+        } else {
+            appData.reportTemplates = rtMap;
+        }
 
         // ===== 加载提成模板 =====
         const ctMap = {};
         (commissionTemplatesRes.data || []).forEach(row => {
             ctMap[row.key] = { total: row.total, ratios: row.ratios };
         });
-        appData.commissionTemplates = ctMap;
+        if (commissionTemplatesRes.error || ((commissionTemplatesRes.data || []).length === 0 &&
+                Object.keys(appData.commissionTemplates || {}).length)) {
+            console.warn('⚠️ commission_templates 表不可用或为空，保留本地数据（避免结算金额被清零）');
+        } else {
+            appData.commissionTemplates = ctMap;
+        }
 
         // ===== 加载知识库链接（从 settings） =====
         const knowledgeSetting = settingsData.find(s => s.key === 'knowledgeUrl');
@@ -2171,7 +2588,9 @@ async function loadFromSupabase() {
                 if (!isNaN(num) && num > maxId) maxId = num;
             }
         });
-        appData._idCounter = maxId;
+        // 【v21.24】只增不减：分表拉取时同样不能把计数器调低（否则会复用云端已占用的 id，
+        // 上传按 conflict:'id' upsert 会顶掉别人的行）
+        appData._idCounter = Math.max(appData._idCounter || 0, maxId);
 
         // 【v21.7】云端拉取后再同步一次"幽灵公司"，确保有项目的公司都登记进 companies，下次上传也会带上
         reconcileCompaniesFromProjects();
@@ -2184,7 +2603,13 @@ async function loadFromSupabase() {
         // 【v2修复】同步后比对：本地原有项目若在同步结果中消失，弹横幅警告并提供一键恢复
         checkPostPullProjectLoss(_v2PrePullIds, _v2BackupJson);
     } finally {
+        // 【v21.25】把"尚未上传的本地完成态改动"回填（两条分支都会经过 here），
+        // 保证网页刚勾选/取消的完成态不会被本次拉取覆盖，随后由自动上传写回云端
+        try { restorePendingDoneEdits(_pendingDoneEdits); } catch (e6) { console.warn('⚠️ 回填本地完成态改动失败:', e6); }
+        // 【v21.27】回填本地节点改动（必须在 projects 合并/覆盖之后）
+        try { restorePendingNodeEdits(_pendingNodeEdits); } catch (e7) { console.warn('⚠️ 回填本地节点改动失败:', e7); }
         _disableAutoUpload = false;
+        _loadingFromCloud = false;   // 【v21.26】释放拉取锁
     }
 }
 
@@ -2198,7 +2623,31 @@ async function loadFromSupabase() {
                     payload[key] = appData[key] || (key === 'dataReports' ? { execution: {}, environmental: {} } : []);
                 }
             });
+            // 【v21.26 / #25】墓碑保护：快照由上次上传时生成，可能不含本设备刚产生的删除标记。
+            // 直接整体赋值会把 _deletedXxxIds 清空 → 上传时不再删除云端行 → 已取消的项目/任务/日志复活（出现重复）。
+            // 这些内部标记取「本地 ∪ 快照」的并集，其余业务字段照常以快照覆盖。
+            const _LOCAL_MERGE_KEYS = ['_deletedProjectIds', '_deletedTaskIds', '_deletedWorkLogIds', '_deletedCompanyNames'];
+            const _prevLocalMarks = {};
+            _LOCAL_MERGE_KEYS.forEach(k => { _prevLocalMarks[k] = Array.isArray(appData[k]) ? appData[k].slice() : null; });
+            const _snapMarks = {};
+            _LOCAL_MERGE_KEYS.forEach(k => { _snapMarks[k] = Array.isArray(payload[k]) ? payload[k].slice() : null; });
             Object.keys(payload).forEach(key => { appData[key] = payload[key]; });
+            _LOCAL_MERGE_KEYS.forEach(k => {
+                const a = _prevLocalMarks[k] || [], b = _snapMarks[k] || [];
+                appData[k] = Array.from(new Set([...a, ...b]));
+            });
+            // 【v21.31】用合并后的墓碑过滤快照数据，防止已删除的项目/任务/日志被旧快照复活
+            const _dPS_snap3 = new Set(appData._deletedProjectIds || []);
+            if (_dPS_snap3.size) {
+                if (Array.isArray(appData.projects)) appData.projects = appData.projects.filter(p => !_dPS_snap3.has(p.id));
+                ['archived','shelved','terminated'].forEach(k => {
+                    if (Array.isArray(appData[k])) appData[k] = appData[k].filter(p => !p || !p.projectData || !_dPS_snap3.has(p.projectData.id));
+                });
+            }
+            const _dTS_snap3 = new Set(appData._deletedTaskIds || []);
+            if (_dTS_snap3.size && Array.isArray(appData.tasks)) appData.tasks = appData.tasks.filter(t => !_dTS_snap3.has(t.id));
+            const _dLS_snap3 = new Set(appData._deletedWorkLogIds || []);
+            if (_dLS_snap3.size && Array.isArray(appData.workLogs)) appData.workLogs = appData.workLogs.filter(l => !_dLS_snap3.has(l.id));
             ensureColors();
             syncSettlementsWithProjects();
             // 更新 id 计数器
@@ -2213,7 +2662,10 @@ async function loadFromSupabase() {
                         if (!isNaN(num) && num > maxId) maxId = num;
                     }
                 });
-            appData._idCounter = maxId;
+            // 【v21.24】只增不减：快照越旧 maxId 越小，若直接赋值会让计数器回退，
+            // getNextId() 又只看本地数据、看不见云端仍存在的高位 id → 新记录复用云端已占用的 id
+            // → upsert 顶掉别人的行（历史上"第二个任务替换第一个"的同源漏洞）
+            appData._idCounter = Math.max(appData._idCounter || 0, maxId);
             localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
         }
 
@@ -2225,6 +2677,9 @@ async function loadFromSupabase() {
         function reconcileTasksFromCloud(cloudTasks) {
             if (!appData.tasks) appData.tasks = [];
             if (!cloudTasks || !cloudTasks.length) return;
+            // 【v21.31】墓碑过滤：已删除的任务不应从云端补回
+            const _dTS_reconcile = new Set((appData._deletedTaskIds || []).filter(Boolean));
+            if (_dTS_reconcile.size) cloudTasks = cloudTasks.filter(t => t && !_dTS_reconcile.has(t.id));
             const cloudById = new Map();
             cloudTasks.forEach(t => { if (t && t.id) cloudById.set(t.id, t); });
             if (!cloudById.size) return;
@@ -2237,7 +2692,7 @@ async function loadFromSupabase() {
                     local.completed = !!ct.completed;
                     _dbgChanged++;
                     if (ct.completed) {
-                        const cd = ct.completed_date || local.completedDate || new Date().toISOString().split('T')[0];
+                        const cd = ct.completed_date || local.completedDate || fmtLocal();
                         local.completedDate = cd;
                         // 已完成任务截断结束日到完成日，避免日历仍显示原长条
                         if (!local.endDate || local.endDate > cd) local.endDate = cd;
@@ -2313,9 +2768,164 @@ async function loadFromSupabase() {
                 ' 条 → 合并后 ' + merged.length + ' 条（本地独有的 ' + kept + ' 条已保留，' + killed + ' 条因已删除未复活）');
         }
 
+        // 【v21.26 / P2】PostgREST 单次最多返回 1000 行（Supabase 默认 max-rows），
+        // 数据量大时 `select('*')` 会被静默截断 → 本地数据"凭空少一截"（项目/任务/日志丢失）。
+        // 这里用 range 分页循环拉全表，直到某一页不足 pageSize。
+        // 【v21.28】新增 columns 参数：只合并/校验少数列时（如上传第二道防线）可裁剪字段，
+        // 减小传输量，也降低大表 nodes 全列读取失败的概率。
+        async function fetchAllRows(table, pageSize = 1000, columns = '*') {
+            const out = [];
+            let from = 0;
+            for (let guard = 0; guard < 50; guard++) {   // 上限 5 万行，防死循环
+                const { data, error } = await supabaseClient
+                    .from(table).select(columns).range(from, from + pageSize - 1);
+                if (error) throw error;
+                const rows = data || [];
+                out.push(...rows);
+                if (rows.length < pageSize) break;
+                from += pageSize;
+            }
+            if (out.length >= 50000) console.warn('⚠️ ' + table + ' 已达分页上限 50000 行，请检查数据量');
+            return out;
+        }
+
+        // 【v21.26】数组安全赋值：云端查询失败/返回非数组/返回空数组而本地非空时，一律保留本地。
+        // 根治 #23：RLS 拒绝或表未 grant 时，云端返回 []，原代码直接 `appData.x = []` 会把今日数据清空。
+        function safeAssignArray(localArr, cloudArr, label) {
+            if (!Array.isArray(cloudArr)) {
+                console.warn('⚠️ ' + label + '：云端数据非数组，保留本地');
+                return Array.isArray(localArr) ? localArr : [];
+            }
+            if (cloudArr.length === 0 && Array.isArray(localArr) && localArr.length > 0) {
+                console.warn('⚠️ ' + label + '：云端返回 0 条而本地有 ' + localArr.length +
+                    ' 条，判定为查询异常，保留本地（若确实要清空请逐条删除）');
+                return localArr;
+            }
+            return cloudArr;
+        }
+
+        // 【v21.26】快照分支的"非项目类表"回拉。
+        // 背景（#5）：快照由本设备上次上传时生成，只恢复了 projects/tasks/workLogs，
+        // companies/templates/settlements/dataReports/reportTemplates/commissionTemplates
+        // 完全取自快照 —— 只要云端期间有变更（桌面端 / 另一设备），30s 自动同步就会把本地
+        // 回滚并落盘；更糟的是随后 syncSettlementsWithProjects() 会把"云端项目有、快照没有"的
+        // 结算整条重建为未收款，历史收款被抹掉。这里以云端为权威重新合并这些表（带空数据保护）。
+        function applyCloudSideTablesFromRes(res) {
+            const _warn = (r, label) => { if (r && r.error) console.warn('⚠️ ' + label + ' 表查询失败，保留本地:', r.error.message || r.error); };
+            _warn(res.cRes, 'companies'); _warn(res.tRes, 'templates'); _warn(res.sRes, 'settlements');
+            _warn(res.dRes, 'data_reports'); _warn(res.rRes, 'report_templates'); _warn(res.ctRes, 'commission_templates');
+            const _rows = (r) => (r && !r.error && Array.isArray(r.data)) ? r.data : null;
+
+            // companies（顺序沿用 settings.company_order，没有则用云端自然顺序）
+            const cRows = _rows(res.cRes);
+            if (cRows) {
+                // 【v21.32】墓碑过滤：已删除的公司不应被拉回
+                const _dCS_tab = new Set((appData._deletedCompanyNames || []).filter(Boolean));
+                let list = cRows.map(c => c.name).filter(n => !_dCS_tab.has(n));
+                try {
+                    const st = (res.stRes && !res.stRes.error && Array.isArray(res.stRes.data)) ? res.stRes.data : [];
+                    const ord = st.find(s => s.key === 'company_order');
+                    if (ord && ord.value) {
+                        const order = JSON.parse(ord.value);
+                        if (Array.isArray(order) && order.length) {
+                            const valid = order.filter(n => list.includes(n));
+                            const rest = list.filter(n => !valid.includes(n));
+                            list = [...valid, ...rest];
+                        }
+                    }
+                } catch (e) {}
+                appData.companies = safeAssignArray(appData.companies, list, 'companies');
+            }
+
+            // templates
+            const tRows = _rows(res.tRes);
+            if (tRows) {
+                let mapped = tRows.map(t => ({
+                    id: t.id, name: t.name, nodes: t.nodes || [], tags: t.tags || [],
+                    settlementByTag: t.settlement_by_tag || {}
+                }));
+                // 【v21.35】快照分支也应用 settings.template_order，与非快照路径（loadFromSupabase 第 2334-2343 行）保持一致。
+                // 背景：applyCloudSideTablesFromRes 是为快照路径补的"非项目类表"回拉，company_order 已正确处理，
+                // 但漏写了 template_order → 用户拖拽调整模板顺序后，走快照路径会被云端 templates 表的主键顺序
+                // （PostgREST 默认 id 排序）直接覆盖，丢失自定义顺序（"再次同步又恢复原样"的根因）。
+                try {
+                    const st = (res.stRes && !res.stRes.error && Array.isArray(res.stRes.data)) ? res.stRes.data : [];
+                    const ord = st.find(s => s.key === 'template_order');
+                    if (ord && ord.value) {
+                        const order = JSON.parse(ord.value);
+                        if (Array.isArray(order) && order.length) {
+                            const ordered = [];
+                            order.forEach(id => { const f = mapped.find(t => t.id === id); if (f) ordered.push(f); });
+                            mapped.forEach(t => { if (!ordered.find(o => o.id === t.id)) ordered.push(t); });
+                            mapped = ordered;
+                        }
+                    }
+                } catch (e) {}
+                appData.templates = safeAssignArray(appData.templates, mapped, 'templates');
+            }
+
+            // settlements（历史收款记录，最关键）
+            const sRows = _rows(res.sRes);
+            if (sRows) {
+                const mapped = sRows.map(s => ({
+                    id: s.id, projectId: s.project_id, company: s.company, projectName: s.project_name,
+                    tag: s.tag || '', doneDate: s.done_date || null,
+                    totalCommission: s.total_commission || 0, settledAmount: s.settled_amount || 0,
+                    installments: s.installments || [], note: s.note || '',
+                    fullySettled: s.fully_settled || false, _manual: s._manual || false
+                }));
+                appData.settlements = safeAssignArray(appData.settlements, mapped, 'settlements');
+            }
+
+            // data_reports
+            const dRows = _rows(res.dRes);
+            if (dRows) {
+                if (dRows.length === 0 && Object.keys(appData.dataReports.execution || {}).length) {
+                    console.warn('⚠️ data_reports：云端返回 0 条而本地非空，保留本地');
+                } else {
+                    const em = {}, nm = {};
+                    dRows.forEach(row => {
+                        if (row.execution) em[row.year] = row.execution;
+                        if (row.environmental) nm[row.year] = row.environmental;
+                    });
+                    appData.dataReports.execution = em;
+                    appData.dataReports.environmental = nm;
+                }
+            }
+
+            // report_templates
+            const rRows = _rows(res.rRes);
+            if (rRows) {
+                if (rRows.length === 0 && Object.keys(appData.reportTemplates || {}).length) {
+                    console.warn('⚠️ report_templates：云端返回 0 条而本地非空，保留本地');
+                } else {
+                    const m = {};
+                    rRows.forEach(r => { m[r.type] = r.fields; });
+                    appData.reportTemplates = m;
+                }
+            }
+
+            // commission_templates（提成模板，缺失会导致结算金额被重建为 0）
+            const ctRows = _rows(res.ctRes);
+            if (ctRows) {
+                if (ctRows.length === 0 && Object.keys(appData.commissionTemplates || {}).length) {
+                    console.warn('⚠️ commission_templates：云端返回 0 条而本地非空，保留本地（避免已收款被清零）');
+                } else {
+                    const m = {};
+                    ctRows.forEach(r => { m[r.key] = { total: r.total, ratios: r.ratios }; });
+                    appData.commissionTemplates = m;
+                }
+            }
+        }
+
         async function createSnapshot() {
             if (!supabaseClient) throw new Error('Supabase 未初始化');
             const payload = JSON.parse(JSON.stringify(appData));
+            // 【v21.25】_doneAt 是本设备的"未上传改动"标记，不应进快照（否则别的设备会误以为自己有待上传改动）
+            if (Array.isArray(payload.tasks)) payload.tasks.forEach(t => { if (t) delete t._doneAt; });
+            // 【v21.27】_nodesAt 同理（项目节点改动标记），必须一并剔除，否则其他设备从快照恢复后
+            // 会误判"我有未上传的节点改动"→ 持续以本地陈旧 nodes 覆盖云端。
+            if (Array.isArray(payload.projects)) payload.projects.forEach(p => { if (p) delete p._nodesAt; });
             const now = new Date();
             const version = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0') + ' ' + String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0') + ':' + String(now.getSeconds()).padStart(2,'0');
             const device = (navigator.userAgent || 'browser').split(' ').slice(0,2).join(' ');
@@ -2337,12 +2947,29 @@ async function loadFromSupabase() {
 
         async function loadLatestSnapshot() {
             if (!supabaseClient) return false;
+            const _device = (navigator.userAgent || 'browser').split(' ').slice(0, 2).join(' ');
             try {
-                const { data, error } = await supabaseClient
-                    .from('snapshots')
-                    .select('id, created_at, payload')
-                    .order('created_at', { ascending: false })
-                    .limit(1);
+                // 【v21.26 / P2】设备维度隔离：snapshots 是所有设备共用的表，直接取"全局最新"
+                // 会把另一台设备的本地状态套到本机（多设备互相套用对方快照）。
+                // 改为优先取本设备最近一次快照，本设备没有时才回退到全局最新。
+                let _rows = null, _err = null;
+                try {
+                    const _own = await supabaseClient.from('snapshots')
+                        .select('id, created_at, payload')
+                        .eq('device', _device)
+                        .order('created_at', { ascending: false })
+                        .limit(1);
+                    if (!_own.error && _own.data && _own.data.length) _rows = _own.data;
+                    else if (_own.error) _err = _own.error;
+                } catch (e) { /* 忽略（如 device 列不存在），走全局回退 */ }
+                if (!_rows) {
+                    const _any = await supabaseClient.from('snapshots')
+                        .select('id, created_at, payload')
+                        .order('created_at', { ascending: false })
+                        .limit(1);
+                    _rows = _any.data; _err = _any.error;
+                }
+                const data = _rows, error = _err;
                 if (error) {
                     if (error.code === '42P01' || (error.message && error.message.includes('snapshots') && error.message.includes('does not exist'))) {
                         console.warn('snapshots 表不存在，将使用旧版分表同步');
@@ -2404,8 +3031,10 @@ async function syncToSupabase(createSnapshotFlag = false) {
         throw new Error('Supabase 未初始化');
     }
     if (_uploading) {
-        console.warn('⚠️ 已有上传任务进行中，跳过本次上传');
-        return;
+        // 【v21.26 / #22】原实现在此静默 return（不抛错）→ 调用方照常弹「✅ 已上传到云端」= 假成功，
+        // 用户以为日志/任务已同步，实际根本没上传。改为抛错，让调用方按真实结果提示并可重试。
+        console.warn('⚠️ 已有上传任务进行中，本次上传已跳过');
+        throw new Error('已有上传任务正在进行中，本次上传已跳过（数据尚未上传，请稍后重试）');
     }
     _uploading = true;
     try {
@@ -2418,7 +3047,8 @@ async function syncToSupabase(createSnapshotFlag = false) {
             const dupIds = [];
             appData.projects = appData.projects.filter(p => {
                 if (p.archived || p.shelved || p.terminated) return true;
-                const k = p.company + '||' + p.templateId;
+                // 【v21.26 / #24】去重键含 tag，避免「同公司同模板不同标签」的真实项目被误判为重复而删除
+                const k = p.company + '||' + p.templateId + '||' + (p.tag || '');
                 if (seen[k]) { dupIds.push(p.id); return false; }
                 seen[k] = true;
                 return true;
@@ -2458,34 +3088,87 @@ async function syncToSupabase(createSnapshotFlag = false) {
         // 陈旧 completed=false 把云端刚写入的 true 整行 upsert 回 false → 看板下次同步被还原成"未完成"。
         // 此处独立再读一次云端完成态并做 OR，保证"云端已是完成"时网页上传绝不回退为未完成。
         try {
-            const _doneRes = await supabaseClient.from('tasks').select('id, completed');
-            if (!_doneRes.error && _doneRes.data) {
+            // 【v21.28】改用 fetchAllRows 分页拉取（列裁剪），杜绝 1000 行静默截断
+            const _cloudDoneRows = await fetchAllRows('tasks', 1000, 'id,completed,end_date');
+            if (_cloudDoneRows && _cloudDoneRows.length) {
                 const _cloudDone = new Map();
-                _doneRes.data.forEach(t => { if (t.completed) _cloudDone.set(t.id, true); });
-                appData.tasks.forEach(t => { if (_cloudDone.get(t.id)) t.completed = true; });
+                _cloudDoneRows.forEach(t => { if (t && t.id) _cloudDone.set(t.id, t); });
+                appData.tasks.forEach(t => {
+                    const ct = _cloudDone.get(t.id);
+                    if (!ct) return;
+                    // 【v21.25】本地刚改过完成态（未上传）→ 尊重本地，允许 false 覆盖云端 true
+                    if (hasFreshDoneEdit(t)) return;
+                    const cloudDone = !!ct.completed;
+                    if (cloudDone !== !!t.completed) {
+                        t.completed = cloudDone;
+                        if (cloudDone) {
+                            t.completedDate = t.completedDate || fmtLocal();
+                        } else {
+                            t.completedDate = null;
+                            t.endDate = ct.end_date || t.dueDate || t.planDate || null;
+                        }
+                    }
+                });
                 // 同步落地本地缓存，刷新后也能保持完成态
                 try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e2) {}
             }
         } catch (e2) { console.warn('⚠️ 云端完成态合并失败（不影响本次其他字段上传）:', e2); }
 
+        // ===== 【v21.28】项目节点第二道防线（对称于上面的任务防线）=====
+        // 根因：mergeCloudStateBeforeUpload 若被上面的 catch 静默吞掉（网络/权限波动），
+        // 网页会用本地陈旧 projects.nodes 整行 upsert，把桌面看板刚 PATCH 的节点完成态
+        // /取消操作顶回去 —— 此前只有 tasks.completed 有防线、nodes 没有，双端
+        // "取消节点完成"在极端网络下仍可能被静默撤销。此处用轻量列子集再独立合并一次。
+        try {
+            const _projRows = await fetchAllRows('projects', 1000, 'id,nodes,status,done_date');
+            if (_projRows && _projRows.length) {
+                const _nMerged = mergeCloudProjectsIntoLocal(_projRows);
+                if (_nMerged) {
+                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e3) {}
+                }
+            }
+        } catch (e3) { console.warn('⚠️ 云端节点状态合并失败（不影响本次其他字段上传）:', e3); }
+
+        // ===== 【v21.26 / P2】探测 tasks.completed_date 列是否存在 =====
+        // 云端 tasks 表历史上没有该列，带它上传会被 PostgREST 400（PGRST204）导致整批失败；
+        // 若管理员已加列，则把完成日期一并写回，多设备可共享"完成日期"。
+        if (_tasksHasCompletedDate === null) {
+            try {
+                const { error: _probeErr } = await supabaseClient.from('tasks').select('completed_date').limit(1);
+                _tasksHasCompletedDate = !_probeErr;
+                console.log('ℹ️ 云端 tasks.completed_date 列' + (_tasksHasCompletedDate ?
+                    '存在，上传时会带上完成日期' : '不存在，上传时不携带该字段'));
+            } catch (e) { _tasksHasCompletedDate = false; }
+        }
+
         // ===== 数据映射函数 =====
-        const mapProject = (p) => ({
-            id: p.id,
-            template_id: p.templateId,
-            company: p.company,
-            status: p.status || 'active',
-            tag: p.tag || '',
-            nodes: p.nodes || [],
-            done_date: p.doneDate || null,
-            important: p.important || false,
-            urgent: p.urgent || false,
-            archived_at: p.archived_at || null,
-            shelved_at: p.shelved_at || null,
-            terminated_at: p.terminated_at || null,
-            reason: p.reason || null,
-            created_at: p.created_at || new Date().toISOString(),
-            updated_at: new Date().toISOString()
-        });
+        // 【v21.27】原实现的 done_date 直接取 p.doneDate，若本地为空就写 null；
+        // 而拉取侧在「status=done 且 done_date 为空」时会用 updated_at 兜底 —— 网页每次上传
+        // 都会把 updated_at 刷成当前时间，于是完成日期会随每次同步漂移成"最近一次上传日"
+        // （桌面看板也会把 updated_at 当 doneDate 兜底，双端一起被污染）。
+        // 这里保证：status=done 时一定写出 done_date，从源头消灭该兜底路径。
+        const mapProject = (p) => {
+            const _st = p.status || 'active';
+            let _doneDate = p.doneDate || null;
+            if (_st === 'done' && !_doneDate) _doneDate = fmtLocal();
+            return {
+                id: p.id,
+                template_id: p.templateId,
+                company: p.company,
+                status: _st,
+                tag: p.tag || '',
+                nodes: p.nodes || [],
+                done_date: _doneDate,
+                important: p.important || false,
+                urgent: p.urgent || false,
+                archived_at: p.archived_at || null,
+                shelved_at: p.shelved_at || null,
+                terminated_at: p.terminated_at || null,
+                reason: p.reason || null,
+                created_at: p.created_at || new Date().toISOString(),
+                updated_at: new Date().toISOString()
+            };
+        };
 
         const mapTemplate = (t) => ({
             id: t.id,
@@ -2495,19 +3178,24 @@ async function syncToSupabase(createSnapshotFlag = false) {
             settlement_by_tag: t.settlementByTag || {}
         });
 
-        const mapTask = (t) => ({
-            id: t.id,
-            project_id: t.projectId,
-            node_index: t.nodeIndex,
-            title: t.title,
-            due_date: t.dueDate || null,
-            completed: t.completed || false,
-            week_label: t.weekLabel || '',
-            month_label: t.monthLabel || '',
-            plan_date: t.planDate || null,
-            start_date: t.startDate || t.planDate || t.dueDate || null,
-            end_date: t.endDate || t.dueDate || null
-        });
+        const mapTask = (t) => {
+            const _row = {
+                id: t.id,
+                project_id: t.projectId,
+                node_index: t.nodeIndex,
+                title: t.title,
+                due_date: t.dueDate || null,
+                completed: t.completed || false,
+                week_label: t.weekLabel || '',
+                month_label: t.monthLabel || '',
+                plan_date: t.planDate || null,
+                start_date: t.startDate || t.planDate || t.dueDate || null,
+                end_date: t.endDate || t.dueDate || null
+            };
+            // 【v21.26 / P2】仅在云端确实存在该列时才写入，避免 400 让整批 tasks 上传失败
+            if (_tasksHasCompletedDate) _row.completed_date = t.completedDate || null;
+            return _row;
+        };
 
         const mapWorkLog = (w) => ({
             id: w.id,
@@ -2619,15 +3307,26 @@ async function syncToSupabase(createSnapshotFlag = false) {
         // upsert 时虽然指定 onConflict='project_id'，但 pkey(id) 仍要求唯一 → 整批 409 失败，
         // 表现就是日志里的 `duplicate key value violates unique constraint "settlements_pkey"`。
         // 这里再做一次按 id 去重：_manual=true 优先，否则保留先出现的（与上面 byProject 一致）。
-        const _bySettleId = {};
-        settlementsData = settlementsData.filter(s => {
-            if (!s.id) return true;  // 无 id 的边角记录保留（理论上不存在）
-            const prev = _bySettleId[s.id];
-            if (!prev) { _bySettleId[s.id] = s; return true; }
-            if (s._manual && !prev._manual) { _bySettleId[s.id] = s; return true; }
-            console.warn('⚠️ settlements 上传前去重：发现重复 id', s.id, '丢弃一条');
-            return false;
-        });
+        // 【v21.26 / #19】同 id 去重修正：原实现在「新记录 _manual 而旧记录不 _manual」时把
+        // 两条都留在数组里（旧的那条此前已 return true 进入结果）→ 同 id 两条一起进 upsert →
+        // 触发 duplicate key value violates unique constraint "settlements_pkey" 整批 409。
+        // 改为按 id 分组后每组只保留一条：_manual 优先，其次保留后出现的。
+        {
+            const _byId = new Map();
+            const _noId = [];
+            settlementsData.forEach(s => {
+                if (!s.id) { _noId.push(s); return; }
+                const prev = _byId.get(s.id);
+                if (!prev) { _byId.set(s.id, s); return; }
+                if (s._manual && !prev._manual) {
+                    _byId.set(s.id, s);
+                    console.warn('⚠️ settlements 上传前去重：重复 id ' + s.id + '，采用手动编辑的一条');
+                } else {
+                    console.warn('⚠️ settlements 上传前去重：重复 id ' + s.id + '，丢弃一条');
+                }
+            });
+            settlementsData = [..._byId.values(), ..._noId];
+        }
 
         const dataReportsData = [];
         const years = new Set([...Object.keys(appData.dataReports.execution), ...Object.keys(appData.dataReports
@@ -2703,6 +3402,23 @@ async function syncToSupabase(createSnapshotFlag = false) {
                 }
             }
         } catch (err) { console.warn('⚠️ 清理已删除项目异常:', err); }
+
+        // ===== 【v21.32】清理已删除公司：墓碑机制 =====
+        // 场景：用户在总表删除公司 → 本地 companies 移除，但云端 companies 行仍在
+        // （上传只 upsert 不删行），下次拉取用云端列表覆盖本地 → 公司"复活"。
+        try {
+            const deletedCompanyNames = (appData._deletedCompanyNames || []).filter(n => n);
+            if (deletedCompanyNames.length > 0) {
+                const { error: compDelErr } = await supabaseClient.from('companies').delete().in('name', deletedCompanyNames);
+                if (compDelErr) {
+                    console.warn('⚠️ 清理已删除公司失败:', compDelErr);
+                } else {
+                    appData._deletedCompanyNames = [];
+                    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+                    console.log(`🗑️ 已清理 ${deletedCompanyNames.length} 个已删除公司`);
+                }
+            }
+        } catch (err) { console.warn('⚠️ 清理已删除公司异常:', err); }
 
         // 【v21.23】整批 upsert 失败后的降级重试：PostgREST 的 upsert 是整批事务，
         // 一条坏数据（外键/约束）会让同批的其它正常记录全部写不进去。这里退化为逐条写入，
@@ -2801,6 +3517,17 @@ async function syncToSupabase(createSnapshotFlag = false) {
             // 自动同步会保留 _pendingUpload 待下次重试，且不会执行后续拉取覆盖本地
             throw new Error('部分数据上传失败: ' + errors.map(e => e.table).join(', ') + '（云端数据未完整更新，本地修改已保留，将自动重试）');
         } else {
+            // 【v21.29】本地改动标记（_doneAt / _nodesAt）必须在“全部表上传成功”后才清除并落盘。
+            // 原实现在 per-table 成功时即清除：若本表成功、后续其它表失败使整批抛错，标记已在内存中
+            // 被清除但未持久化 → 重试时 hasFreshDoneEdit 返回 false，失去“本地新鲜改动优先”保护，
+            // 用户刚勾选/取消的完成态会被云端旧值（或看板的相反操作）静默顶回。
+            // 改为：全部成功后才统一清除，并立即 localStorage 落盘，避免重载后标记“复活”。
+            clearDoneEdits(appData.tasks);
+            clearNodesEdits(appData.projects);
+            clearNodesEdits((appData.archived || []).map(a => a && a.projectData));
+            clearNodesEdits((appData.shelved || []).map(s => s && s.projectData));
+            clearNodesEdits((appData.terminated || []).map(t => t && t.projectData));
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
             _pendingUpload = false;   // 已成功上传，清除“有待上传修改”标记
             // 上传成功后创建版本快照（仅手动上传时），并重新加载云端数据
             let snapshotWarning = false;
@@ -3070,6 +3797,22 @@ if (!appData.reportHistory) {
 appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
         }
 
+        // 【v21.26 / P2】分期金额计算：各期分别四舍五入会让合计 ≠ 总提成（例如 3333.33 分 33/33/34
+        // 各自取整后差 0.01~0.02）。这里把差额统一补到「最后一个比例 > 0 的期」上，保证：
+        //   sum(amount) === total，且 0 占位期仍然保持 0。
+        function calcInstallmentAmounts(total, ratios) {
+            const t = total || 0;
+            const rs = Array.isArray(ratios) ? ratios : [];
+            const amts = rs.map(r => Math.round(t * (r || 0) / 100 * 100) / 100);
+            let lastPos = -1;
+            for (let i = rs.length - 1; i >= 0; i--) { if ((rs[i] || 0) > 0) { lastPos = i; break; } }
+            if (lastPos > 0) {
+                const head = amts.slice(0, lastPos).reduce((a, b) => a + b, 0);
+                amts[lastPos] = Math.round((t - head) * 100) / 100;
+            }
+            return amts;
+        }
+
         function syncSettlementsWithProjects() {
             // 去重：确保一个项目只对应一条结算记录（与数据库唯一约束一致，避免重复数据累积）
             // 优先保留手动编辑过(_manual)的记录
@@ -3116,7 +3859,13 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                     const key2 = `${tpl?.name}||`;
                     cfg = appData.commissionTemplates[key1] || appData.commissionTemplates[key2] || null;
                 }
-                if (!cfg) cfg = (tpl?.settlementByTag || {})[tag] || { total: 0, ratios: [] };
+                if (!cfg) cfg = (tpl?.settlementByTag || {})[tag] || null;
+                // 【v21.25】区分"没配提成模板"与"模板金额就是 0"。
+                // 原来二者都退化成 {total:0, ratios:[]}，导致删除提成模板后，
+                // 下面 else 分支把已有的已付分期整条清零、settledAmount 归零
+                // —— 历史收款凭空消失。缺配置时改为只同步展示字段，绝不动金额。
+                const cfgMissing = !cfg;
+                if (cfgMissing) cfg = { total: 0, ratios: [] };
                 const isDone = calcStatus(p.nodes) === 'done';
 
                 if (!existing) {
@@ -3126,16 +3875,16 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                         company: p.company,
                         projectName: getTplName(p.templateId),
                         tag: tag,
-                        doneDate: isDone ? (p.doneDate || new Date().toISOString().split('T')[0]) : '',
+                        doneDate: isDone ? (p.doneDate || fmtLocal()) : '',
                         totalCommission: cfg.total || 0,
                         settledAmount: 0,
-                        installments: (cfg.ratios || []).map(r => ({
-                            ratio: r,
-                            amount: Math.round((cfg.total || 0) * r / 100 * 100) / 100,
-                            paid: false,
-                            paidDateMonth: '',
-                            paidDate: ''
-                        })),
+                        // 【v21.26 / P2】分期金额合计必须等于总提成（尾差补到最后一期）
+                        installments: (function () {
+                            const _amts = calcInstallmentAmounts(cfg.total || 0, cfg.ratios || []);
+                            return (cfg.ratios || []).map((r, i) => ({
+                                ratio: r, amount: _amts[i], paid: false, paidDateMonth: '', paidDate: ''
+                            }));
+                        })(),
                         note: '',
                         fullySettled: false,
                         _manual: false
@@ -3145,24 +3894,34 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                         existing.company = p.company;
                         existing.projectName = getTplName(p.templateId);
                         existing.tag = tag;
-                        if (isDone && !existing.doneDate) existing.doneDate = p.doneDate || new Date().toISOString()
-                            .split('T')[0];
+                        if (isDone && !existing.doneDate) existing.doneDate = p.doneDate || fmtLocal();
                         if (!isDone) existing.doneDate = '';
                         existing.settledAmount = existing.installments.filter(inst => inst.paid).reduce((a, b) => a +
                             b.amount, 0);
                         const activeInstalls = existing.installments.filter(inst => inst.ratio > 0);
                         existing.fullySettled = activeInstalls.length > 0 && activeInstalls.every(inst => inst.paid);
+                    } else if (cfgMissing) {
+                        // 【v21.25】提成模板已被删除/未配置：只同步展示字段，
+                        // 保留原有 totalCommission / installments / settledAmount，
+                        // 避免"删除模板 → 已收款与已付分期一起被清零"
+                        existing.tag = tag;
+                        existing.company = p.company;
+                        existing.projectName = getTplName(p.templateId);
+                        if (isDone && !existing.doneDate) existing.doneDate = p.doneDate || fmtLocal();
+                        if (!isDone) existing.doneDate = '';
                     } else {
                         const oldInstallments = existing.installments || [];
                         const newTotal = cfg.total || 0;
                         const newRatios = cfg.ratios || [];
 
+                        // 【v21.26 / P2】统一的"分期金额"数组：合计恰好等于总提成
+                        const _newAmts = calcInstallmentAmounts(newTotal, newRatios);
                         if (newRatios.length !== oldInstallments.length) {
                             const newInstallments = newRatios.map((ratio, idx) => {
                                 const oldInst = oldInstallments[idx] || {};
                                 return {
                                     ratio: ratio,
-                                    amount: Math.round(newTotal * ratio / 100 * 100) / 100,
+                                    amount: _newAmts[idx],
                                     paid: oldInst.paid || false,
                                     paidDateMonth: oldInst.paidDateMonth || '',
                                     paidDate: oldInst.paidDate || ''
@@ -3173,15 +3932,14 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                             existing.installments = (existing.installments || []).map((inst, idx) => ({
                                 ...inst,
                                 ratio: newRatios[idx] || 0,
-                                amount: Math.round(newTotal * (newRatios[idx] || 0) / 100 * 100) / 100
+                                amount: _newAmts[idx]
                             }));
                         }
                         existing.totalCommission = newTotal;
                         existing.tag = tag;
                         existing.company = p.company;
                         existing.projectName = getTplName(p.templateId);
-                        if (isDone && !existing.doneDate) existing.doneDate = p.doneDate || new Date().toISOString()
-                            .split('T')[0];
+                        if (isDone && !existing.doneDate) existing.doneDate = p.doneDate || fmtLocal();
                         if (!isDone) existing.doneDate = '';
                         existing.settledAmount = existing.installments.filter(inst => inst.paid).reduce((a, b) => a +
                             b.amount, 0);
@@ -3510,8 +4268,23 @@ async function manualSync() {
                 knowledge: renderKnowledge,
                 cloudsync: renderCloudSync
             };
-            if (pages[page]) pages[page](c);
-            else c.innerHTML = '<div class="empty-state">页面开发中</div>';
+            // 【v21.24】统一渲染兜底：任一页面渲染函数抛错（如某条日志 date 为空导致
+            // localeCompare 报错）都不能让"点菜单没反应"。捕获后渲染可见错误提示，
+            // 侧边栏切换与其它页面不受影响，数据保持原样。
+            try {
+                if (pages[page]) pages[page](c);
+                else c.innerHTML = '<div class="empty-state">页面开发中</div>';
+            } catch (err) {
+                console.error('❌ 页面渲染失败:', page, err);
+                try {
+                    const msg = (err && err.message) ? err.message : String(err);
+                    c.innerHTML = `<div class="empty-state" style="padding:24px;line-height:1.9;text-align:left;">
+                        <div style="font-size:15px;font-weight:600;color:#dc2626;margin-bottom:8px;">⚠️ 「${esc(page)}」页面渲染出错</div>
+                        <div style="font-size:13px;color:#64748b;word-break:break-all;">${esc(msg)}</div>
+                        <div style="font-size:12px;color:#94a3b8;margin-top:10px;">数据未丢失，可先切换到其它页面再回来；错误详情见浏览器控制台（F12）。</div>
+                    </div>`;
+                } catch (e2) {}
+            }
         }
 
         // ============================================================
@@ -3601,8 +4374,8 @@ function renderHome(mc) {
         // 上限：最多展示 6 条，超出显示 "+N 更多"
         // 点击勾选框：切换 completed=true 并触发 saveData() 自动上传
         // 点击任务标题：跳转到任务分配页
-        const _todayISO = new Date().toISOString().split('T')[0];
-        const _tomorrowISO = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().split('T')[0]; })();
+        const _todayISO = fmtLocal();
+        const _tomorrowISO = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return fmtLocal(d); })();
         const _unfinishedTasks = (appData.tasks || []).filter(t => !t.completed);
         // 【v21.18 修复】原 _moreCount 只算"有日期任务"超出 6 条的部分，把"无日期任务"吞了。
         // 这里把 filter+sort 的候选数组先存一份，_moreCount 用候选总数减 _todayList.length，
@@ -3840,7 +4613,7 @@ function renderHome(mc) {
         function completeAllNodes(pid) {
             const p = appData.projects.find(pr => pr.id === pid);
             if (!p) return;
-            const today = new Date().toISOString().split('T')[0];
+            const today = fmtLocal();
             p.nodes.forEach((n, idx) => {
                 n.status = 'done';
                 // 同步更新关联 task，确保日历视图等基于 tasks 渲染的地方能立即反映完成状态
@@ -3849,10 +4622,12 @@ function renderHome(mc) {
                     t.completed = true;
                     t.completedDate = today;
                     t.endDate = today;
+                    markTaskDoneEdited(t);   // 【v21.25】本地改动标记
                 }
             });
             p.status = 'done';
             p.doneDate = today;
+            markProjectNodesEdited(p);   // 【v21.27】本地节点改动标记，上传前合并以本地为准
             saveData();
             syncSettlementsWithProjects();
             renderHome(document.getElementById('mainContent'));
@@ -3866,7 +4641,7 @@ function renderHome(mc) {
             // 同步更新关联 task，确保日历视图等基于 tasks 渲染的地方能立即反映状态变化
             const t = appData.tasks.find(task => task.projectId === pid && task.nodeIndex === i);
             if (t) {
-                const today = new Date().toISOString().split('T')[0];
+                const today = fmtLocal();
                 if (n.status === 'done') {
                     t.completed = true;
                     t.completedDate = today;
@@ -3876,12 +4651,51 @@ function renderHome(mc) {
                     t.completedDate = null;
                     t.endDate = t.dueDate || t.planDate || null;
                 }
+                markTaskDoneEdited(t);   // 【v21.25】节点状态由本地改动，上传前合并以本地为准
             }
             p.status = calcStatus(p.nodes);
-            if (p.status === 'done') p.doneDate = new Date().toISOString().split('T')[0];
+            // 【v21.26 / P2】取消节点完成后必须清掉 doneDate：否则结算页/月度完成统计仍按
+            // 旧完成日期显示（项目"未完成"却出现在已完成的月度计数里）。
+            if (p.status === 'done') { if (!p.doneDate) p.doneDate = fmtLocal(); }
+            else { p.doneDate = null; }
+            // 【v21.27】本地改过节点 → 打标记，防止上传前的云端合并把刚取消的完成态顶回去
+            markProjectNodesEdited(p);
             saveData();
             syncSettlementsWithProjects();
             renderHome(document.getElementById('mainContent'));
+        }
+
+        // 【v21.26 / #26】归档 / 搁置 / 终止前，把项目名下的任务快照一并存入 projectData。
+        // 原实现只是 `appData.tasks = appData.tasks.filter(...)` 从本地删掉；而恢复项目时
+        // （restartS / restartT / unarchive）又会用 getNextId() 分配**新 id**，原任务的
+        // projectId 永久失配 → 恢复后的项目在日历和"已分配任务"里再也没有任务。
+        function _stashProjectTasks(p, pid) {
+            const _tasks = (appData.tasks || []).filter(t => t && t.projectId === pid).map(t => ({ ...t }));
+            return { ...p, tasks: _tasks };
+        }
+
+        // 恢复项目：把快照里的任务挂回（projectId 换成新 id）；对没有备份的旧数据，
+        // 兜底从本地任务里按旧 id 认领，双保险避免任务丢失。
+        function _restoreProjectTasks(projectData, oldId, newId) {
+            if (!appData.tasks) appData.tasks = [];
+            let restored = 0;
+            const saved = Array.isArray(projectData.tasks) ? projectData.tasks : [];
+            saved.forEach(t => {
+                if (!t || !t.id) return;
+                const exist = appData.tasks.find(x => x.id === t.id);
+                if (exist) {
+                    if (exist.projectId !== newId) { exist.projectId = newId; restored++; }
+                    return;
+                }
+                appData.tasks.push({ ...t, projectId: newId });
+                restored++;
+            });
+            if (saved.length === 0 && oldId && oldId !== newId) {
+                appData.tasks.forEach(t => { if (t && t.projectId === oldId) { t.projectId = newId; restored++; } });
+            }
+            delete projectData.tasks;   // 不再把备份写回云端 projectData
+            if (restored) console.log('♻️ 恢复项目任务 ' + restored + ' 条');
+            return restored;
         }
 
         function shelveProject(pid) {
@@ -3890,8 +4704,7 @@ function renderHome(mc) {
             showPrompt('请输入搁置原因：', '', function(reason) {
                 if (reason === null || reason === undefined) return;
                 if (reason.trim() === '') { showAlert('搁置原因不能为空'); return; }
-                appData.shelved.push({ projectData: { ...p }, reason: reason.trim(), shelvedAt: new Date()
-                        .toISOString().split('T')[0] });
+                appData.shelved.push({ projectData: _stashProjectTasks(p, pid), reason: reason.trim(), shelvedAt: fmtLocal() });
                 appData.projects = appData.projects.filter(pr => pr.id !== pid);
                 appData.tasks = appData.tasks.filter(t => t.projectId !== pid);
                 saveData();
@@ -3906,8 +4719,7 @@ function renderHome(mc) {
             if (!p) { showAlert('项目不存在'); return; }
             if (calcStatus(p.nodes) !== 'done') { showAlert('仅已完成项目可归档'); return; }
             showConfirm('确认归档此项目？', function() {
-                appData.archived.push({ projectData: { ...p }, archivedAt: new Date().toISOString().split('T')[
-                        0] });
+                appData.archived.push({ projectData: _stashProjectTasks(p, pid), archivedAt: fmtLocal() });
                 appData.projects = appData.projects.filter(pr => pr.id !== pid);
                 appData.tasks = appData.tasks.filter(t => t.projectId !== pid);
                 saveData();
@@ -3923,8 +4735,7 @@ function renderHome(mc) {
             showPrompt('请输入终止原因：', '', function(reason) {
                 if (reason === null || reason === undefined) return;
                 if (reason.trim() === '') { showAlert('终止原因不能为空'); return; }
-                appData.terminated.push({ projectData: { ...p }, reason: reason.trim(), terminatedAt: new Date()
-                        .toISOString().split('T')[0] });
+                appData.terminated.push({ projectData: _stashProjectTasks(p, pid), reason: reason.trim(), terminatedAt: fmtLocal() });
                 appData.projects = appData.projects.filter(pr => pr.id !== pid);
                 appData.tasks = appData.tasks.filter(t => t.projectId !== pid);
                 saveData();
@@ -3991,8 +4802,9 @@ function toggleTask(tid, chk) {
     const t = appData.tasks.find(tt => tt.id === tid);
     if (!t) return;
     t.completed = chk;
+    markTaskDoneEdited(t);   // 【v21.25】标记本地改动，上传前合并时以本地为准（取消完成才能生效）
     if (chk) {
-        t.completedDate = new Date().toISOString().split('T')[0];
+        t.completedDate = fmtLocal();
         t.endDate = t.completedDate;
     } else {
         t.completedDate = null;
@@ -4004,7 +4816,11 @@ function toggleTask(tid, chk) {
             const node = p.nodes[t.nodeIndex];
             node.status = chk ? 'done' : 'progress';
             p.status = calcStatus(p.nodes);
-            if (p.status === 'done') p.doneDate = new Date().toISOString().split('T')[0];
+            // 【v21.26 / P2】取消失败时必须清 doneDate，否则"未完成的项目"仍带着完成日期进结算统计
+            if (p.status === 'done') { if (!p.doneDate) p.doneDate = fmtLocal(); }
+            else { p.doneDate = null; }
+            // 【v21.27】节点由本地改动 → 打标记，避免上传前合并把 done 顶回来（双端冲突）
+            markProjectNodesEdited(p);
             saveData(true);
             syncSettlementsWithProjects();
         }
@@ -4045,7 +4861,7 @@ function toggleTaskComplete(tid, el) {
             if (!inp || !inp.value.trim()) return;
             const pid = document.getElementById('todoProj')?.value || null;
             const content = inp.value.trim();
-            appData.workLogs.push({ id: getNextId(), date: new Date().toISOString().split('T')[0], type: 'daily',
+            appData.workLogs.push({ id: getNextId(), date: fmtLocal(), type: 'daily',
                 projectId: pid, content: content });
             saveData();
             inp.value = '';
@@ -4101,17 +4917,23 @@ function toggleTaskComplete(tid, el) {
                 // 【v21.5修复】把该公司所有相关项目/子记录 id 记入墓碑，上传时从云端精确删除，避免重新录入后重复
                 if (!appData._deletedProjectIds) appData._deletedProjectIds = [];
                 const collect = (pid) => { if (pid && appData._deletedProjectIds.indexOf(pid) === -1) appData._deletedProjectIds.push(pid); };
-                appData.projects.forEach(p => { if (p.company === c) collect(p.id); });
-                appData.archived.forEach(a => collect(a.projectData?.id));
-                appData.shelved.forEach(s => collect(s.projectData?.id));
-                appData.terminated.forEach(t => collect(t.projectData?.id));
+                // 【v21.33】收集本次删除的所有项目 id（活跃+归档+搁置+终止），用于精确过滤任务
+                // 原代码归档/搁置/终止未过滤公司名 → 删公司A会把所有公司的归档项目墓碑化并物理删除
+                const removedIds = new Set();
+                appData.projects.forEach(p => { if (p.company === c) { removedIds.add(p.id); collect(p.id); } });
+                appData.archived.forEach(a => { if (a.projectData?.company === c) { removedIds.add(a.projectData.id); collect(a.projectData.id); } });
+                appData.shelved.forEach(s => { if (s.projectData?.company === c) { removedIds.add(s.projectData.id); collect(s.projectData.id); } });
+                appData.terminated.forEach(t => { if (t.projectData?.company === c) { removedIds.add(t.projectData.id); collect(t.projectData.id); } });
+                // 【v21.32】公司名本身也记入墓碑，防止云端复活
+                if (!appData._deletedCompanyNames) appData._deletedCompanyNames = [];
+                if (appData._deletedCompanyNames.indexOf(c) === -1) appData._deletedCompanyNames.push(c);
                 appData.companies.splice(i, 1);
                 appData.projects = appData.projects.filter(p => p.company !== c);
                 appData.archived = appData.archived.filter(a => a.projectData.company !== c);
                 appData.shelved = appData.shelved.filter(s => s.projectData.company !== c);
                 appData.terminated = appData.terminated.filter(t => t.projectData.company !== c);
-                appData.tasks = appData.tasks.filter(t => { const p = appData.projects.find(pr => pr.id === t
-                        .projectId); return p !== undefined; });
+                // 【v21.33】用 removedIds 精确过滤任务（原代码只查活跃项目数组，归档项目的任务被误删）
+                appData.tasks = appData.tasks.filter(t => !removedIds.has(t.projectId));
                 saveData();
                 syncSettlementsWithProjects();
                 renderProjects(document.getElementById('mainContent'));
@@ -4130,12 +4952,17 @@ function toggleTaskComplete(tid, el) {
                         datasets: [{ data: [pe, pr, d], backgroundColor: ['#f59e0b', '#3b6df0', '#10b981'] }] },
                     options: { responsive: true, maintainAspectRatio: true, plugins: { legend: { display: false } } } }); }
             const ctx2 = document.getElementById('chartBar');
-            if (ctx2) { if (ctx2._c) ctx2._c.destroy(); const now = new Date(); const ws = new Date(now);
-                ws.setDate(now.getDate() - now.getDay()); const ms = new Date(now.getFullYear(), now.getMonth(), 1),
-                    ys = new Date(now.getFullYear(), 0, 1); const cw = active.filter(p => p.status === 'done' && p
-                        .doneDate && new Date(p.doneDate) >= ws).length; const cm = active.filter(p => p.status ===
-                        'done' && p.doneDate && new Date(p.doneDate) >= ms).length; const cy = active.filter(p => p
-                        .status === 'done' && p.doneDate && new Date(p.doneDate) >= ys).length;
+            if (ctx2) { if (ctx2._c) ctx2._c.destroy(); const now = new Date();
+                // 【v21.32】周起始日与 getWeekLabel 统一为周一（day===0 ? 6 : day-1）
+                const _wDay = now.getDay(); const _wMon = new Date(now); _wMon.setDate(now.getDate() - (_wDay === 0 ? 6 : _wDay - 1));
+                const _wSun = new Date(_wMon); _wSun.setDate(_wMon.getDate() + 6);
+                const ws = _wMon; const ms = new Date(now.getFullYear(), now.getMonth(), 1),
+                    ys = new Date(now.getFullYear(), 0, 1);
+                // 【v21.32】统计口径与饼图/结算页统一：calcStatus(nodes) || p.status === 'done'
+                const _isDone = (p) => calcStatus(p.nodes) === 'done' || p.status === 'done';
+                const cw = active.filter(p => _isDone(p) && p.doneDate && new Date(p.doneDate) >= ws && new Date(p.doneDate) <= _wSun).length;
+                const cm = active.filter(p => _isDone(p) && p.doneDate && new Date(p.doneDate) >= ms).length;
+                const cy = active.filter(p => _isDone(p) && p.doneDate && new Date(p.doneDate) >= ys).length;
                 ctx2._c = new Chart(ctx2, { type: 'bar', data: { labels: ['本周', '本月', '本年'],
                         datasets: [{ data: [cw, cm, cy], backgroundColor: ['#f59e0b', '#3b6df0',
                             '#10b981'
@@ -4144,7 +4971,7 @@ function toggleTaskComplete(tid, el) {
             const ctx3 = document.getElementById('chartLine');
             if (ctx3) { if (ctx3._c) ctx3._c.destroy(); const now = new Date(); const months = Array.from({ length: 12 },
                     (_, i) => i + 1 + '月'); const data = new Array(12).fill(0);
-                active.filter(p => p.status === 'done' && p.doneDate).forEach(p => { const d = new Date(p.doneDate); if (
+                active.filter(p => (calcStatus(p.nodes) === 'done' || p.status === 'done') && p.doneDate).forEach(p => { const d = new Date(p.doneDate); if (
                         d.getFullYear() === now.getFullYear()) data[d.getMonth()]++; });
                 ctx3._c = new Chart(ctx3, { type: 'line', data: { labels: months, datasets: [{ data,
                         borderColor: '#3b6df0', backgroundColor: 'rgba(59,109,240,0.05)',
@@ -4238,7 +5065,10 @@ function renderProjects(mc) {
                     }
                 }
 
-                cards += '<div class="m-proj-card ' + companyStatus + '" id="mProjCard_'+esc(comp)+'" onclick="toggleMobileProjCard(\''+esc(comp)+'\')">';
+                // 【v21.26 / P2】卡片补 data-company：updateTagByCard / toggleMProjTypeByCard 都靠
+                // card.dataset.company 取公司名，此前卡片没有该属性 → 移动端改标签/勾选类型静默失效。
+                // 同时把内联 onclick 里的公司名换成 this（公司名含 ' 时会截断 JS 字符串）。
+                cards += '<div class="m-proj-card ' + companyStatus + '" id="mProjCard_'+ci+'" data-company="'+escAttr(comp)+'" onclick="toggleMobileProjCardByCard(this)">';
                 cards += '<div class="m-proj-card-header">';
                 cards += '<div class="m-proj-card-name"><span class="drag-icon">☰</span>' + esc(comp) + '</div>';
                 cards += '<div class="m-proj-card-prog">';
@@ -4246,7 +5076,7 @@ function renderProjects(mc) {
                 cards += '<div class="m-proj-card-pct">' + progPct + '%</div>';
                 cards += '</div></div>';
                 cards += '<div class="m-proj-card-count">' + activeProjects.length + ' 个项目进行中 · ' + compProjects.length + ' 个总计</div>';
-                cards += '<div class="m-proj-card-expand" onclick="event.stopPropagation();toggleMobileProjCard(\''+esc(comp)+'\')">👆 点击查看/编辑项目类型</div>';
+                cards += '<div class="m-proj-card-expand" onclick="event.stopPropagation();toggleMobileProjCardByCard(this)">👆 点击查看/编辑项目类型</div>';
 
                 // 展开详情：项目类型竖向排列
                 cards += '<div class="m-proj-card-detail">';
@@ -4255,13 +5085,14 @@ function renderProjects(mc) {
                     const hasTags = t.tags && t.tags.length > 0;
                     const checked = proj ? 'checked' : '';
                     cards += '<div class="m-proj-type-row">';
-                    cards += '<div class="m-proj-type-check ' + checked + '" onclick="event.stopPropagation();toggleMProjType(\''+esc(comp)+'\',\''+t.id+'\',this)">';
+                    cards += '<div class="m-proj-type-check ' + checked + '" onclick="event.stopPropagation();toggleMProjTypeByCard(this,\''+escAttr(t.id)+'\')">';
                     if (proj) cards += '✓';
                     cards += '</div>';
                     cards += '<div class="m-proj-type-name">'+esc(t.name)+'</div>';
                     if (proj && hasTags) {
-                        const tagOpts = t.tags.map(tg => '<option '+(proj.tag===tg?'selected':'')+'>'+tg+'</option>').join('');
-                        cards += '<select style="font-size:11px;padding:3px 6px;border-radius:8px;border:1px solid var(--m-border);max-width:100px;" onchange="event.stopPropagation();updateTagByCard(this,\''+t.id+'\')">'+tagOpts+'</select>';
+                        // 【v21.26 / P2】option 的 value 与文本都要转义（标签名含引号会破坏 HTML / 取值失败）
+                        const tagOpts = t.tags.map(tg => '<option value="'+escAttr(tg)+'" '+(proj.tag===tg?'selected':'')+'>'+esc(tg)+'</option>').join('');
+                        cards += '<select style="font-size:11px;padding:3px 6px;border-radius:8px;border:1px solid var(--m-border);max-width:100px;" data-curtag="'+escAttr(proj.tag||'')+'" onchange="event.stopPropagation();updateTagByCard(this,\''+escAttr(t.id)+'\')">'+tagOpts+'</select>';
                     }
                     if (proj) {
                         cards += '<div class="m-proj-type-actions">';
@@ -4328,7 +5159,7 @@ function renderProjects(mc) {
                 if (found) { const cfg = appData.projectStatusColors[found] || { color: '#ffffff', alpha: 0.4 };
                     rowBg = hexToRgba(cfg.color, cfg.alpha); }
             }
-            html += `<tr style="${rowBg ? `background-color: ${rowBg};` : ''}" data-company="${esc(comp)}">`;
+            html += `<tr style="${rowBg ? `background-color: ${rowBg};` : ''}" data-company="${escAttr(comp)}">`;
             // 拖拽手柄列
             html += `<td class="drag-handle" style="cursor:grab;text-align:center;font-size:16px;touch-action:none;">☰</td>`;
             // 公司列添加 sticky-col
@@ -4341,8 +5172,8 @@ function renderProjects(mc) {
                 let cellBg = '';
                 if (!rowBg && proj) cellBg = getCellColor(proj);
                 html += `<td style="text-align:center; ${cellBg ? `background-color: ${cellBg};` : ''}">
-                  <input type="checkbox" ${checked} onchange="toggleProject('${comp}','${t.id}',this.checked)">
-                  ${proj && hasTags ? `<select style="display:block;margin:2px auto;width:80px;padding:2px 4px;border-radius:30px;border:1px solid #e2e8f0;font-size:11px;" onchange="updateTag('${comp}','${t.id}',this.value)">${t.tags.map(tg => `<option ${proj.tag===tg?'selected':''}>${tg}</option>`).join('')}</select>` : ''}
+                  <input type="checkbox" ${checked} data-tid="${escAttr(t.id)}" onchange="toggleProjectRow(this)">
+                  ${proj && hasTags ? `<select style="display:block;margin:2px auto;width:80px;padding:2px 4px;border-radius:30px;border:1px solid #e2e8f0;font-size:11px;" data-tid="${escAttr(t.id)}" data-curtag="${escAttr(proj.tag||'')}" onchange="updateTagRow(this)">${t.tags.map(tg => `<option value="${escAttr(tg)}" ${proj.tag===tg?'selected':''}>${esc(tg)}</option>`).join('')}</select>` : ''}
                   ${proj ? `<button class="btn btn-xs btn-info" onclick="openEditProjectModal('${proj.id}')" style="margin-top:2px;" title="编辑项目">✎</button>` : ''}
                 </td>`;
             });
@@ -4436,7 +5267,8 @@ function renderProjects(mc) {
 
             function updateTags() {
                 const tpl = appData.templates.find(t => t.id === tplSelect.value);
-                tagSelect.innerHTML = tpl && tpl.tags ? tpl.tags.map(tg => `<option value="${tg}">${tg}</option>`)
+                // 【v21.26 / P2】option 的 value/文本都要转义，否则标签名含引号会破坏 HTML 或取值错乱
+                tagSelect.innerHTML = tpl && tpl.tags ? tpl.tags.map(tg => `<option value="${escAttr(tg)}">${esc(tg)}</option>`)
                     .join('') : '<option value="">无标签</option>';
             }
             tplSelect.addEventListener('change', updateTags);
@@ -4487,8 +5319,9 @@ function renderProjects(mc) {
             const tpl = appData.templates.find(t => t.id === p.templateId);
             if (!tpl) { showAlert('模板不存在'); return; }
 
+            // 【v21.26 / P2】option 的 value/文本转义
             const tagOptions = tpl.tags ? tpl.tags.map(tg =>
-                `<option value="${tg}" ${p.tag === tg ? 'selected' : ''}>${tg}</option>`).join('') :
+                `<option value="${escAttr(tg)}" ${p.tag === tg ? 'selected' : ''}>${esc(tg)}</option>`).join('') :
                 '<option value="">无标签</option>';
             const html = `
                 <div class="modal">
@@ -4545,8 +5378,8 @@ function renderProjects(mc) {
             if (ft !== 'all') elig = elig.filter(p => p.templateId === ft);
             if (fs !== 'all') elig = elig.filter(p => calcStatus(p.nodes) === fs);
             elig.sort((a, b) => { const wa = getPrioritySortWeight(a),
-                    wb = getPrioritySortWeight(b); if (wa !== wb) return wb - wa; return a.company.localeCompare(b
-                    .company); });
+                    wb = getPrioritySortWeight(b); if (wa !== wb) return wb - wa; return String(a.company || '').localeCompare(String(b
+                    .company || '')); });
 
             const selPid = window._selPid;
             const getBgColor = (tplId) => {
@@ -4805,8 +5638,8 @@ function renderProjects(mc) {
                 mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
                 const sun = new Date(mon);
                 sun.setDate(mon.getDate() + 6);
-                startDate = mon.toISOString().split('T')[0];
-                endDate = sun.toISOString().split('T')[0];
+                startDate = fmtLocal(mon);
+                endDate = fmtLocal(sun);
                 wl = getWeekLabel(now);
             } else if (period === 'nextWeek') {
                 const nextWeek = new Date(now);
@@ -4816,22 +5649,22 @@ function renderProjects(mc) {
                 mon.setDate(nextWeek.getDate() - (day === 0 ? 6 : day - 1));
                 const sun = new Date(mon);
                 sun.setDate(mon.getDate() + 6);
-                startDate = mon.toISOString().split('T')[0];
-                endDate = sun.toISOString().split('T')[0];
+                startDate = fmtLocal(mon);
+                endDate = fmtLocal(sun);
                 wl = getWeekLabel(nextWeek);
             } else if (period === 'month') {
                 const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
                 const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-                startDate = firstDay.toISOString().split('T')[0];
-                endDate = lastDay.toISOString().split('T')[0];
+                startDate = fmtLocal(firstDay);
+                endDate = fmtLocal(lastDay);
                 ml = getMonthLabel(now);
             } else if (period === 'nextMonth') {
                 const nextMonth = new Date(now);
                 nextMonth.setMonth(now.getMonth() + 1);
                 const firstDay = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), 1);
                 const lastDay = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0);
-                startDate = firstDay.toISOString().split('T')[0];
-                endDate = lastDay.toISOString().split('T')[0];
+                startDate = fmtLocal(firstDay);
+                endDate = fmtLocal(lastDay);
                 ml = getMonthLabel(nextMonth);
             } else if (period === 'custom') {
                 // 【v21.12】自定义开始/结束日期
@@ -4842,12 +5675,17 @@ function renderProjects(mc) {
                 startDate = cs;
                 endDate = ce;
             } else {
-                startDate = endDate = now.toISOString().split('T')[0];
+                startDate = endDate = fmtLocal(now);
             }
 
             selected.forEach(idx => {
                 const node = p.nodes[idx];
                 if (!node) return;
+                // 【v21.32】已完成节点不应被重新分配（防止状态回退 done→progress）
+                if (node.status === 'done') { showToast(`⚠️ 节点「${node.name}」已完成，已跳过`, 2500); return; }
+                // 【v21.32】同一节点已有未完成任务时跳过（防止重复分配产生多任务同 nodeIndex）
+                const existing = appData.tasks.find(t => t.projectId === pid && t.nodeIndex === idx && !t.completed);
+                if (existing) { showToast(`⚠️ 节点「${node.name}」已有未完成任务，已跳过`, 2500); return; }
                 node.status = 'progress';
                 const title = `${p.company} - ${getTplName(p.templateId)} - ${node.name}`;
                 appData.tasks.push({
@@ -4867,6 +5705,7 @@ function renderProjects(mc) {
                 node.planDate = startDate;
             });
             p.status = calcStatus(p.nodes);
+            markProjectNodesEdited(p);   // 【v21.27】分配任务会改节点状态，同样打本地改动标记
             saveData();
             syncSettlementsWithProjects();
             delete window._selectedNodes[pid];
@@ -4941,10 +5780,13 @@ function renderSettlement(mc) {
     let totalCommissionSum = 0, totalSettledSum = 0;
     allProjects.forEach(p => {
         const s = appData.settlements.find(st => st.projectId === p.id);
-        if (s) {
-            totalCommissionSum += s.totalCommission || 0;
-            totalSettledSum += s.settledAmount || 0;
-        }
+        if (!s) return;
+        // 【v21.26 / P2】只统计"已完成"项目的提成与已结算额：未开工项目也会按提成模板
+        // 预生成金额，把它们计入"总提成"会让统计虚高（已结算额同理）。
+        const _done = (p.status === 'done') || !!p.doneDate || calcStatus(p.nodes) === 'done';
+        if (!_done) return;
+        totalCommissionSum += s.totalCommission || 0;
+        totalSettledSum += s.settledAmount || 0;
     });
 
     const typeOpts = appData.templates.map(t =>
@@ -5216,10 +6058,10 @@ function renderSettlement(mc) {
                 html += `
                     <div style="display:flex;align-items:center;gap:8px;margin-top:6px;padding:4px 8px;background:#f8fafc;border-radius:6px;border:1px solid #e9ecef;">
                       <span style="font-size:13px;min-width:56px;font-weight:500;">第${idx+1}期</span>
-                      <input type="number" step="0.1" min="0" max="100" id="installmentRatio_${idx}" value="${inst.ratio}" 
+                      <input type="number" step="0.1" min="0" max="100" id="installmentRatio_${idx}" value="${inst.ratio ?? 0}" 
                              style="width:80px;padding:4px 8px;border-radius:6px;border:1px solid #e2e8f0;font-size:13px;text-align:center;">
                       <span style="font-size:13px;">%</span>
-                      <span style="font-size:12px;color:var(--text-secondary);margin-left:4px;">金额: <strong>${inst.amount.toFixed(2)}</strong></span>
+                      <span style="font-size:12px;color:var(--text-secondary);margin-left:4px;">金额: <strong>${(inst.amount ?? 0).toFixed(2)}</strong></span>
                       <span style="font-size:12px;color:${inst.paid ? '#28a745' : '#94a3b8'};margin-left:auto;">${paidStatus}</span>
                     </div>
                   `;
@@ -5301,8 +6143,8 @@ function renderSettlement(mc) {
             const inst = s.installments[idx];
             if (!inst) return;
             inst.paid = checked;
-            if (checked) { inst.paidDate = new Date().toISOString().split('T')[0];
-                inst.paidDateMonth = new Date().toISOString().slice(0, 7); } else { inst.paidDate = '';
+            if (checked) { inst.paidDate = fmtLocal();
+                inst.paidDateMonth = fmtLocalYM(); } else { inst.paidDate = '';
                 inst.paidDateMonth = ''; }
             s.settledAmount = s.installments.filter(inst => inst.paid).reduce((a, b) => a + b.amount, 0);
             const activeInstalls = s.installments.filter(inst => inst.ratio > 0);
@@ -5318,7 +6160,7 @@ function renderSettlement(mc) {
             if (!s) return;
             const inst = s.installments[idx];
             if (!inst) return;
-            const currentDate = inst.paidDate || new Date().toISOString().split('T')[0];
+            const currentDate = inst.paidDate || fmtLocal();
             const html =
                 `<div class="modal" style="max-width:400px;"><button class="close-btn" onclick="closeModal()">✕</button><h3>📅 选择日期</h3><div class="form-group"><label>日期</label><input type="date" id="datePickerInput" value="${currentDate}" style="width:100%;"></div><div class="confirm-actions"><button class="btn btn-primary" onclick="confirmDatePicker('${sid}',${idx})">确认</button><button class="btn btn-ghost" onclick="closeModal()">取消</button></div></div>`;
             createModal(html);
@@ -5375,10 +6217,11 @@ function renderSettlement(mc) {
                     const t = appData.commissionTemplates[key];
                     const tagDisplay = tag ? `（${esc(tag)}）` : '';
                     html +=
-                        `<div class="commission-card"><div class="info"><span class="type">${esc(type)} ${tagDisplay}</span><span class="amount">金额: ${t.total}</span><span class="ratio">比例: ${t.ratios.join('%, ')}%</span></div><div class="actions"><button class="btn btn-xs btn-info" onclick="editCommissionTemplate('${key}')">✎</button><button class="btn btn-xs btn-ghost" onclick="removeCommissionTemplate('${key}')">✕</button></div></div>`;
+                        // 【v21.26 / P2】key 是「类型||标签」用户数据，直接拼进内联 JS 字符串会被引号截断，改用 data-* 承载
+                        `<div class="commission-card"><div class="info"><span class="type">${esc(type)} ${tagDisplay}</span><span class="amount">金额: ${t.total}</span><span class="ratio">比例: ${(t.ratios || []).join('%, ')}%</span></div><div class="actions"><button class="btn btn-xs btn-info" data-ckey="${escAttr(key)}" onclick="editCommissionTemplate(this.getAttribute('data-ckey'))">✎</button><button class="btn btn-xs btn-ghost" data-ckey="${escAttr(key)}" onclick="removeCommissionTemplate(this.getAttribute('data-ckey'))">✕</button></div></div>`;
                 });
             }
-            html += `</div><div style="border-top:1px solid var(--border);padding-top:16px;"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;"><select id="ctType" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;flex:1 0 120px;"><option value="">选择类型</option>${appData.templates.map(t => `<option value="${t.name}">${t.name}</option>`).join('')}</select><select id="ctTag" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;flex:1 0 100px;"><option value="">全部标签</option></select><input type="number" id="ctAmount" placeholder="总金额" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;width:120px;"><input type="text" id="ctRatios" placeholder="比例 50,25,25" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;width:140px;"><button class="btn btn-success" onclick="addCommissionTemplate()">添加</button></div><div style="font-size:12px;color:#6c7a94;margin-top:8px;">💡 提成模板按"类型+标签"组合设置，标签直接引用项目类型模板中的标签。</div></div><div class="confirm-actions"><button class="btn btn-ghost" onclick="closeModal()">关闭</button></div></div>`;
+            html += `</div><div style="border-top:1px solid var(--border);padding-top:16px;"><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;"><select id="ctType" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;flex:1 0 120px;"><option value="">选择类型</option>${appData.templates.map(t => `<option value="${escAttr(t.name)}">${esc(t.name)}</option>`).join('')}</select><select id="ctTag" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;flex:1 0 100px;"><option value="">全部标签</option></select><input type="number" id="ctAmount" placeholder="总金额" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;width:120px;"><input type="text" id="ctRatios" placeholder="比例 50,25,25" style="padding:6px 12px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;width:140px;"><button class="btn btn-success" onclick="addCommissionTemplate()">添加</button></div><div style="font-size:12px;color:#6c7a94;margin-top:8px;">💡 提成模板按"类型+标签"组合设置，标签直接引用项目类型模板中的标签。</div></div><div class="confirm-actions"><button class="btn btn-ghost" onclick="closeModal()">关闭</button></div></div>`;
             createModal(html);
             document.getElementById('ctType').addEventListener('change', function() {
                 const sel = document.getElementById('ctTag');
@@ -5386,7 +6229,7 @@ function renderSettlement(mc) {
                 const tpl = appData.templates.find(t => t.name === type);
                 sel.innerHTML = '<option value="">全部标签</option>';
                 if (tpl && tpl.tags) { tpl.tags.forEach(tag => { sel.innerHTML +=
-                        `<option value="${tag}">${tag}</option>`; }); }
+                        `<option value="${escAttr(tag)}">${esc(tag)}</option>`; }); }
             });
         }
 
@@ -5395,14 +6238,18 @@ function renderSettlement(mc) {
             if (!tpl) { showAlert('模板不存在'); return; }
             const [type, tag] = key.split('||');
             const html =
-                `<div class="modal" style="max-width:500px;"><button class="close-btn" onclick="closeModal()">✕</button><h3>✎ 编辑提成模板</h3><div class="form-group"><label>类型</label><input id="editCtType" value="${esc(type)}" disabled style="background:#f1f5f9;width:100%;"></div><div class="form-group"><label>标签</label><input id="editCtTag" value="${esc(tag||'')}" disabled style="background:#f1f5f9;width:100%;"></div><div class="form-group"><label>总金额</label><input id="editCtAmount" type="number" step="0.01" value="${tpl.total}" style="width:100%;"></div><div class="form-group"><label>比例 (逗号分隔)</label><input id="editCtRatios" value="${tpl.ratios.join(',')}" style="width:100%;"></div><div class="confirm-actions"><button class="btn btn-primary" onclick="saveEditCommissionTemplate('${key}')">保存</button><button class="btn btn-ghost" onclick="closeModal()">取消</button></div></div>`;
+                `<div class="modal" style="max-width:500px;"><button class="close-btn" onclick="closeModal()">✕</button><h3>✎ 编辑提成模板</h3><div class="form-group"><label>类型</label><input id="editCtType" value="${esc(type)}" disabled style="background:#f1f5f9;width:100%;"></div><div class="form-group"><label>标签</label><input id="editCtTag" value="${esc(tag||'')}" disabled style="background:#f1f5f9;width:100%;"></div><div class="form-group"><label>总金额</label><input id="editCtAmount" type="number" step="0.01" value="${tpl.total}" style="width:100%;"></div><div class="form-group"><label>比例 (逗号分隔)</label><input id="editCtRatios" value="${tpl.ratios.join(',')}" style="width:100%;"></div><div class="confirm-actions"><button class="btn btn-primary" data-ckey="${escAttr(key)}" onclick="saveEditCommissionTemplate(this.getAttribute('data-ckey'))">保存</button><button class="btn btn-ghost" onclick="closeModal()">取消</button></div></div>`;
             createModal(html);
         }
 
         function saveEditCommissionTemplate(key) {
             const amount = parseFloat(document.getElementById('editCtAmount').value);
+            // 【v21.26 / P2】只过滤空值与非法输入，**保留 0 占位期**：旧写法 `r > 0` 会把
+            // 「50,0,50」这类含 0 占位的模板压缩成 2 期，分期数变化后 syncSettlementsWithProjects
+            // 会按新长度重建 installments，已付状态按索引整体前移 → 收款记录对错期。
+            // 【v21.32】过滤负数（防止 calcInstallmentAmounts 算出负金额）
             const ratios = document.getElementById('editCtRatios').value.split(',').map(r => parseFloat(r.trim())).filter(
-                r => !isNaN(r) && r > 0);
+                r => !isNaN(r) && r >= 0);
             if (isNaN(amount) || amount <= 0) { showAlert('请输入有效金额'); return; }
             if (ratios.length === 0) { showAlert('请输入有效比例'); return; }
             const sum = ratios.reduce((a, b) => a + b, 0);
@@ -5418,7 +6265,7 @@ function renderSettlement(mc) {
         }
 
         function removeCommissionTemplate(key) {
-            showConfirm('确认删除此提成模板？', function() {
+            showConfirm('确认删除此提成模板？（已生成的结算金额、已付分期与已收款记录会保留，不会被清零）', function() {
                 delete appData.commissionTemplates[key];
                 saveData();
                 syncSettlementsWithProjects();
@@ -5432,8 +6279,9 @@ function renderSettlement(mc) {
             const type = document.getElementById('ctType').value;
             const tag = document.getElementById('ctTag').value;
             const amount = parseFloat(document.getElementById('ctAmount').value);
+            // 【v21.26 / P2】同上：保留 0 占位期，避免分期数变化导致已付状态索引错位
             const ratios = document.getElementById('ctRatios').value.split(',').map(r => parseFloat(r.trim())).filter(
-                r => !isNaN(r) && r > 0);
+                r => !isNaN(r));
             if (!type) { showAlert('请选择类型'); return; }
             if (isNaN(amount) || amount <= 0) { showAlert('请输入有效金额'); return; }
             if (ratios.length === 0) { showAlert('请输入有效比例'); return; }
@@ -5630,9 +6478,8 @@ function renderSettlement(mc) {
                     let endDate = t.endDate || t.dueDate || startDate;
                     if (!startDate) return;
                     if (t.completed) {
-                        // 已完成任务：最多显示到完成日；若缺失完成日，按今天截断，避免显示到原结束日
-                        const todayStr = new Date().toISOString().split('T')[0];
-                        const compDate = t.completedDate || todayStr;
+                        // 已完成任务：最多显示到完成日；若缺失完成日则不截断（用原结束日）
+                        const compDate = t.completedDate;
                         if (compDate && compDate < endDate) endDate = compDate;
                     }
                     if (startDate > endDate) { [startDate, endDate] = [endDate, startDate]; }
@@ -5861,7 +6708,7 @@ function renderLogs(mc) {
                     </select>
                     <div style="flex:1;min-width:100px;display:flex;align-items:center;gap:6px;">
                         <span style="font-size:13px;color:var(--text-secondary);flex-shrink:0;">📅</span>
-                        <input type="date" id="logDate" value="${new Date().toISOString().split('T')[0]}" style="flex:1;min-width:0;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;color:var(--m-text);">
+                        <input type="date" id="logDate" value="${fmtLocal()}" style="flex:1;min-width:0;padding:6px 10px;border-radius:8px;border:1px solid var(--m-border);font-size:14px;color:var(--m-text);">
                     </div>
                 </div>
                 <div class="log-input-area" style="margin-top:10px;">
@@ -5871,7 +6718,7 @@ function renderLogs(mc) {
                 <div style="margin-top:16px;">
                     <h4 style="color:var(--primary);font-size:14px;margin-bottom:8px;">历史日志</h4>
                     <div style="overflow-y:auto;max-height:50vh;-webkit-overflow-scrolling:touch;">
-                        ${appData.workLogs.slice().sort((a, b) => b.date.localeCompare(a.date)).map(l => {
+                        ${appData.workLogs.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(l => {
                             const projName = l.projectId ? getProjectName(l.projectId) : '无关联';
                             return `<div style="padding:8px 10px;border-bottom:1px solid var(--m-border);font-size:13px;">
                                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
@@ -5915,13 +6762,13 @@ function renderLogs(mc) {
               </div>
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap;">
                 <span style="font-weight:500;font-size:13px;">📅 日期</span>
-                <input type="date" id="logDate" value="${new Date().toISOString().split('T')[0]}" style="padding:4px 10px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
+                <input type="date" id="logDate" value="${fmtLocal()}" style="padding:4px 10px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
               </div>
               <textarea id="logContent" placeholder="输入工作日志..." style="width:100%;height:150px;padding:12px;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;"></textarea>
               <button class="btn btn-primary" style="margin-top:8px;" onclick="addWorkLog()">保存日志</button>
               <div style="margin-top:16px;flex:1;overflow-y:auto;">
                 <h4 style="color:var(--primary);font-size:14px;">历史日志</h4>
-                ${appData.workLogs.slice().sort((a, b) => b.date.localeCompare(a.date)).map(l => {
+                ${appData.workLogs.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(l => {
                     const projName = l.projectId ? getProjectName(l.projectId) : '无关联';
                     return `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;">
                         <span>${l.date} <span style="color:var(--primary);font-weight:500;">[${projName}]</span> ${esc(l.content)}</span>
@@ -5969,7 +6816,7 @@ function addWorkLog() {
     if (!content) return;
     // 读取日期（默认今天），支持补写
     const dateInput = document.getElementById('logDate');
-    const dateVal = dateInput && dateInput.value ? dateInput.value : new Date().toISOString().split('T')[0];
+    const dateVal = dateInput && dateInput.value ? dateInput.value : fmtLocal();
     const projectId = window._selectedLogProjectId || null;
     if (!appData.workLogs) appData.workLogs = [];
     appData.workLogs.push({
@@ -5990,7 +6837,7 @@ function addWorkLog() {
     // 保存后默认取消关联项目，避免下次填写仍关联上次的项目
     window._selectedLogProjectId = null;
     const sel = document.getElementById('logDate');
-    if (sel) sel.value = new Date().toISOString().split('T')[0];
+    if (sel) sel.value = fmtLocal();
     renderLogs(document.getElementById('mainContent'));
     showToast('💾 日志已保存到本地，正在同步…');
     if (supabaseClient && getSupabaseConfig()) {
@@ -6175,7 +7022,10 @@ function renderArchived(mc) {
             const idx = appData.shelved.findIndex(s => s.projectData.id === pid);
             if (idx === -1) return;
             const s = appData.shelved[idx];
-            s.projectData.id = getNextId();
+            const _oldId = s.projectData.id;
+            const _newId = getNextId();
+            s.projectData.id = _newId;
+            _restoreProjectTasks(s.projectData, _oldId, _newId);   // 【v21.26 / #26】挂回任务
             appData.projects.push(s.projectData);
             appData.shelved.splice(idx, 1);
             saveData();
@@ -6188,7 +7038,10 @@ function renderArchived(mc) {
             const idx = appData.terminated.findIndex(s => s.projectData.id === pid);
             if (idx === -1) return;
             const s = appData.terminated[idx];
-            s.projectData.id = getNextId();
+            const _oldId = s.projectData.id;
+            const _newId = getNextId();
+            s.projectData.id = _newId;
+            _restoreProjectTasks(s.projectData, _oldId, _newId);   // 【v21.26 / #26】挂回任务
             appData.projects.push(s.projectData);
             appData.terminated.splice(idx, 1);
             saveData();
@@ -6201,7 +7054,10 @@ function renderArchived(mc) {
             const idx = appData.archived.findIndex(s => s.projectData.id === pid);
             if (idx === -1) return;
             const a = appData.archived[idx];
-            a.projectData.id = getNextId();
+            const _oldId = a.projectData.id;
+            const _newId = getNextId();
+            a.projectData.id = _newId;
+            _restoreProjectTasks(a.projectData, _oldId, _newId);   // 【v21.26 / #26】挂回任务
             appData.projects.push(a.projectData);
             appData.archived.splice(idx, 1);
             saveData();
@@ -6648,7 +7504,7 @@ function renderTemplates(mc) {
         // ============================================================
 function generateReportContent(type, fieldName) {
     const now = new Date();
-    const today = now.toISOString().split('T')[0];
+    const today = fmtLocal(now);
     const activeProjects = appData.projects.filter(p => !p.archived && !p.shelved && !p.terminated);
     const allTasks = appData.tasks || [];
     const day = now.getDay();
@@ -6656,22 +7512,22 @@ function generateReportContent(type, fieldName) {
     weekStart.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
     const weekEnd = new Date(weekStart);
     weekEnd.setDate(weekStart.getDate() + 6);
-    const weekStartStr = weekStart.toISOString().split('T')[0];
-    const weekEndStr = weekEnd.toISOString().split('T')[0];
+    const weekStartStr = fmtLocal(weekStart);
+    const weekEndStr = fmtLocal(weekEnd);
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
     const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-    const monthStartStr = monthStart.toISOString().split('T')[0];
-    const monthEndStr = monthEnd.toISOString().split('T')[0];
+    const monthStartStr = fmtLocal(monthStart);
+    const monthEndStr = fmtLocal(monthEnd);
     const nextWeekStart = new Date(weekStart);
     nextWeekStart.setDate(weekStart.getDate() + 7);
     const nextWeekEnd = new Date(nextWeekStart);
     nextWeekEnd.setDate(nextWeekStart.getDate() + 6);
-    const nextWeekStartStr = nextWeekStart.toISOString().split('T')[0];
-    const nextWeekEndStr = nextWeekEnd.toISOString().split('T')[0];
+    const nextWeekStartStr = fmtLocal(nextWeekStart);
+    const nextWeekEndStr = fmtLocal(nextWeekEnd);
     const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
     const nextMonthEnd = new Date(now.getFullYear(), now.getMonth() + 2, 0);
-    const nextMonthStartStr = nextMonthStart.toISOString().split('T')[0];
-    const nextMonthEndStr = nextMonthEnd.toISOString().split('T')[0];
+    const nextMonthStartStr = fmtLocal(nextMonthStart);
+    const nextMonthEndStr = fmtLocal(nextMonthEnd);
     const field = fieldName.toLowerCase();
 
     // === 新增：工作日志字段 ===
@@ -6914,6 +7770,43 @@ function renderReportTemplate(mc) {
         });
     }
 }
+        // 【v21.25】报告内容安全化 —— 修复存储型 XSS。
+        // 历史实现把 contenteditable 的 innerHTML 原样存进 appData.reportContents / reportHistory，
+        // 并随快照同步到云端；粘贴 <img src=x onerror=...> 后，任何设备打开「历史报告」都会执行任意 JS。
+        // 这里统一清洗为「纯文本 + <br>」：用 DOMParser 解析（惰性文档，其中的 img/script 不加载不执行），
+        // 再把块级元素还原成换行，最后重新转义输出。
+        function reportContentToSafeHtml(raw) {
+            if (raw === null || raw === undefined) return '';
+            const s = String(raw);
+            if (s.indexOf('<') === -1) return esc(s).replace(/\n/g, '<br>');
+            try {
+                const doc = new DOMParser().parseFromString(s, 'text/html');
+                const body = doc.body || doc.documentElement;
+                if (!body) return esc(s).replace(/\n/g, '<br>');
+                body.querySelectorAll('script,style,noscript,iframe,object,embed,svg,math,link,meta,form,input,button,textarea').forEach(n => n.remove());
+                body.querySelectorAll('br').forEach(n => n.replaceWith(doc.createTextNode('\n')));
+                body.querySelectorAll('div,p,li,tr,h1,h2,h3,h4,h5,h6,section,article,header,footer,blockquote,pre,span').forEach(n => {
+                    const disp = (n.getAttribute('style') || '').replace(/\s/g, '').toLowerCase();
+                    if (n.tagName === 'SPAN' && disp.indexOf('display:block') === -1) return;  // 行内 span 不换行
+                    n.appendChild(doc.createTextNode('\n'));
+                });
+                let text = body.textContent || '';
+                text = text.replace(/\u00a0/g, ' ').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/\s+$/, '');
+                return esc(text).replace(/\n/g, '<br>');
+            } catch (e) {
+                return esc(s).replace(/\n/g, '<br>');
+            }
+        }
+
+        // 【v21.25】报告字段输入统一入口：改为存纯文本（innerText），从源头不再写入 HTML
+        function onReportFieldInput(el) {
+            if (!el) return;
+            const type = window._reportType || 'weekly';
+            const field = el.dataset ? el.dataset.field : null;
+            if (!field) return;
+            saveReportContentField(type, field, el.innerText || '');
+        }
+
         function saveReportContentField(type, field, content) {
             if (!appData.reportContents) appData.reportContents = { weekly: {}, monthly: {} };
             if (!appData.reportContents[type]) appData.reportContents[type] = {};
@@ -6930,7 +7823,8 @@ function renderReportTemplate(mc) {
             fieldContents.forEach(el => {
                 const field = el.dataset.field;
                 if (field) {
-                    appData.reportContents[type][field] = el.innerHTML;
+                    // 【v21.25】存纯文本，不再把 contenteditable 的 HTML 写进数据（防存储型 XSS）
+                    appData.reportContents[type][field] = el.innerText || '';
                 }
             });
             saveData();
@@ -6994,15 +7888,13 @@ function previewReportFromEditor() {
         if (!content || content.trim() === '') {
             content = generateReportContent(type, f);
         }
-        const formattedContent = content.split('\n').filter(line => line.trim()).map(line => 
-            `<span style="display:block;padding:1px 0;">${esc(line.trim())}</span>`
-        ).join('');
+        const formattedContent = reportContentToSafeHtml(content);
         sectionsHtml += `
             <div class="field-title" style="font-weight:600;color:var(--primary);margin-top:4px;border-bottom:1px solid #e9ecef;padding-bottom:2px;font-size:13px;">【${esc(f)}】</div>
             <div class="field-content" 
                  contenteditable="true" 
-                 data-field="${esc(f)}"
-                 oninput="saveReportContentField('${type}','${esc(f)}',this.innerHTML)"
+                 data-field="${escAttr(f)}"
+                 oninput="onReportFieldInput(this)"
                  style="margin:1px 0 4px 0;padding:2px 8px;min-height:22px;border-radius:4px;background:#fff;border:1px solid #e9ecef;font-size:12px;line-height:1.5;">
                 ${formattedContent || '点击输入内容...'}
             </div>
@@ -7049,7 +7941,7 @@ function saveReportSnapshot() {
     preview.querySelectorAll('.field-content').forEach(el => {
         const field = el.dataset.field;
         if (field) {
-            fieldContents[field] = el.innerHTML;
+            fieldContents[field] = el.innerText || '';   // 【v21.25】存纯文本，防存储型 XSS
         }
     });
 
@@ -7101,7 +7993,7 @@ function viewReportHistory() {
 
     let listHtml = history.map((item, idx) => `
         <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 10px;border-bottom:1px solid #f1f5f9;cursor:pointer;" 
-             onclick="viewReportDetail('${item.id}')">
+             onclick="viewReportDetail('${escAttr(item.id)}')">
             <div>
                 <span style="font-weight:600;">${esc(item.title)}</span>
                 <span style="font-size:12px;color:var(--text-secondary);margin-left:10px;">${esc(item.period)}</span>
@@ -7140,7 +8032,7 @@ function viewReportDetail(id) {
     let contentHtml = item.fields.map(f => `
         <div style="margin-bottom:6px;">
             <div style="font-weight:600;color:var(--primary);font-size:13px;border-bottom:1px solid #e9ecef;padding-bottom:2px;">【${esc(f.name)}】</div>
-            <div style="padding:2px 8px;font-size:12px;line-height:1.5;background:#fafcff;border-radius:4px;border:1px solid #e9ecef;margin-top:2px;white-space:pre-wrap;">${f.content || '（空）'}</div>
+            <div style="padding:2px 8px;font-size:12px;line-height:1.5;background:#fafcff;border-radius:4px;border:1px solid #e9ecef;margin-top:2px;white-space:pre-wrap;">${reportContentToSafeHtml(f.content) || '（空）'}</div>
         </div>
     `).join('');
 
@@ -7157,7 +8049,7 @@ function viewReportDetail(id) {
             </div>
             <div class="confirm-actions" style="margin-top:12px;">
                 <button class="btn btn-ghost" onclick="closeModal()">关闭</button>
-                <button class="btn btn-xs btn-ghost" onclick="deleteReportHistory('${item.id}')" style="color:var(--danger);">删除此记录</button>
+                <button class="btn btn-xs btn-ghost" onclick="deleteReportHistory('${escAttr(item.id)}')" style="color:var(--danger);">删除此记录</button>
             </div>
         </div>
     `;
@@ -7214,10 +8106,13 @@ function deleteReportHistory(id) {
                 if (name && name.trim()) {
                     const type = window._reportType || 'weekly';
                     if (!appData.reportTemplates[type]) appData.reportTemplates[type] = [];
-                    appData.reportTemplates[type].push(name.trim());
+                    // 【v21.34】防重复：同名字段会导致 querySelectorAll 遍历时后者覆盖前者，编辑丢失
+                    const _n = name.trim();
+                    if (appData.reportTemplates[type].includes(_n)) { showAlert('字段「' + esc(_n) + '」已存在'); return; }
+                    appData.reportTemplates[type].push(_n);
                     if (!appData.reportContents) appData.reportContents = { weekly: {}, monthly: {} };
                     if (!appData.reportContents[type]) appData.reportContents[type] = {};
-                    appData.reportContents[type][name.trim()] = '';
+                    appData.reportContents[type][_n] = '';
                     saveData();
                     renderReportTemplate(document.getElementById('mainContent'));
                     showToast('✅ 字段已添加');
@@ -7262,6 +8157,10 @@ function deleteReportHistory(id) {
                     try {
                         const data = JSON.parse(ev.target.result);
                         if (data.type && data.fields) {
+                            // 【v21.34】结构校验：类型必须 weekly/monthly，fields 必须是数组，contents 必须是对象
+                            if (data.type !== 'weekly' && data.type !== 'monthly') { showAlert('❌ 无效的报告类型（仅支持 weekly / monthly）'); return; }
+                            if (!Array.isArray(data.fields)) { showAlert('❌ 字段列表格式错误'); return; }
+                            if (data.contents && typeof data.contents !== 'object' || Array.isArray(data.contents)) { data.contents = undefined; }
                             appData.reportTemplates[data.type] = data.fields;
                             if (data.contents) {
                                 if (!appData.reportContents) appData.reportContents = { weekly: {}, monthly: {} };
@@ -7551,6 +8450,7 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             a.href = URL.createObjectURL(blob);
             a.download = 'workbench.json';
             a.click();
+            URL.revokeObjectURL(a.href);  // 【v21.34】释放 Blob URL，防止长期泄漏
             showToast('✅ 导出成功');
         }
 
@@ -7562,6 +8462,37 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                 try {
                     const d = JSON.parse(e.target.result);
                     showConfirm('导入将覆盖当前数据，确认继续？', function() {
+                        // 【v21.26 / P2】导入旧备份不能直接整体替换：旧备份可能缺少新版本才有的字段
+                        // （dataReports / commissionTemplates / 墓碑数组等），后续页面读到
+                        // undefined.xxx 会直接白屏。这里先补齐结构并对类型做兜底。
+                        const _defaults = {
+                            companies: [], templates: [], projects: [], tasks: [], workLogs: [],
+                            settlements: [], shelved: [], terminated: [], archived: [],
+                            dataReports: { execution: {}, environmental: {} },
+                            knowledgeUrl: '', reportTemplates: {}, commissionTemplates: {},
+                            _idCounter: 0, _deletedProjectIds: [], _deletedTaskIds: [], _deletedWorkLogIds: [], _deletedCompanyNames: []
+                        };
+                        Object.keys(_defaults).forEach(k => {
+                            const dv = _defaults[k];
+                            if (d[k] === undefined || d[k] === null) { d[k] = dv; return; }
+                            if (Array.isArray(dv) && !Array.isArray(d[k])) {
+                                console.warn('⚠️ 导入数据字段 ' + k + ' 类型异常，已重置为空数组');
+                                d[k] = dv;
+                            } else if (!Array.isArray(dv) && typeof dv === 'object' &&
+                                (typeof d[k] !== 'object' || Array.isArray(d[k]))) {
+                                d[k] = dv;
+                            }
+                        });
+                        if (!d.dataReports || typeof d.dataReports !== 'object' || Array.isArray(d.dataReports)) {
+                            d.dataReports = { execution: {}, environmental: {} };
+                        }
+                        if (!d.dataReports.execution) d.dataReports.execution = {};
+                        if (!d.dataReports.environmental) d.dataReports.environmental = {};
+                        // 【v21.33】剥离内部字段：墓碑/时间戳/版本号是设备私有的，跨设备导入会污染目标设备
+                        // （墓碑会让目标设备从云端删除源设备的独立项目；时间戳会触发"待上传改动"覆盖云端）
+                        ['_deletedProjectIds', '_deletedTaskIds', '_deletedWorkLogIds', '_deletedCompanyNames'].forEach(k => { delete d[k]; d[k] = []; });
+                        (d.tasks || []).forEach(t => { if (t) delete t._doneAt; });
+                        (d.projects || []).forEach(p => { if (p) delete p._nodesAt; });
                         appData = d;
                         ensureColors();
                         syncSettlementsWithProjects();
@@ -7627,14 +8558,15 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                 const tpl = templateMap[tplName];
                 if (!tpl) { errors.push(`第${idx+1}行: 模板「${tplName}」不存在`); return; }
                 if (tag && tpl.tags && !tpl.tags.includes(tag)) { errors.push(`第${idx+1}行: 标签「${tag}」无效`); return; }
-                const exist = appData.projects.find(p => p.company === comp && p.templateId === tpl.id);
-                if (exist) { errors.push(`第${idx+1}行: ${comp}的「${tplName}」已存在`); return; }
+                const _tag = tag || (tpl.tags && tpl.tags[0]) || '';
+                const exist = appData.projects.find(p => p.company === comp && p.templateId === tpl.id && (p.tag || '') === _tag);
+                if (exist) { errors.push(`第${idx+1}行: ${comp}的「${tplName}」(${_tag})已存在`); return; }
                 appData.projects.push({
                     id: getNextId(),
                     templateId: tpl.id,
                     company: comp,
                     status: 'pending',
-                    tag: tag || tpl.tags[0] || '',
+                    tag: tag || (tpl.tags && tpl.tags[0]) || '',
                     important: false,
                     urgent: false,
                     nodes: tpl.nodes.map(n => ({ name: n.name, status: 'pending' })),
@@ -7692,6 +8624,11 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             const card = document.getElementById('mProjCard_' + ci);
             if (card) card.classList.toggle('expanded');
         }
+        // 【v21.26 / P2】从元素自身定位所属卡片（公司名改由 data-company 承载，不再拼进 JS 字符串）
+        function toggleMobileProjCardByCard(el) {
+            const card = el && el.closest && el.closest('.m-proj-card');
+            if (card) card.classList.toggle('expanded');
+        }
         function toggleMProjTypeByCard(el, tid) {
             const card = el.closest('.m-proj-card');
             const comp = card && card.dataset.company;
@@ -7704,7 +8641,7 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             const card = el.closest('.m-proj-card');
             const comp = card && card.dataset.company;
             if (!comp) return;
-            updateTag(comp, tid, el.value);
+            updateTag(comp, tid, el.value, el.getAttribute('data-curtag'));
         }
 
         // ===== 【v21.1】移动端项目类型勾选（复用 toggleProject 逻辑） =====
@@ -7719,9 +8656,10 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             if (chk) {
                 const tpl = appData.templates.find(t => t.id === tid);
                 if (!tpl) { showAlert('模板不存在'); return; }
-                // 【v21.5修复】防重复：同公司 + 同模板 的活动项目已存在时，不再创建第二个
-                const existing = appData.projects.find(pr => pr.company === comp && pr.templateId === tid && !pr
-                    .archived && !pr.shelved && !pr.terminated);
+                // 【v21.5修复】防重复：同公司 + 同模板 + 同标签 的活动项目已存在时，不再创建第二个
+                // 【v21.33】加 tag 维度：v21.26 允许同公司同模板不同标签，创建时也要按标签判重
+                const _defaultTag = (tpl.tags && tpl.tags[0]) || '';
+                const existing = appData.projects.find(pr => pr.company === comp && pr.templateId === tid && (pr.tag || '') === _defaultTag && !pr.archived && !pr.shelved && !pr.terminated);
                 if (existing) {
                     showToast('⚠️ 该公司「' + getTplName(tid) + '」项目已存在，未重复创建');
                     renderProjects(document.getElementById('mainContent'));
@@ -7732,15 +8670,24 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                     templateId: tid,
                     company: comp,
                     status: 'pending',
-                    tag: tpl.tags[0] || '',
+                    tag: (tpl.tags && tpl.tags[0]) || '',
                     important: false,
                     urgent: false,
                     nodes: tpl.nodes.map(n => ({ name: n.name, status: 'pending' })),
                     doneDate: null
                 });
             } else {
-                const p = appData.projects.find(pr => pr.company === comp && pr.templateId === tid && !pr.archived && !
-                    pr.shelved && !pr.terminated);
+                // 【v21.26 / #24】同公司同模板可能存在多个项目（标签分别为新建/扩建/改扩建）。
+                // 这种"取消勾选"的语义是二义的，不能盲删第一个（会删错项目），提示到项目总表按标签处理。
+                const _cands = appData.projects.filter(pr => pr.company === comp && pr.templateId === tid &&
+                    !pr.archived && !pr.shelved && !pr.terminated);
+                if (_cands.length > 1) {
+                    showAlert('该公司「' + getTplName(tid) + '」类型有 ' + _cands.length +
+                        ' 个项目（标签不同），请到「项目总表」中按标签逐条取消。');
+                    renderProjects(document.getElementById('mainContent'));
+                    return;
+                }
+                const p = _cands[0];
                 if (p) {
                     // 【v21.5修复】记录“墓碑”：上传时从云端精确删除该项目及其子记录，避免“取消后重新创建又出现2个重复”
                     if (!appData._deletedProjectIds) appData._deletedProjectIds = [];
@@ -7755,17 +8702,50 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             renderProjects(document.getElementById('mainContent'));
         }
 
-        function updateTag(comp, tid, val) {
-            const p = appData.projects.find(pr => pr.company === comp && pr.templateId === tid && !pr.archived && !pr
-                .shelved && !pr.terminated);
-            if (p) { p.tag = val;
-                saveData();
-                syncSettlementsWithProjects(); }
+        // 【v21.26 / #24】同公司同模板可能并存多个项目（标签不同）。prevTag 用于定位"要改的那一条"：
+        // 调用方把修改前的标签传进来优先匹配；没有 prevTag 且存在多条时给出提示，而不是随便改一条。
+        function updateTag(comp, tid, val, prevTag) {
+            const _cands = appData.projects.filter(pr => pr.company === comp && pr.templateId === tid &&
+                !pr.archived && !pr.shelved && !pr.terminated);
+            if (_cands.length === 0) return;
+            let p = null;
+            if (prevTag !== undefined && prevTag !== null) p = _cands.find(pr => (pr.tag || '') === prevTag) || null;
+            if (!p) {
+                if (_cands.length > 1) {
+                    showAlert('该公司「' + getTplName(tid) + '」类型有 ' + _cands.length +
+                        ' 个项目（标签不同），请到「项目总表」中按标签修改。');
+                    return;
+                }
+                p = _cands[0];
+            }
+            p.tag = val;
+            saveData();
+            syncSettlementsWithProjects();
         }
 
-        function closeModal() {
-            document.querySelectorAll('.modal-overlay').forEach(el => el.remove());
+        // 【v21.24】PC 项目总表：不再把公司名裸插进内联 onchange（含引号会截断 JS / 闭合属性），
+        // 改为从所在行的 data-company + 元素 data-tid 读取，事件与数据彻底分离。
+        function toggleProjectRow(el) {
+            try {
+                const tr = el.closest('tr');
+                const comp = tr && tr.getAttribute('data-company');
+                const tid = el.getAttribute('data-tid');
+                if (!comp || !tid) return;
+                toggleProject(comp, tid, el.checked);
+            } catch (e) { console.error('toggleProjectRow 失败:', e); }
         }
+        function updateTagRow(el) {
+            try {
+                const tr = el.closest('tr');
+                const comp = tr && tr.getAttribute('data-company');
+                const tid = el.getAttribute('data-tid');
+                if (!comp || !tid) return;
+                updateTag(comp, tid, el.value, el.getAttribute('data-curtag'));
+            } catch (e) { console.error('updateTagRow 失败:', e); }
+        }
+
+        // 【v21.26 / P2】此处原有 closeModal() 的**重复定义**（与上方同名同实现）。
+        // JS 中后定义者覆盖前者，一旦两处实现不一致，改任一处都会静默失效 → 已删除，只保留上方那份。
 
         function showToast(msg, isError = false) {
             const toast = document.createElement('div');
