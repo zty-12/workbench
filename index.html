@@ -1,7 +1,22 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.35-mobile-split  2026-09-12  ★ 当前最新稿
+     v21.36-mobile-split  2026-09-14  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.36 修复（专项：跨设备日志不可见 / 网页补拉缺失）：
+     · 【P0 桌面写日志 → 网页「工作日志」不显示】经真实生产数据验证：桌面 submit_log 写入成功
+       （HTTP 201，work_logs 表确有该行，字段 date/type/project_id/content 齐全）；网页
+       mergeWorkLogsFromCloud 按 id 合并也保留全部云端行（快照分支与分表分支均已验证）。
+       真正缺口是「网页从不主动拉取」：
+       ① loadData 的 _autoPull = autoSyncEnabled || !_hasLocalData —— autoSync 关且本地有数据时
+          直接跳过 loadFromSupabase，只读 localStorage 缓存 → 浏览器「刷新」同样不拉取；
+       ② 「📤 上传」按钮 manualUpload 只上传、不拉取；
+       ③ 快照分支 work_logs 合并被 try/catch 静默吞掉，失败仍报「已同步」。
+     · 修复：loadData 新增 _needWorkLogPull = !_autoPull，在缓存恢复分支 return 前单独补拉
+       work_logs 并 merge + 落盘（只补日志，不动 projects/tasks 的「本地优先」模式）；
+       manualUpload 改为双向（上传成功后再 loadFromSupabase + renderPage）；
+       快照分支合并失败 console.warn → console.error，不再伪装成功。
+     · 验证：_chk_js.js 0 语法错误；_test_sync_scenes.js 全部通过；_test_v2127.py 全部通过。
 
      v21.35 修复（专项：模板中心顺序保存）：
      · 【P0 模板顺序保存后再次同步恢复原样】applyCloudSideTablesFromRes（快照分支）漏写
@@ -2107,7 +2122,7 @@ async function loadFromSupabase() {
                         mergeWorkLogsFromCloud(wlData, '【快照】');
                     }
                 } catch (e2) {
-                    console.warn('⚠️ 合并云端工作日志异常:', e2);
+                    console.error('❌ 合并云端工作日志失败（桌面端日志可能未显示，请重试同步）:', e2);
                 }
                 // 项目与任务以云端表为准合并：dashboard 会直接修改 projects.nodes / tasks.completed，
                 // 若不合并，快照中的旧数据会把 dashboard 的修改覆盖回去，导致工作台看不到变化。
@@ -3601,6 +3616,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
 
         // ---------- 加载入口 ----------
         async function loadData() {
+            let _needWorkLogPull = false;  // 【v21.36】完整拉取被跳过时，仍需单独补拉工作日志（跨设备）
             console.log('🔵 开始加载数据...');
             const configured = initSupabase();
 
@@ -3622,6 +3638,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
                 let _hasLocalData = false;
                 try { if (_rawCache) { const _c = JSON.parse(_rawCache); _hasLocalData = !!( _c.projects && _c.projects.length); } } catch(e) {}
                 const _autoPull = autoSyncEnabled || !_hasLocalData;
+            _needWorkLogPull = !_autoPull;
                 if (_autoPull) {
                 try {
                     console.log('🔵 尝试从 Supabase 加载...');
@@ -3691,6 +3708,19 @@ async function syncToSupabase(createSnapshotFlag = false) {
                             updateSyncStatus('已同步', 'success');
                             console.log('✅ 本地缓存数据已上传到 Supabase');
                         } catch (e) { console.error('❌ 上传失败:', e); }
+                    }
+                    // 【v21.36】autoSync 关闭且本地有数据时 _autoPull 为 false，上方未做完整拉取，
+                    // 但工作日志是跨设备高频写入（桌面端常写），这里补拉一次并合并，
+                    // 保证刷新/打开页面后桌面端刚写的日志立即可见。mergeWorkLogsFromCloud 已保留本地独有日志。
+                    if (_needWorkLogPull && supabaseClient) {
+                        try {
+                            const _wl = await fetchAllRows('work_logs');
+                            if (_wl && _wl.length) {
+                                mergeWorkLogsFromCloud(_wl, '【启动补拉-日志】');
+                                try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+                                console.log('✅ 已补拉工作日志（跨设备）:', _wl.length, '条');
+                            }
+                        } catch (e) { console.error('❌ 启动补拉工作日志失败:', e); }
                     }
                     return true;
                 } catch (e) { console.warn('⚠️ 缓存解析失败:', e); }
@@ -4153,6 +4183,12 @@ async function manualUpload() {
         try {
             await syncToSupabase(true);
             showToast('✅ 数据已上传到云端并创建新版本');
+            // 【v21.36】上传后顺带从云端拉取（双向同步）：桌面端刚写的日志等外部改动立即可见
+            try {
+                await loadFromSupabase();
+                _pendingUpload = false;
+                renderPage(currentPage);
+            } catch (e) { console.warn('⚠️ 上传后拉取云端数据失败（上传本身已成功）:', e); }
         } catch (e) {
             showAlert('上传失败: ' + e.message);
         }
