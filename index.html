@@ -1,7 +1,26 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.36-mobile-split  2026-09-14  ★ 当前最新稿
+     v21.37-mobile-split  2026-09-15  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.37 修复（专项：snapshots 表只增不减 → 加保留策略 + 手动清理）：
+     · 【隐患】实测 snapshots 表 24 天已 244 行 / payload 合计 23MB（单行约 99KB），
+       峰值单日 59 个。成因：scheduleAutoUpload() 的 2 秒防抖回调调 syncToSupabase(true)，
+       每次改动（勾任务/改项目/写日志）都会 insert 一整份快照；全文件只有 insert + 两处
+       select，无任何 delete/裁剪 → 约 1MB/天，Supabase 免费 500MB 约 1 年写满。
+     · B 保留策略：新增 SNAPSHOT_KEEP_RECENT=15 / SNAPSHOT_KEEP_DAYS=30 与
+       computeKeepSnapshotIds()（纯函数）+ fetchSnapshotIndex()（分页读索引）+ pruneSnapshots()。
+       createSnapshot() 在 insert 前先裁剪旧快照（尽力而为，裁剪失败不影响本次创建）。
+       规则**按设备分组**分别计算：① 每设备保留最近 15 个；② 近 30 天每天保留最新 1 个。
+       按设备分组保证任何设备都不会丢掉自己的"最近快照"（loadLatestSnapshot 优先取本设备最近
+       一条，保留下限 15 远大于 1 → 功能零风险）。带 _pruningSnapshots 重入锁防并发裁剪。
+     · C 清理按钮：「版本历史与恢复」卡片新增「🧹 清理历史快照」+ 快照总数/策略提示行。
+       点击先 dryRun 预览（显示总数 / 待删 / 保留数），确认后执行同一套 pruneSnapshots，
+       被删除的旧版本不可恢复。自动裁剪与手动清理共用同一函数，避免两处逻辑漂移。
+     · 权限：卡片建表 SQL 已含 `grant insert, select, delete on public.snapshots to anon`，
+       无需改 SQL。
+     · 验证：_chk_js.js 0 语法错误；_test_sync_scenes.js 全部通过；_test_v2127.py 全部通过；
+       保留策略算法用真实云端索引数据离线复算核对。
 
      v21.36 修复（专项：跨设备日志不可见 / 网页补拉缺失）：
      · 【P0 桌面写日志 → 网页「工作日志」不显示】经真实生产数据验证：桌面 submit_log 写入成功
@@ -2933,8 +2952,116 @@ async function loadFromSupabase() {
             }
         }
 
+        // ============================================================
+        // 【v21.37 / B+C】快照保留策略（snapshots 表原本只增不减）
+        // ------------------------------------------------------------
+        // 实测：24 天 244 行 / payload 合计 23MB（单行约 99KB），峰值单日 59 个。
+        // 成因：scheduleAutoUpload() 的 2 秒防抖回调调 syncToSupabase(true) → 每次改动都建一份快照。
+        // 原实现全文件只有 insert + 两处 select，没有任何 delete/裁剪 → 约 1MB/天，
+        // Supabase 免费 500MB 约 1 年写满。
+        // 本策略：建快照前先裁剪旧快照。**按设备分组分别计算**，保证任何设备都不会丢掉自己的
+        // "最近快照"（loadLatestSnapshot 优先取本设备最近一条，而保留下限 15 远大于 1 → 功能零风险）。
+        //   ① 每台设备无条件保留最近 SNAPSHOT_KEEP_RECENT 个
+        //   ② 最近 SNAPSHOT_KEEP_DAYS 天内，每天保留最新 1 个（保留跨天回溯能力）
+        //   ③ 其余删除
+        const SNAPSHOT_KEEP_RECENT = 15;   // 每设备无条件保留的最近快照数
+        const SNAPSHOT_KEEP_DAYS = 30;     // 近 N 天内每天保留 1 个
+        let _pruningSnapshots = false;     // 重入锁：自动上传 2s 防抖可能叠触发裁剪
+
+        function _snapshotDayKey(iso) {
+            const d = new Date(iso);
+            if (isNaN(d.getTime())) return 'invalid';
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' +
+                   String(d.getDate()).padStart(2, '0');
+        }
+
+        // 纯函数：算出应保留的快照 id 集合（不依赖网络，便于测试）
+        function computeKeepSnapshotIds(rows, keepRecent, keepDays, nowMs) {
+            const keep = new Set();
+            if (!Array.isArray(rows) || !rows.length) return keep;
+            const byDevice = new Map();
+            rows.forEach(r => {
+                if (!r || !r.id) return;
+                const k = r.device || 'unknown';
+                if (!byDevice.has(k)) byDevice.set(k, []);
+                byDevice.get(k).push(r);
+            });
+            const cutoff = (nowMs || Date.now()) - keepDays * 86400000;
+            byDevice.forEach(list => {
+                list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+                list.slice(0, keepRecent).forEach(r => keep.add(r.id));     // ① 最近 N 个
+                const seenDay = new Set();
+                for (const r of list) {                                      // ② 近 D 天每天首个
+                    const t = new Date(r.created_at).getTime();
+                    if (!(t >= cutoff)) continue;
+                    const day = _snapshotDayKey(r.created_at);
+                    if (seenDay.has(day)) continue;
+                    seenDay.add(day);
+                    keep.add(r.id);
+                }
+            });
+            return keep;
+        }
+
+        // 读快照索引（只要 id/created_at/device，不含 payload，开销极小）
+        async function fetchSnapshotIndex() {
+            const pageSize = 1000;
+            let all = [], from = 0;
+            for (;;) {
+                const { data, error } = await supabaseClient.from('snapshots')
+                    .select('id, created_at, device')
+                    .order('created_at', { ascending: false })
+                    .range(from, from + pageSize - 1);
+                if (error) throw error;
+                const chunk = data || [];
+                all = all.concat(chunk);
+                if (chunk.length < pageSize) break;
+                from += pageSize;
+            }
+            return all;
+        }
+
+        // 执行裁剪。dryRun=true 只统计不删除（供「清理历史快照」按钮先预览）
+        async function pruneSnapshots(dryRun = false) {
+            if (!supabaseClient) return { total: 0, keep: 0, doomed: 0, deleted: 0 };
+            if (!dryRun && _pruningSnapshots) { console.log('🧹 已有快照裁剪进行中，跳过本次'); return null; }
+            if (!dryRun) _pruningSnapshots = true;
+            try {
+                const rows = await fetchSnapshotIndex();
+                const keep = computeKeepSnapshotIds(rows, SNAPSHOT_KEEP_RECENT, SNAPSHOT_KEEP_DAYS);
+                const doomed = rows.filter(r => r && r.id && !keep.has(r.id)).map(r => r.id);
+                if (dryRun || !doomed.length) {
+                    return { total: rows.length, keep: keep.size, doomed: doomed.length, deleted: 0 };
+                }
+                let deleted = 0;
+                const chunkSize = 50;   // 分批删除，避免 URL 过长
+                for (let i = 0; i < doomed.length; i += chunkSize) {
+                    const chunk = doomed.slice(i, i + chunkSize);
+                    const { error } = await supabaseClient.from('snapshots').delete().in('id', chunk);
+                    if (error) {
+                        console.warn('⚠️ 删除旧快照失败（已删 ' + deleted + '/' + doomed.length + '）:', error.message);
+                        break;
+                    }
+                    deleted += chunk.length;
+                }
+                console.log('🧹 快照保留策略：总数 ' + rows.length + ' → 保留 ' + (rows.length - deleted) +
+                            ' 个（删除 ' + deleted + ' 个；规则：每设备最近 ' + SNAPSHOT_KEEP_RECENT +
+                            ' 个 + 近 ' + SNAPSHOT_KEEP_DAYS + ' 天每日 1 个）');
+                return { total: rows.length, keep: rows.length - deleted, doomed: doomed.length, deleted };
+            } finally {
+                if (!dryRun) _pruningSnapshots = false;
+            }
+        }
+
         async function createSnapshot() {
             if (!supabaseClient) throw new Error('Supabase 未初始化');
+            // 【v21.37 / B】建快照前先按保留策略裁剪旧快照。
+            // 尽力而为：裁剪失败绝不影响本次快照创建（否则会把"同步成功"误报成"同步失败"）。
+            try {
+                await pruneSnapshots(false);
+            } catch (pruneErr) {
+                console.warn('⚠️ 快照保留策略执行失败（不影响本次创建）:', pruneErr && pruneErr.message);
+            }
             const payload = JSON.parse(JSON.stringify(appData));
             // 【v21.25】_doneAt 是本设备的"未上传改动"标记，不应进快照（否则别的设备会误以为自己有待上传改动）
             if (Array.isArray(payload.tasks)) payload.tasks.forEach(t => { if (t) delete t._doneAt; });
@@ -8287,11 +8414,13 @@ function deleteReportHistory(id) {
                 </div>
                 <div class="card" style="margin-top:16px;">
                     <h3 style="color:var(--primary);">🕐 版本历史与恢复</h3>
-                    <p style="color:#6c7a94;margin-bottom:12px;">每次上传都会自动创建一个可恢复的数据版本。同步时默认拉取最新版本。</p>
+                    <p style="color:#6c7a94;margin-bottom:12px;">每次上传都会自动创建一个可恢复的数据版本。同步时默认拉取最新版本。旧版本会按保留策略自动清理，避免占用云端空间。</p>
                     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
                         <button class="btn btn-success" onclick="restoreLatestSnapshotUI()">恢复最新版本</button>
                         <button class="btn btn-primary" onclick="loadSnapshotListUI()">查看历史版本</button>
+                        <button class="btn btn-ghost" onclick="cleanupSnapshotsUI()">🧹 清理历史快照</button>
                     </div>
+                    <div id="snapshotStat" style="font-size:12px;color:#94a3b8;margin-bottom:10px;"></div>
                     <div id="snapshotList" style="font-size:13px;"></div>
                     <details style="margin-top:12px;">
                         <summary style="cursor:pointer;color:var(--primary);font-size:13px;font-weight:500;">📋 首次使用版本功能？点击展开建表 SQL</summary>
@@ -8420,6 +8549,18 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             if (!listEl) return;
             if (!supabaseClient) { listEl.innerHTML = '<p style="color:#94a3b8;">请先配置 Supabase 后查看版本历史。</p>'; return; }
             listEl.innerHTML = '<p style="color:#94a3b8;">⏳ 正在加载版本历史...</p>';
+            // 【v21.37 / C】显示快照总量 + 当前保留策略（head:true 只取计数，不传 payload）
+            const statEl = document.getElementById('snapshotStat');
+            if (statEl) {
+                try {
+                    const { count } = await supabaseClient.from('snapshots')
+                        .select('*', { count: 'exact', head: true });
+                    statEl.textContent = (typeof count === 'number')
+                        ? '当前快照总数：' + count + ' 个　|　保留策略：每设备最近 ' + SNAPSHOT_KEEP_RECENT +
+                          ' 个 + 近 ' + SNAPSHOT_KEEP_DAYS + ' 天每日 1 个（上传时自动裁剪）'
+                        : '';
+                } catch (e) { statEl.textContent = ''; }
+            }
             try {
                 const snapshots = await listSnapshots(20);
                 if (snapshots.length === 0) {
@@ -8458,6 +8599,53 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                     if (statusMsg) statusMsg.textContent = '❌ 恢复失败: ' + e.message;
                 }
             }, function() {});
+        }
+
+        // 【v21.37 / C】手动清理历史快照：先 dryRun 预览数量，确认后执行保留策略裁剪。
+        // 与自动裁剪（B）用的是同一套规则与同一个函数，避免两处逻辑漂移。
+        async function cleanupSnapshotsUI() {
+            if (!supabaseClient) { showAlert('请先配置 Supabase'); return; }
+            const statusMsg = document.getElementById('cloudStatusMsg');
+            const statEl = document.getElementById('snapshotStat');
+            if (statusMsg) statusMsg.textContent = '⏳ 正在统计快照...';
+            let preview;
+            try {
+                preview = await pruneSnapshots(true);
+            } catch (e) {
+                showAlert('统计失败: ' + e.message);
+                if (statusMsg) statusMsg.textContent = '❌ 快照统计失败: ' + e.message;
+                return;
+            }
+            if (!preview) { showAlert('已有快照清理任务进行中，请稍候重试'); return; }
+            if (!preview.doomed) {
+                showToast('✅ 无需清理：当前 ' + preview.total + ' 个快照都在保留范围内');
+                if (statusMsg) statusMsg.textContent = '✅ 快照 ' + preview.total + ' 个，无需清理';
+                return;
+            }
+            const msg = '确认清理历史快照？\n\n' +
+                '当前总数：' + preview.total + ' 个\n' +
+                '将被删除：' + preview.doomed + ' 个（旧版本）\n' +
+                '清理后保留：约 ' + preview.keep + ' 个\n\n' +
+                '保留规则（按设备分别计算，不会删掉任何设备的最新版本）：\n' +
+                '· 每台设备无条件保留最近 ' + SNAPSHOT_KEEP_RECENT + ' 个\n' +
+                '· 最近 ' + SNAPSHOT_KEEP_DAYS + ' 天内，每天保留最新 1 个\n\n' +
+                '⚠️ 被删除的旧版本无法再恢复。';
+            showConfirm(msg, async function() {
+                try {
+                    if (statusMsg) statusMsg.textContent = '⏳ 正在清理历史快照...';
+                    const r = await pruneSnapshots(false);
+                    const n = r ? r.deleted : 0;
+                    showToast('✅ 已清理 ' + n + ' 个旧快照');
+                    if (statusMsg) statusMsg.textContent = '✅ 已清理 ' + n + ' 个旧快照，保留 ' + (r ? r.keep : '') + ' 个';
+                    loadSnapshotListUI();
+                } catch (e) {
+                    showAlert('清理失败: ' + e.message);
+                    if (statusMsg) statusMsg.textContent = '❌ 清理失败: ' + e.message;
+                    if (statEl) statEl.textContent = '';
+                }
+            }, function() {
+                if (statusMsg) statusMsg.textContent = '已取消清理';
+            });
         }
 
         function copySnapshotSql() {
