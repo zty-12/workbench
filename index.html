@@ -1,7 +1,25 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.37-mobile-split  2026-09-15  ★ 当前最新稿
+     v21.38-mobile-split  2026-09-17  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.38 修复（专项：移动端「任务分配」待分配区与已分配区重叠）：
+     · 【P0 视觉重叠】移动端任务分配页，上方「待分配」项目卡片列表与下方「已分配的任务」
+       表格区域重合、表格内容被卡片盖住。根因：@media(max-width:768px) 里 .task-layout
+       仍是 display:flex;flex-direction:column，.top/.bottom 各 flex:1 平分有限高度；
+       而 .top 内的 .m-task-cards 是 flex-shrink:0（永不压缩）且 #taskGrid 移动端被设为
+       maxHeight:none + 不滚动 → 内容一旦变多，.top 内容溢出自身盒子（实测溢出 203px），
+       向下漫入 .bottom 区域造成视觉重叠。外层 .card{flex:1} 又限制了可分配高度，
+       使整页无法靠自然增高来消化内容。
+     · 修复（仅改移动端媒体查询内 4 行 CSS，PC 端零改动）：
+       .card:has(.task-layout){height:auto;flex:none} → 任务页卡片按内容自然增高；
+       .task-layout{display:block;height:auto;flex:none} → 取消上下 flex 平分；
+       .task-layout .top/.bottom{display:block;height:auto;flex:none} + .bottom{margin-top:12px}
+       → 上下自然堆叠、留出间隔，整页交由外层 .main-content(overflow-y:auto) 统一滚动。
+     · 验证：playwright + Edge 真实渲染 390×844 移动端视口，修复前 topOverflowPx=203 /
+       contentSpillsIntoBottom=true（复现重叠），修复后 topOverflowPx=0 /
+       contentSpillsIntoBottom=false；PC 1440×900 回归 topOverflowPx=0、上下仍等比平分；
+       _chk_js.js 0 语法错误。
 
      v21.37 修复（专项：snapshots 表只增不减 → 加保留策略 + 手动清理）：
      · 【隐患】实测 snapshots 表 24 天已 244 行 / payload 合计 23MB（单行约 99KB），
@@ -1155,11 +1173,13 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .archive-filter-bar { flex-wrap: wrap; gap: 8px; }
     .archive-filter-bar input, .archive-filter-bar select { flex: 1; min-width: 100px; height: 38px; font-size: 16px; }
 
-    /* 任务页：移动端上下分区各占等比 */
-    .task-layout { gap: 10px; }
-    .task-layout .top { min-height: 0; }
-    .task-layout .bottom { min-height: 0; }
+    /* 任务页：移动端上下分区自然堆叠，交由外层 .main-content 整页滚动，杜绝 flex 平分限高导致的上下重叠 */
+    .card:has(.task-layout) { height:auto; flex:none; }
+    .task-layout { display:block; height:auto; flex:none; min-height:0; gap:10px; }
+    .task-layout .top { display:block; height:auto; flex:none; min-height:0; }
+    .task-layout .bottom { display:block; height:auto; flex:none; min-height:0; margin-top:12px; }
     .task-layout .top .task-grid { max-height: 40vh !important; }
+    .task-layout .top .m-task-cards { flex-shrink:0; }
     .task-layout .bottom .table-wrap { max-height: 35vh; }
 
     /* 结算筛选栏：移动端真正单行，不滚动；起止日期合并为一个组合 pill */
