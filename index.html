@@ -1,7 +1,22 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.38-mobile-split  2026-09-17  ★ 当前最新稿
+     v21.39-mobile-split  2026-09-17  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.39 调整（专项：移动端「待分配」占比过大 → 上下各占一半）：
+     · 【体验】v21.38 让上下两区自然堆叠、整页滚动后，待分配卡片多时会把「已分配的任务」
+       顶到很下面（用户反馈：待分配占比太大）。改为：任务页卡片高度锁定在可视区内，
+       .top/.bottom 各 flex:1 平分（各占约一半），内容超出时各自内部滚动，整页不滚。
+     · 修复（仅移动端媒体查询 + 1 处 JS 内联样式，PC 端零改动）：
+       .card:has(.task-layout){min-height:0;overflow:hidden} → 锁高度、裁掉溢出；
+       .task-layout/.top/.bottom{flex:1 1 0;min-height:0} → 上下各半；
+       .top .m-task-cards{flex:1 1 0;min-height:0;overflow-y:auto} → 待分配列表内部滚动
+         （覆盖原 flex-shrink:0，这是 v21.38 重叠的元凶）；
+       .bottom .table-wrap{flex:1 1 0;max-height:none} → 已分配列表内部滚动；
+       JS：#taskTableWrap 的 maxHeight 由写死 '30vh' 改为 _isMobile ? 'none' : '30vh'，
+         否则 30vh 会压过 flex 平分、导致待分配仍明显大于已分配。
+     · 验证：playwright + Edge 真实渲染 390×844，实测 top 高 ≈ bottom 高（各约一半）、
+       topOverflowPx=0、无内容漫入；360/414 宽同样通过；PC 1440×900 回归不变。
 
      v21.38 修复（专项：移动端「任务分配」待分配区与已分配区重叠）：
      · 【P0 视觉重叠】移动端任务分配页，上方「待分配」项目卡片列表与下方「已分配的任务」
@@ -1173,14 +1188,15 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     .archive-filter-bar { flex-wrap: wrap; gap: 8px; }
     .archive-filter-bar input, .archive-filter-bar select { flex: 1; min-width: 100px; height: 38px; font-size: 16px; }
 
-    /* 任务页：移动端上下分区自然堆叠，交由外层 .main-content 整页滚动，杜绝 flex 平分限高导致的上下重叠 */
-    .card:has(.task-layout) { height:auto; flex:none; }
-    .task-layout { display:block; height:auto; flex:none; min-height:0; gap:10px; }
-    .task-layout .top { display:block; height:auto; flex:none; min-height:0; }
-    .task-layout .bottom { display:block; height:auto; flex:none; min-height:0; margin-top:12px; }
-    .task-layout .top .task-grid { max-height: 40vh !important; }
-    .task-layout .top .m-task-cards { flex-shrink:0; }
-    .task-layout .bottom .table-wrap { max-height: 35vh; }
+    /* 任务页：移动端「待分配 / 已分配」各占一半，两区各自内部滚动，整页不滚（v21.39）
+       —— 与 v21.38 的区别：不再自然堆叠无限拉长，而是把卡片高度锁到可视区，
+          top/bottom 各 flex:1 平分，内容超出时各自内部滚动，绝不溢出重叠。 */
+    .card:has(.task-layout) { min-height:0; overflow:hidden; }
+    .task-layout { display:flex; flex-direction:column; flex:1 1 0; height:auto; min-height:0; gap:10px; }
+    .task-layout .top { display:flex; flex-direction:column; flex:1 1 0; min-height:0; overflow:hidden; }
+    .task-layout .bottom { display:flex; flex-direction:column; flex:1 1 0; min-height:0; overflow:hidden; margin-top:0; }
+    .task-layout .top .m-task-cards { flex:1 1 0; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+    .task-layout .bottom .table-wrap { flex:1 1 0; min-height:0; max-height:none; overflow-y:auto; }
 
     /* 结算筛选栏：移动端真正单行，不滚动；起止日期合并为一个组合 pill */
     .settle-filter-bar { display:flex !important; flex-wrap:nowrap !important; align-items:center; gap:6px !important; overflow:visible !important; }
@@ -5619,6 +5635,7 @@ function renderProjects(mc) {
                       </div>
                       `}
                       ${_isMobile ? `
+                      <h4 style="color:var(--primary);font-size:14px;flex-shrink:0;margin-bottom:8px;">待分配的项目</h4>
                       <div class="m-task-cards" id="taskGrid">
                         ${elig.map(p => {
                           const pct = getProgressPercent(p.nodes);
@@ -5700,7 +5717,7 @@ function renderProjects(mc) {
                 grid.style.overflowY = 'auto'; }
             else if (grid && _isMobile) { grid.style.overflowY = 'auto'; grid.style.maxHeight = 'none'; }
             const taskTable = document.getElementById('taskTableWrap');
-            if (taskTable) { taskTable.style.maxHeight = '30vh';
+            if (taskTable) { taskTable.style.maxHeight = _isMobile ? 'none' : '30vh';
                 taskTable.style.overflowY = 'auto'; }
             // 恢复滚动位置（避免返回顶部）
             requestAnimationFrame(() => {
