@@ -1,6 +1,20 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.39-mobile-split  2026-09-17  ★ 当前最新稿
+     v21.40-mobile-split  2026-09-17  ★ 当前最新稿
+     基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.40 调整（专项：移动端侧边栏抽屉宽度 → 占屏幕一半）：
+     · 【体验】抽屉原为固定 `width:280px; max-width:85vw`，在 390~414 宽的手机上
+       约占 68~72%，展开后几乎盖住整个内容区。改为**屏幕宽度的一半**。
+     · 修复（仅移动端媒体查询内 1 条规则）：
+       .sidebar{ left:-52vw; width:50vw; min-width:0; max-width:none }
+       —— **必须一并覆盖 base 的 `min-width:220px`**，否则窄屏下 50vw 会被撑回 220px
+          （360px 手机 → 220px 即 61%，达不到"一半"）。left 取 -52vw 保证收起时完全移出视野
+          （比宽度多留 2vw，避免阴影/圆角露出）。`.sidebar.open{left:0}` 不变。
+     · 验证：playwright + Edge 360/390/414 三档，实测抽屉宽 = 视口 50.0%，390 宽下
+       抽屉 195px、右侧露出 195px 内容；导航项「任务分配」「归档 55」等未换行溢出。
+
+     v21.39-mobile-split  2026-09-17
      基于 v21-mobile-split 另存改写，原文件未改动。
 
      v21.39 调整（专项：移动端「待分配」占比过大 → 上下各占一半）：
@@ -874,7 +888,9 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     }
     .hamburger:active { transform:scale(0.94); }
     .sidebar {
-        position:fixed; top:0; left:-290px; width:280px; max-width:85vw; height:100%;
+        /* v21.40：抽屉宽度改为屏幕一半（原 280px 约占 68~72%）。
+           注意必须一并覆盖 base 的 min-width:220px，否则窄屏下 50vw 会被撑回 220px。 */
+        position:fixed; top:0; left:-52vw; width:50vw; min-width:0; max-width:none; height:100%;
         transition:left 0.3s ease, box-shadow 0.3s ease;
         z-index:10000; background:#fff; overflow-y:auto;
         padding-bottom:env(safe-area-inset-bottom);
