@@ -1,6 +1,32 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.40-mobile-split  2026-09-17  ★ 当前最新稿
+     v21.41-mobile-split  2026-09-26  ★ 当前最新稿
+     基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.41 新增（专项：应用内口令门 —— 进站验证 + 云端已验证设备管理）：
+     · 【新功能】进站先输口令：全局口令 SHA-256 哈希存 Supabase settings 表（key=gate_hash），
+       所有设备共用；输对的设备自动登记进 gate_devices（JSON 设备清单，同样存 settings），
+       此后一直免输，直到机主在「云同步 → 应用口令门」里移除该设备，才需重输口令。
+     · 组成（非侵入式，全部为新增代码 + 3 处小挂钩）：
+       ① <body> 开头：#gateLock 锁定层（默认隐藏）+ 同步预检小脚本
+          （本地缓存说"门已开且本机未验证"时立即显示，避免先闪出工作台内容）；
+       ② 主脚本末尾：gate* 模块（设备指纹、SHA-256、云端读写、复核 gateEvaluate、
+          解锁 gateTryUnlock、云同步页管理 renderGateManage/开启/改口令/关闭/移除设备/清空）；
+       ③ 启动钩子：window load 时 gateEvaluate()（与 loadData 并行，不阻塞数据加载）；
+       ④ 云同步页新增「🔐 应用口令门」卡片（renderCloudSync 末尾调 renderGateManage）。
+     · 关键行为：
+       - 云端权威：每次进站都查云端设备清单——被移除的设备即使本地缓存说"已验证"也会重新锁上；
+       - 离线回退：拉不到云端时按本地缓存（wb_gate_cache）放行/锁定，绝不把机主锁死在门外；
+         离线输对口令 → 本地记 pendingReg，联网后自动补登记；
+       - gate_devices 用"读-改-写"整体回写，防多台设备同时注册互相覆盖；
+       - 失败策略：口令门自身任何异常一律放行 + console.error（宁可漏防，绝不锁死）；
+       - 修改口令后已验证设备仍免输；要全员重新验证就再点「清空全部设备」；
+       - 忘记口令自救：Supabase SQL 执行 delete from settings where key like 'gate_%';
+     · 安全边界（必须如实告知）：这是**防偷窥 UI 层，不是加密**——anon key 本就随页面下发，
+       懂技术者可绕过 UI 直接读 Supabase；明文口令不落盘不上云（只存 SHA-256 哈希）。
+     · 本地缓存 key：wb_gate_device_id（设备指纹）、wb_gate_cache（{hash,verified,pendingReg,at}）。
+
+     v21.40-mobile-split  2026-09-17
      基于 v21-mobile-split 另存改写，原文件未改动。
 
      v21.40 调整（专项：移动端侧边栏抽屉宽度 → 占屏幕一半）：
@@ -1428,6 +1454,39 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     </style>
 </head>
 <body data-page-node-id="seFuZukgk6EvwcKKYn0fTs">
+
+    <!-- ============================================================
+         【v21.41】应用内口令门：进站锁定层
+         · 默认 display:none；紧跟其后的小脚本**同步**读本地缓存：
+           「口令门已开启(hash存在) 且 本设备未验证」→ 立即显示，避免先闪出工作台内容。
+         · 云端权威复核由主脚本 gateEvaluate() 异步完成：
+           云端可达 → 以云端设备清单为准（被移除的设备即使本地缓存说已验证也会重新锁上）；
+           云端不可达 → 回退本地缓存放行（绝不让机主被锁死在门外）。
+         · 安全边界：这是防偷窥的 UI 层，**不是加密**——anon key 本就随页面下发，
+           懂技术者可以直接读 Supabase。口令哈希(SHA-256)存云端 settings 表，明文口令不落盘不上云。
+         ============================================================ -->
+    <div id="gateLock" style="display:none; position:fixed; top:0; right:0; bottom:0; left:0; z-index:20000; background:linear-gradient(160deg,#1e3a5c 0%,#2d5986 60%,#3a6ea5 100%); align-items:center; justify-content:center; padding:20px;">
+        <div style="width:100%; max-width:340px; background:#fff; border-radius:16px; padding:26px 22px; box-shadow:0 20px 60px rgba(0,0,0,0.35); text-align:center;">
+            <div style="font-size:40px; line-height:1;">🔐</div>
+            <div style="font-size:17px; font-weight:700; color:#1e3a5c; margin:10px 0 2px;">工作台已锁定</div>
+            <div id="gateLockSub" style="font-size:12px; color:#94a3b8; margin-bottom:14px;">请输入口令进入</div>
+            <input id="gatePass" type="password" inputmode="text" autocomplete="current-password" placeholder="口令"
+                   style="width:100%; box-sizing:border-box; padding:11px 14px; border-radius:10px; border:1.5px solid #dbe3ee; font-size:16px; text-align:center; letter-spacing:2px; outline:none;"
+                   oninput="gateSetMsg('')" onkeydown="if(event.key==='Enter'){ gateTryUnlock(); }">
+            <button onclick="gateTryUnlock()" style="width:100%; margin-top:12px; padding:11px; border:none; border-radius:10px; background:linear-gradient(135deg,#1e3a5c,#3a6ea5); color:#fff; font-size:15px; font-weight:600; cursor:pointer;">解锁</button>
+            <div id="gateMsg" style="min-height:18px; font-size:12.5px; color:#e74c3c; margin-top:10px;"></div>
+        </div>
+    </div>
+    <script>
+      (function () {
+        try {
+          var c = JSON.parse(localStorage.getItem('wb_gate_cache') || 'null');
+          if (c && c.hash && !c.verified) {
+            document.getElementById('gateLock').style.display = 'flex';
+          }
+        } catch (e) {}
+      })();
+    </script>
 
     <!-- 侧边栏 -->
     <button class="hamburger" onclick="toggleSidebar()" data-page-node-id="nVH4Xe0dcsaqjX5acPnB6l">☰</button>
@@ -8492,8 +8551,14 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                         <button class="btn btn-xs btn-ghost" onclick="copySnapshotSql()" style="margin-top:6px;">📋 复制 SQL</button>
                     </details>
                 </div>
+                <div class="card" style="margin-top:16px;">
+                    <h3 style="color:var(--primary);">🔐 应用口令门</h3>
+                    <p style="color:#6c7a94;margin-bottom:12px;">进站需先输口令（哈希存云端，所有设备共用）；已验证过的设备一直免输，直到在此处被移除。口令哈希存云端 settings 表，明文不落盘不上云。</p>
+                    <div id="gateManageBox" style="font-size:13px;">⏳ 正在读取口令门状态...</div>
+                </div>
               `;
             loadSnapshotListUI();
+            renderGateManage();
         }
 
         async function testSupabaseConnection() {
@@ -9042,10 +9107,352 @@ grant insert, select, delete on public.snapshots to anon;</pre>
         updateClock();
 
         // ============================================================
+        // 【v21.41】应用内口令门（进站验证 + 云端已验证设备管理）
+        // ============================================================
+        // 数据模型（全部存 Supabase settings 表，key/value 行，与既有 3 个 key 互不干扰）：
+        //   · gate_hash     = 's256:<sha256hex>'   全局口令哈希（所有设备共用一个口令）
+        //   · gate_devices  = '[{"id","name","at"}]' 已验证设备清单（读-改-写，防并发覆盖）
+        // 本地缓存 wb_gate_cache = { hash, verified, pendingReg?, at }：
+        //   · 离线时按它放行/锁定；pendingReg=true 表示"离线时用口令解过锁，联网后自动补登记"
+        //   · 被机主移除的设备：云端清单里没有 → 即使缓存 verified=true 也会重新锁上（移除有效）
+        // 失败策略：任何口令门自身异常一律放行 + console.error（宁可漏防，绝不把机主锁死）
+        const GATE_DEVICE_KEY = 'wb_gate_device_id';
+        const GATE_CACHE_KEY = 'wb_gate_cache';
+
+        function gateGetDeviceId() {
+            try {
+                let id = localStorage.getItem(GATE_DEVICE_KEY);
+                if (!id) {
+                    id = (window.crypto && crypto.randomUUID)
+                        ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+                        : Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+                    localStorage.setItem(GATE_DEVICE_KEY, id);
+                }
+                return id;
+            } catch (e) { return 'dev_unknown'; }
+        }
+
+        function gateDeviceName() {
+            const suffix = gateGetDeviceId().slice(0, 4);
+            try {
+                const ua = navigator.userAgent || '';
+                let os = '设备', br = '';
+                if (/iPhone/.test(ua)) os = 'iPhone';
+                else if (/iPad/.test(ua)) os = 'iPad';
+                else if (/Android/.test(ua)) os = 'Android';
+                else if (/Windows/.test(ua)) os = 'Windows';
+                else if (/Mac OS X/.test(ua)) os = 'Mac';
+                if (/Edg\//.test(ua)) br = 'Edge';
+                else if (/MicroMessenger\//.test(ua)) br = '微信';
+                else if (/Chrome\//.test(ua)) br = 'Chrome';
+                else if (/Firefox\//.test(ua)) br = 'Firefox';
+                else if (/Safari\//.test(ua)) br = 'Safari';
+                return os + (br ? '-' + br : '') + '-' + suffix;
+            } catch (e) { return '设备-' + suffix; }
+        }
+
+        function gateReadCache() {
+            try { return JSON.parse(localStorage.getItem(GATE_CACHE_KEY) || 'null'); } catch (e) { return null; }
+        }
+        function gateWriteCache(c) {
+            try { localStorage.setItem(GATE_CACHE_KEY, JSON.stringify(c)); } catch (e) {}
+        }
+
+        async function gateSha256(text) {
+            const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+            return 's256:' + Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        function gateSetMsg(msg, isError) {
+            const el = document.getElementById('gateMsg');
+            if (!el) return;
+            el.textContent = msg || '';
+            el.style.color = (isError === false) ? '#10b981' : '#e74c3c';
+        }
+
+        function gateShowLock(subText) {
+            const el = document.getElementById('gateLock');
+            if (!el) return;
+            el.style.display = 'flex';
+            const sub = document.getElementById('gateLockSub');
+            if (sub && subText) sub.textContent = subText;
+            const p = document.getElementById('gatePass');
+            if (p) setTimeout(function () { try { p.focus(); } catch (e) {} }, 80);
+        }
+        function gateHideLock() {
+            const el = document.getElementById('gateLock');
+            if (el) el.style.display = 'none';
+            const p = document.getElementById('gatePass');
+            if (p) p.value = '';
+            gateSetMsg('');
+        }
+
+        async function gateFetchConfig() {
+            // 返回 { offline:true }（云端不可达）或 { offline:false, hash, devices }
+            if (!supabaseClient) return { offline: true };
+            try {
+                const { data, error } = await supabaseClient.from('settings')
+                    .select('key,value').in('key', ['gate_hash', 'gate_devices']);
+                if (error) { console.error('⚠️ 口令门配置读取失败:', error); return { offline: true }; }
+                const rowHash = (data || []).find(function (x) { return x.key === 'gate_hash'; });
+                const rowDev = (data || []).find(function (x) { return x.key === 'gate_devices'; });
+                let devices = [];
+                try { devices = rowDev && rowDev.value ? JSON.parse(rowDev.value) : []; } catch (e) { devices = []; }
+                if (!Array.isArray(devices)) devices = [];
+                return { offline: false, hash: (rowHash && rowHash.value) || '', devices: devices };
+            } catch (e) {
+                console.error('⚠️ 口令门配置读取异常:', e);
+                return { offline: true };
+            }
+        }
+
+        async function gateUpsertKey(key, value) {
+            if (!supabaseClient) throw new Error('Supabase 未初始化');
+            const { error } = await supabaseClient.from('settings').upsert({ key: key, value: value });
+            if (error) throw error;
+        }
+
+        async function gateRegisterSelf() {
+            // 读-改-写 gate_devices：先读云端最新清单，追加本机后整体写回（防并发注册互相覆盖）
+            const cfg = await gateFetchConfig();
+            if (cfg.offline) throw new Error('离线，暂无法登记设备');
+            const myId = gateGetDeviceId();
+            const list = (cfg.devices || []).filter(function (d) { return d && d.id && d.id !== myId; });
+            list.push({ id: myId, name: gateDeviceName(), at: new Date().toISOString() });
+            await gateUpsertKey('gate_devices', JSON.stringify(list));
+            return list;
+        }
+
+        // 核心复核：进站时判断本机是否放行（云端权威，离线回退本地缓存）
+        async function gateEvaluate() {
+            try {
+                if (!(window.crypto && crypto.subtle)) {
+                    console.warn('⚠️ 当前环境无 crypto.subtle（需 https/localhost），口令门不可用，直接放行');
+                    gateHideLock();
+                    return;
+                }
+                const cfg = await gateFetchConfig();
+                const myId = gateGetDeviceId();
+                if (cfg.offline) {
+                    const c = gateReadCache();
+                    if (c && c.hash && c.verified) {
+                        gateHideLock();
+                        console.log('🔓 口令门：当前离线，按本地缓存放行');
+                    } else if (c && c.hash) {
+                        window._gateOfflineHash = c.hash;
+                        gateShowLock('当前离线，请输入口令（联网后自动登记设备）');
+                    } else {
+                        gateHideLock(); // 从未开启过口令门 → 放行
+                    }
+                    return;
+                }
+                window._gateOfflineHash = null;
+                if (!cfg.hash) { // 未开启口令门
+                    gateWriteCache({ hash: '', verified: false, at: new Date().toISOString() });
+                    gateHideLock();
+                    return;
+                }
+                const inList = (cfg.devices || []).some(function (d) { return d && d.id === myId; });
+                const c = gateReadCache();
+                // pendingReg：本机曾离线用正确口令解锁但没能登记 → 联网后自动补登记（口令正确即有权）
+                const trustPending = c && c.verified && c.pendingReg && c.hash === cfg.hash;
+                if (inList || trustPending) {
+                    if (!inList && trustPending) {
+                        try { await gateRegisterSelf(); console.log('✅ 口令门：已补登记本设备'); } catch (e) { console.warn('⚠️ 补登记失败:', e); }
+                    }
+                    gateWriteCache({ hash: cfg.hash, verified: true, at: new Date().toISOString() });
+                    window._gateActiveHash = cfg.hash;
+                    gateHideLock();
+                } else {
+                    gateWriteCache({ hash: cfg.hash, verified: false, at: new Date().toISOString() });
+                    window._gateActiveHash = cfg.hash;
+                    gateShowLock('请输入口令进入（本设备尚未验证）');
+                }
+            } catch (e) {
+                console.error('⚠️ 口令门检查异常（放行，避免锁死）:', e);
+                gateHideLock();
+            }
+        }
+
+        async function gateTryUnlock() {
+            const input = document.getElementById('gatePass');
+            const pass = input ? input.value : '';
+            if (!pass) { gateSetMsg('请输入口令'); return; }
+            let targetHash = window._gateActiveHash || (gateReadCache() || {}).hash || window._gateOfflineHash || '';
+            if (!targetHash) { // 现场再拉一次云端
+                try {
+                    const cfg = await gateFetchConfig();
+                    if (cfg && !cfg.offline && cfg.hash) { targetHash = cfg.hash; window._gateActiveHash = cfg.hash; }
+                } catch (e) {}
+            }
+            if (!targetHash) { gateSetMsg('无法验证：口令门未就绪，请检查网络后重试'); return; }
+            gateSetMsg('⏳ 验证中...', false);
+            let h = '';
+            try { h = await gateSha256(pass); }
+            catch (e) { gateSetMsg('当前浏览器不支持安全哈希，无法验证'); return; }
+            if (h !== targetHash) {
+                gateSetMsg('口令不正确');
+                if (input) { input.value = ''; try { input.focus(); } catch (e) {} }
+                return;
+            }
+            gateSetMsg('✅ 口令正确，正在登记设备...', false);
+            let pendingReg = false;
+            try { await gateRegisterSelf(); }
+            catch (e) { pendingReg = true; console.warn('⚠️ 设备登记失败（联网后自动补登）:', e); }
+            gateWriteCache({ hash: targetHash, verified: true, pendingReg: pendingReg, at: new Date().toISOString() });
+            window._gateActiveHash = targetHash;
+            gateHideLock();
+            showToast(pendingReg ? '🔓 已解锁（当前离线，设备登记将在联网后完成）' : '🔓 已解锁');
+        }
+
+        // ---------- 云同步页：口令门管理 UI ----------
+        async function renderGateManage() {
+            const box = document.getElementById('gateManageBox');
+            if (!box) return;
+            if (!supabaseClient) { box.innerHTML = '<p style="color:#94a3b8;">请先配置 Supabase——口令哈希与设备清单都存在云端，纯本地无法跨设备管理。</p>'; return; }
+            if (!(window.crypto && crypto.subtle)) { box.innerHTML = '<p style="color:#e74c3c;">当前浏览器不支持安全哈希（crypto.subtle），口令门不可用。</p>'; return; }
+            const cfg = await gateFetchConfig();
+            if (cfg.offline) { box.innerHTML = '<p style="color:#94a3b8;">⚠️ 当前离线或云端不可达，无法读取口令门状态，请稍后刷新。</p>'; return; }
+            const myId = gateGetDeviceId();
+            if (!cfg.hash) {
+                box.innerHTML = `
+                    <div style="margin-bottom:10px;">状态：<strong style="color:#94a3b8;">未开启</strong></div>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;max-width:460px;">
+                        <input id="gateNewPass1" type="password" placeholder="设置口令（至少4位）" style="flex:1;min-width:130px;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:16px;">
+                        <input id="gateNewPass2" type="password" placeholder="再输一遍" style="flex:1;min-width:130px;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:16px;">
+                        <button class="btn btn-primary" onclick="gateEnableFromUI()">开启口令门</button>
+                    </div>
+                    <div style="margin-top:8px;font-size:12px;color:#94a3b8;">开启后：进站先输口令；输对的设备自动登记，此后一直免输，直到在此被移除。</div>`;
+                return;
+            }
+            const devs = cfg.devices || [];
+            const rows = devs.map(function (d) {
+                const isSelf = d.id === myId;
+                const t = d.at ? new Date(d.at).toLocaleString('zh-CN') : '—';
+                return `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid #eef2f7;border-radius:8px;margin-bottom:6px;background:#fafbfc;">
+                        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(d.name || d.id)}${isSelf ? ' <span style="color:#10b981;font-size:11px;">（本机）</span>' : ''}</span>
+                        <span style="color:#94a3b8;font-size:11px;flex-shrink:0;">${esc(t)}</span>
+                        <button class="btn btn-xs btn-ghost" onclick="gateRemoveDevice('${esc(d.id)}')" title="移除该设备，它下次进站需重输口令">移除</button>
+                    </div>`;
+            }).join('') || '<p style="color:#94a3b8;">尚无已验证设备（各设备输对口令后会出现在这里）。</p>';
+            box.innerHTML = `
+                <div style="margin-bottom:10px;">状态：<strong style="color:#10b981;">已开启</strong>　·　本机：<strong>${esc(gateDeviceName())}</strong></div>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;max-width:560px;margin-bottom:12px;">
+                    <input id="gateNewPass1" type="password" placeholder="新口令（至少4位）" style="flex:1;min-width:130px;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:16px;">
+                    <input id="gateNewPass2" type="password" placeholder="再输一遍" style="flex:1;min-width:130px;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:16px;">
+                    <button class="btn btn-primary" onclick="gateChangePassFromUI()">修改口令</button>
+                    <button class="btn btn-danger" onclick="gateDisableFromUI()">关闭口令门</button>
+                </div>
+                <div style="font-weight:600;color:#1e3a5c;margin-bottom:6px;">已验证设备（${devs.length}）</div>
+                ${rows}
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+                    <button class="btn btn-ghost btn-xs" onclick="gateClearDevices()">清空全部设备</button>
+                    <button class="btn btn-ghost btn-xs" onclick="renderGateManage()">🔄 刷新</button>
+                </div>
+                <div style="margin-top:8px;font-size:12px;color:#94a3b8;">修改口令后已验证设备仍免输；若想让所有设备重新验证，改口令后点「清空全部设备」。<br>忘记口令的自救：Supabase Dashboard → SQL Editor 执行 delete from settings where key like 'gate_%';</div>`;
+        }
+
+        async function gateEnableFromUI() {
+            const p1 = (document.getElementById('gateNewPass1') || {}).value || '';
+            const p2 = (document.getElementById('gateNewPass2') || {}).value || '';
+            if (p1.length < 4) { showAlert('口令至少 4 位'); return; }
+            if (p1 !== p2) { showAlert('两次输入不一致'); return; }
+            try {
+                const h = await gateSha256(p1);
+                await gateUpsertKey('gate_hash', h);
+                try { await gateRegisterSelf(); } catch (e) { console.warn('⚠️ 登记本机失败:', e); }
+                gateWriteCache({ hash: h, verified: true, at: new Date().toISOString() });
+                window._gateActiveHash = h;
+                showToast('🔐 口令门已开启，本机已验证');
+                renderGateManage();
+            } catch (e) {
+                console.error('开启口令门失败:', e);
+                showAlert('开启失败: ' + e.message);
+            }
+        }
+
+        async function gateChangePassFromUI() {
+            const p1 = (document.getElementById('gateNewPass1') || {}).value || '';
+            const p2 = (document.getElementById('gateNewPass2') || {}).value || '';
+            if (p1.length < 4) { showAlert('口令至少 4 位'); return; }
+            if (p1 !== p2) { showAlert('两次输入不一致'); return; }
+            try {
+                const h = await gateSha256(p1);
+                await gateUpsertKey('gate_hash', h);
+                gateWriteCache({ hash: h, verified: true, at: new Date().toISOString() });
+                window._gateActiveHash = h;
+                showToast('✅ 口令已修改（已验证设备仍免输）');
+                renderGateManage();
+            } catch (e) {
+                console.error('修改口令失败:', e);
+                showAlert('修改失败: ' + e.message);
+            }
+        }
+
+        function gateDisableFromUI() {
+            showConfirm('确认关闭口令门？云端口令与设备清单一并删除，所有设备进站不再需要口令。', async function () {
+                try {
+                    if (supabaseClient) {
+                        const { error } = await supabaseClient.from('settings').delete().in('key', ['gate_hash', 'gate_devices']);
+                        if (error) throw error;
+                    }
+                    try { localStorage.removeItem(GATE_CACHE_KEY); } catch (e) {}
+                    window._gateActiveHash = '';
+                    gateHideLock();
+                    showToast('口令门已关闭');
+                    renderGateManage();
+                } catch (e) {
+                    console.error('关闭口令门失败:', e);
+                    showAlert('关闭失败: ' + e.message);
+                }
+            }, function () {});
+        }
+
+        async function gateRemoveDevice(id) {
+            showConfirm('确认移除该设备？它下次进站需要重新输口令。', async function () {
+                try {
+                    const cfg = await gateFetchConfig();
+                    if (cfg.offline) { showAlert('当前离线，无法移除设备'); return; }
+                    const list = (cfg.devices || []).filter(function (d) { return d && d.id !== id; });
+                    await gateUpsertKey('gate_devices', JSON.stringify(list));
+                    if (id === gateGetDeviceId()) { // 移除的是本机 → 立刻锁上
+                        gateWriteCache({ hash: cfg.hash, verified: false, at: new Date().toISOString() });
+                        window._gateActiveHash = cfg.hash;
+                        gateShowLock('本设备已被移出验证清单，请输入口令');
+                    }
+                    showToast('已移除设备');
+                    renderGateManage();
+                } catch (e) {
+                    console.error('移除设备失败:', e);
+                    showAlert('移除失败: ' + e.message);
+                }
+            }, function () {});
+        }
+
+        async function gateClearDevices() {
+            showConfirm('确认清空全部已验证设备？所有设备（含本机）下次进站都要重输口令。', async function () {
+                try {
+                    const cfg = await gateFetchConfig();
+                    if (cfg.offline) { showAlert('当前离线，无法清空'); return; }
+                    await gateUpsertKey('gate_devices', '[]');
+                    gateWriteCache({ hash: cfg.hash, verified: false, at: new Date().toISOString() });
+                    window._gateActiveHash = cfg.hash;
+                    gateShowLock('设备清单已清空，请输入口令');
+                    showToast('已清空全部设备');
+                    renderGateManage();
+                } catch (e) {
+                    console.error('清空设备失败:', e);
+                    showAlert('清空失败: ' + e.message);
+                }
+            }, function () {});
+        }
+
+        // ============================================================
         // 启动
         // ============================================================
         window.addEventListener('load', function() {
             initSupabase();
+            gateEvaluate().catch(e => console.error('⚠️ 口令门初始化失败:', e));
             loadData().then(() => { navigateTo('home'); });
         });
 
@@ -9108,6 +9515,16 @@ grant insert, select, delete on public.snapshots to anon;</pre>
         window.syncMobileBottomNav = syncMobileBottomNav;
         window.toggleMobileProjCard = toggleMobileProjCard;
         window.toggleMProjType = toggleMProjType;
+        // 【v21.41】口令门
+        window.gateTryUnlock = gateTryUnlock;
+        window.gateSetMsg = gateSetMsg;
+        window.gateEvaluate = gateEvaluate;
+        window.renderGateManage = renderGateManage;
+        window.gateEnableFromUI = gateEnableFromUI;
+        window.gateChangePassFromUI = gateChangePassFromUI;
+        window.gateDisableFromUI = gateDisableFromUI;
+        window.gateRemoveDevice = gateRemoveDevice;
+        window.gateClearDevices = gateClearDevices;
 
         console.log('✅ 工作台完整版已启动，所有页面功能可用。');
         console.log('📤 自动上传和自动同步独立控制，默认关闭。');
