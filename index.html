@@ -1,7 +1,13 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.41-mobile-split  2026-09-26  ★ 当前最新稿
+     v21.42-mobile-split  2026-09-26  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v21.42 调整（专项：云同步页「版本历史与恢复」改为可折叠，缩短页面）：
+     · 整卡改为 <details> 折叠面板，默认收起（summary=标题 + 展开/收起箭头）。
+     · 懒加载：首次展开才调 loadSnapshotListUI()（省一次云端快照索引请求）；
+       渲染时不再无条件拉取。恢复/清理后仍会即时刷新已加载的列表。
+     · 纯 UI 改动，不动任何同步/快照/口令门逻辑。
 
      v21.41 新增（专项：应用内口令门 —— 进站验证 + 云端已验证设备管理）：
      · 【新功能】进站先输口令：全局口令 SHA-256 哈希存 Supabase settings 表（key=gate_hash），
@@ -8525,18 +8531,22 @@ function deleteReportHistory(id) {
                     </div>
                 </div>
                 <div class="card" style="margin-top:16px;">
-                    <h3 style="color:var(--primary);">🕐 版本历史与恢复</h3>
-                    <p style="color:#6c7a94;margin-bottom:12px;">每次上传都会自动创建一个可恢复的数据版本。同步时默认拉取最新版本。旧版本会按保留策略自动清理，避免占用云端空间。</p>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
-                        <button class="btn btn-success" onclick="restoreLatestSnapshotUI()">恢复最新版本</button>
-                        <button class="btn btn-primary" onclick="loadSnapshotListUI()">查看历史版本</button>
-                        <button class="btn btn-ghost" onclick="cleanupSnapshotsUI()">🧹 清理历史快照</button>
-                    </div>
-                    <div id="snapshotStat" style="font-size:12px;color:#94a3b8;margin-bottom:10px;"></div>
-                    <div id="snapshotList" style="font-size:13px;"></div>
-                    <details style="margin-top:12px;">
-                        <summary style="cursor:pointer;color:var(--primary);font-size:13px;font-weight:500;">📋 首次使用版本功能？点击展开建表 SQL</summary>
-                        <pre id="snapshotSql" style="margin-top:8px;padding:10px;background:#f1f5f9;border-radius:8px;font-size:12px;overflow:auto;white-space:pre-wrap;word-break:break-all;">create table if not exists public.snapshots (
+                    <details id="snapVersionDetails" ontoggle="onSnapDetailsToggle(this)">
+                        <summary style="cursor:pointer;list-style:none;display:flex;align-items:center;justify-content:space-between;user-select:none;">
+                            <h3 style="color:var(--primary);margin:0;">🕐 版本历史与恢复</h3>
+                            <span id="snapChevron" style="color:#94a3b8;font-size:12px;flex-shrink:0;margin-left:8px;">展开 ▾</span>
+                        </summary>
+                        <p style="color:#6c7a94;margin:12px 0;">每次上传都会自动创建一个可恢复的数据版本。同步时默认拉取最新版本。旧版本会按保留策略自动清理，避免占用云端空间。</p>
+                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;">
+                            <button class="btn btn-success" onclick="restoreLatestSnapshotUI()">恢复最新版本</button>
+                            <button class="btn btn-primary" onclick="loadSnapshotListUI()">查看历史版本</button>
+                            <button class="btn btn-ghost" onclick="cleanupSnapshotsUI()">🧹 清理历史快照</button>
+                        </div>
+                        <div id="snapshotStat" style="font-size:12px;color:#94a3b8;margin-bottom:10px;"></div>
+                        <div id="snapshotList" style="font-size:13px;"></div>
+                        <details style="margin-top:12px;">
+                            <summary style="cursor:pointer;color:var(--primary);font-size:13px;font-weight:500;">📋 首次使用版本功能？点击展开建表 SQL</summary>
+                            <pre id="snapshotSql" style="margin-top:8px;padding:10px;background:#f1f5f9;border-radius:8px;font-size:12px;overflow:auto;white-space:pre-wrap;word-break:break-all;">create table if not exists public.snapshots (
   id uuid primary key default gen_random_uuid(),
   created_at timestamp with time zone default now(),
   payload jsonb not null,
@@ -8548,7 +8558,8 @@ alter table public.snapshots enable row level security;
 create policy "Allow anonymous full access" on public.snapshots
   for all to anon using (true) with check (true);
 grant insert, select, delete on public.snapshots to anon;</pre>
-                        <button class="btn btn-xs btn-ghost" onclick="copySnapshotSql()" style="margin-top:6px;">📋 复制 SQL</button>
+                            <button class="btn btn-xs btn-ghost" onclick="copySnapshotSql()" style="margin-top:6px;">📋 复制 SQL</button>
+                        </details>
                     </details>
                 </div>
                 <div class="card" style="margin-top:16px;">
@@ -8557,8 +8568,18 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                     <div id="gateManageBox" style="font-size:13px;">⏳ 正在读取口令门状态...</div>
                 </div>
               `;
-            loadSnapshotListUI();
             renderGateManage();
+        }
+
+        // 版本历史折叠面板：默认收起，首次展开才拉取数据（省一次云端请求）
+        let _snapListLoaded = false;
+        function onSnapDetailsToggle(detailsEl) {
+            const ch = document.getElementById('snapChevron');
+            if (ch) ch.textContent = detailsEl.open ? '收起 ▴' : '展开 ▾';
+            if (detailsEl.open && !_snapListLoaded) {
+                _snapListLoaded = true;
+                loadSnapshotListUI();
+            }
         }
 
         async function testSupabaseConnection() {
