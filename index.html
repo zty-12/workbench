@@ -1671,6 +1671,31 @@ function fmtLocalYM(d) {
     return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}`;
 }
 
+// ===== 【v21.43】工作日 / 休息日判断（任务分配自动过滤休息日）=====
+// 休息日 = 周六/周日（且非调休补班日） 或 法定节假日
+// 工作日 = 周一~周五 或 调休补班日（周末被安排上班）
+// 按年维护：holidays = 法定节假日(休息日)；workdays = 调休补班日(周末变工作日)
+const WB_HOLIDAYS = {
+    '2026': {
+        holidays: ['2026-01-01','2026-01-02','2026-01-03','2026-02-15','2026-02-16','2026-02-17','2026-02-18','2026-02-19','2026-02-20','2026-02-21','2026-02-22','2026-02-23','2026-04-04','2026-04-05','2026-04-06','2026-05-01','2026-05-02','2026-05-03','2026-05-04','2026-05-05','2026-06-19','2026-06-20','2026-06-21','2026-09-25','2026-09-26','2026-09-27','2026-10-01','2026-10-02','2026-10-03','2026-10-04','2026-10-05','2026-10-06','2026-10-07'],
+        workdays: ['2026-01-04','2026-02-14','2026-02-28','2026-05-09','2026-09-20','2026-10-10']
+    }
+    // TODO: 2027 国务院安排约 2026-11 公布，届时补一行：'2027': { holidays:[...], workdays:[...] }
+};
+function parseLocal(s) { const a = String(s).split('-'); return new Date(Number(a[0]), Number(a[1]) - 1, Number(a[2])); }
+function wbIsWorkday(d) {
+    const key = fmtLocal(d);
+    const h = WB_HOLIDAYS[String(d.getFullYear())];
+    if (h) {
+        if (h.workdays.indexOf(key) !== -1) return true;   // 调休补班：周末也算工作日
+        if (h.holidays.indexOf(key) !== -1) return false;  // 法定节假日：休息
+    }
+    const w = d.getDay();
+    return w !== 0 && w !== 6;                              // 周一~周五为工作日
+}
+function wbNextWorkday(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); while (!wbIsWorkday(x)) x.setDate(x.getDate() + 1); return x; }
+function wbPrevWorkday(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); while (!wbIsWorkday(x)) x.setDate(x.getDate() - 1); return x; }
+
 // 【v21.25】本地完成态改动标记 —— 让"网页端取消完成"也能生效
 // 背景：上传前的云端合并（mergeCloudStateBeforeUpload / _doneRes）只做"false→true"单调合并，
 // 导致网页把任务勾掉（false）后又被云端 true 顶回来，"取消完成永远无效"。
@@ -5913,14 +5938,15 @@ function renderProjects(mc) {
             let startDate, endDate, wl = '',
                 ml = '';
 
+            // 【v21.43】各周期先算出"原始"起止日（Date 对象），稍后统一吸附到工作日
+            let rawStart, rawEnd, isCustom = false;
             if (period === 'week') {
                 const day = now.getDay();
                 const mon = new Date(now);
                 mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1));
                 const sun = new Date(mon);
                 sun.setDate(mon.getDate() + 6);
-                startDate = fmtLocal(mon);
-                endDate = fmtLocal(sun);
+                rawStart = mon; rawEnd = sun;
                 wl = getWeekLabel(now);
             } else if (period === 'nextWeek') {
                 const nextWeek = new Date(now);
@@ -5930,22 +5956,19 @@ function renderProjects(mc) {
                 mon.setDate(nextWeek.getDate() - (day === 0 ? 6 : day - 1));
                 const sun = new Date(mon);
                 sun.setDate(mon.getDate() + 6);
-                startDate = fmtLocal(mon);
-                endDate = fmtLocal(sun);
+                rawStart = mon; rawEnd = sun;
                 wl = getWeekLabel(nextWeek);
             } else if (period === 'month') {
                 const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
                 const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-                startDate = fmtLocal(firstDay);
-                endDate = fmtLocal(lastDay);
+                rawStart = firstDay; rawEnd = lastDay;
                 ml = getMonthLabel(now);
             } else if (period === 'nextMonth') {
                 const nextMonth = new Date(now);
                 nextMonth.setMonth(now.getMonth() + 1);
                 const firstDay = new Date(nextMonth.getFullYear(), nextMonth.getMonth(), 1);
                 const lastDay = new Date(nextMonth.getFullYear(), nextMonth.getMonth() + 1, 0);
-                startDate = fmtLocal(firstDay);
-                endDate = fmtLocal(lastDay);
+                rawStart = firstDay; rawEnd = lastDay;
                 ml = getMonthLabel(nextMonth);
             } else if (period === 'custom') {
                 // 【v21.12】自定义开始/结束日期
@@ -5953,11 +5976,24 @@ function renderProjects(mc) {
                 const ce = document.getElementById('taskCustomEnd')?.value;
                 if (!cs || !ce) { showAlert('请先选择自定义的开始和结束日期'); return; }
                 if (cs > ce) { showAlert('开始日期不能晚于结束日期'); return; }
-                startDate = cs;
-                endDate = ce;
+                rawStart = parseLocal(cs); rawEnd = parseLocal(ce);
+                isCustom = true;
             } else {
-                startDate = endDate = fmtLocal(now);
+                rawStart = rawEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate());
             }
+
+            // 【v21.43】过滤休息日：起止日吸附到最近的工作日
+            // 区间起点向上取到第一个工作日；终点向下取到最后一个工作日
+            // 单日（"今天"）则起止同为该工作日；自定义区间内若无工作日则提示重选
+            let _s = wbNextWorkday(rawStart);
+            let _e = wbPrevWorkday(rawEnd);
+            if (fmtLocal(rawStart) === fmtLocal(rawEnd)) _e = _s;
+            if (isCustom && fmtLocal(_s) > fmtLocal(_e)) {
+                showAlert('所选区间内没有工作日，请重新选择日期');
+                return;
+            }
+            startDate = fmtLocal(_s);
+            endDate = fmtLocal(_e);
 
             selected.forEach(idx => {
                 const node = p.nodes[idx];
