@@ -474,6 +474,10 @@
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
+    <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
 
     <!-- FullCalendar v3 依赖（已本地化：vendor/，避免 CDN 跟踪防护拦截导致样式丢失） -->
     <link rel="stylesheet" href="vendor/fullcalendar.min.css" data-page-node-id="vBfZbgwNamFZzG7uItgO1u">
@@ -2199,7 +2203,12 @@ async function mergeCloudStateBeforeUpload() {
                 return false;
             }
             try {
-                supabaseClient = window.supabase.createClient(config.url, config.anonKey);
+                const _noCacheFetch = (u, o) => fetch(u, Object.assign({}, o, { cache: 'no-store' }));
+                // 【v21.44 修复】注入自定义 fetch 统一 cache:'no-store'，穿透浏览器/中间代理缓存，避免拉到旧 JSON。
+                // 注意：PostgREST 会把未知 query 参数当成列过滤解析 → 400，故不能走「URL 加时间戳」方案。
+                supabaseClient = window.supabase.createClient(config.url, config.anonKey, {
+                    global: { fetch: _noCacheFetch }
+                });
                 updateSyncStatus('已配置', '');
                 return true;
             } catch (e) {
@@ -3906,8 +3915,10 @@ async function syncToSupabase(createSnapshotFlag = false) {
                 const _rawCache = localStorage.getItem(STORAGE_KEY);
                 let _hasLocalData = false;
                 try { if (_rawCache) { const _c = JSON.parse(_rawCache); _hasLocalData = !!( _c.projects && _c.projects.length); } } catch(e) {}
-                const _autoPull = autoSyncEnabled || !_hasLocalData;
-            _needWorkLogPull = !_autoPull;
+                const _autoPull = true;
+            // 【v21.44 修复】无条件拉取：无论同步开关 / 本地是否有缓存，每次打开都拉一次云端，
+            // 彻底解决「同步关 + 本地有数据 → 永远显示 localStorage 旧数据（需 Ctrl+Shift+R 才刷新）」的旧数据 bug。
+            // _needWorkLogPull 不再需要：loadFromSupabase() 内已同步拉取 work_logs，无需单独补拉
                 if (_autoPull) {
                 try {
                     console.log('🔵 尝试从 Supabase 加载...');
@@ -9610,6 +9621,15 @@ function toggleFreeze(page) {
           navigator.serviceWorker.register('sw.js').catch(function (e) {
             console.warn('SW 注册失败（可忽略）:', e);
           });
+        });
+        // 【v21.44 修复】SW 更新并接管控制权后自动刷新一次页面，确保新版本脚本立即生效（避免停留在旧 SW 控制的旧页面）。
+        // 整个会话最多刷新一次（sessionStorage 防循环）。
+        let _wbSwReloaded = false;
+        navigator.serviceWorker.addEventListener('controllerchange', function () {
+          if (_wbSwReloaded || sessionStorage.getItem('wb_sw_reloaded')) return;
+          _wbSwReloaded = true;
+          try { sessionStorage.setItem('wb_sw_reloaded', '1'); } catch (e) {}
+          location.reload();
         });
       }
     </script>

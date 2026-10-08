@@ -1,5 +1,5 @@
 // sw.js - 离线缓存（导航请求优先走网络，确保修改后的 index.html 能及时生效）
-const CACHE_NAME = 'workbench-v37';
+const CACHE_NAME = 'workbench-v44';
 const urlsToCache = [
   '.',
   'manifest.json',
@@ -33,7 +33,7 @@ self.addEventListener('fetch', event => {
   // 导航请求（打开页面 / index.html）：网络优先，失败再回退缓存，保证最新代码生效
   if (req.mode === 'navigate' || url.pathname.endsWith('/') || url.pathname.endsWith('index.html')) {
     event.respondWith(
-      fetch(req)
+      fetch(req, { cache: 'reload' })  // 【v21.44】穿透 HTTP 缓存，保证每次导航都拉最新 index.html
         .then(res => {
           // 成功拿到响应则缓存一份，供离线/失败时使用
           const copy = res.clone();
