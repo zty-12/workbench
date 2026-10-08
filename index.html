@@ -1695,6 +1695,42 @@ const WB_HOLIDAYS = {
     }
     // TODO: 2027 国务院安排约 2026-11 公布，届时补一行：'2027': { holidays:[...], workdays:[...] }
 };
+
+// 【v23】节假日云端托管：启动/同步时从 Supabase holiday_rules 拉取，覆盖/补充内置数据（离线回退内置+缓存）
+const HOLIDAY_RULES_CACHE_KEY = 'holiday_rules_cache_v1';
+let _holidayRulesLoading = false;
+async function mergeCloudHolidays(rows) {
+  if (!Array.isArray(rows)) return;
+  for (const r of rows) {
+    if (!r || r.year == null) continue;
+    const y = String(r.year);
+    WB_HOLIDAYS[y] = {
+      holidays: Array.isArray(r.holidays) ? r.holidays : (r.holidays ? JSON.parse(r.holidays) : []),
+      workdays: Array.isArray(r.workdays) ? r.workdays : (r.workdays ? JSON.parse(r.workdays) : []),
+    };
+  }
+}
+async function refreshHolidays() {
+  if (_holidayRulesLoading) return;
+  _holidayRulesLoading = true;
+  try {
+    if (!supabaseClient) throw new Error('supabaseClient 未就绪');
+    const { data, error } = await supabaseClient.from('holiday_rules').select('year,holidays,workdays');
+    if (error) throw error;
+    if (data && data.length) {
+      mergeCloudHolidays(data);
+      try { localStorage.setItem(HOLIDAY_RULES_CACHE_KEY, JSON.stringify({ ts: Date.now(), rows: data })); } catch (e) {}
+    }
+  } catch (e) {
+    console.warn('⚠️ 拉取 holiday_rules 失败，使用内置/缓存兜底:', e && e.message);
+    try {
+      const c = JSON.parse(localStorage.getItem(HOLIDAY_RULES_CACHE_KEY) || 'null');
+      if (c && Array.isArray(c.rows) && c.rows.length) mergeCloudHolidays(c.rows);
+    } catch (e2) {}
+  } finally {
+    _holidayRulesLoading = false;
+  }
+}
 function parseLocal(s) { const a = String(s).split('-'); return new Date(Number(a[0]), Number(a[1]) - 1, Number(a[2])); }
 function wbIsWorkday(d) {
     const key = fmtLocal(d);
@@ -3935,6 +3971,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
             let _needWorkLogPull = false;  // 【v21.36】完整拉取被跳过时，仍需单独补拉工作日志（跨设备）
             console.log('🔵 开始加载数据...');
             const configured = initSupabase();
+            if (configured) refreshHolidays();  // 【v23】节假日云端托管：启动时拉取（失败回退内置）
 
             // 【v21.17 修复】localStorage 键值可能被手动改坏，JSON.parse 失败会让 loadData 抛错 → 整页白屏。包 try 兜底。
             let _uploadMode = null, _syncMode = null;
