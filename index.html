@@ -1,7 +1,16 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.42-mobile-split  2026-09-26  ★ 当前最新稿
+     v22-mobile-split  2026-10-08  ★ 当前最新稿（基于线上 v21.43/44/45 混合版）
      基于 v21-mobile-split 另存改写，原文件未改动。
+
+     v22 修复（专项：桌面看板"拉取不到任务"根因治理）：
+     · 【根因】syncToSupabase 原先在 if(hasError) 闸门里才建快照——任一表 upsert 失败即抛错、
+       不生成快照；桌面看板只读最新快照，于是被冻在旧快照（08:37 那条无未完成任务的快照），
+       表现为"拉取不到任务"。
+     · 修复：把 createSnapshot() 从 hasError 闸门解耦——无论表是否上传完整，只要本次同步要求建快照
+       （手动上传 / 自动上传防抖 / 周期同步有改动），都仍尝试生成快照，保证桌面拿到本地最新数据。
+     · 同步：startAutoSync 的"有本地改动先上传"分支由 syncToSupabase() 改为 syncToSupabase(true)，
+       让 30s 周期同步也能刷新快照（配合 v21.37 快照保留策略，不会无限增长）。
 
      v21.42 调整（专项：云同步页「版本历史与恢复」改为可折叠，缩短页面）：
      · 整卡改为 <details> 折叠面板，默认收起（summary=标题 + 展开/收起箭头）。
@@ -3825,12 +3834,32 @@ async function syncToSupabase(createSnapshotFlag = false) {
             }
         } catch (e) { console.warn('⚠️ 清理已删除日志异常:', e); }
 
+        // 【v22 修复】版本快照与"表上传是否完整"解耦：无论任一张表 upsert 是否失败，
+        // 只要本次同步要求建快照（手动上传 / 自动上传防抖 / 周期同步有改动），都仍尝试生成快照。
+        // 本地 appData 已是用户最新修改，快照能让桌面看板（只读最新快照）拿到最新数据，
+        // 不再被 hasError 冻在旧快照上。快照生成失败仅告警，不影响下方对表上传失败的抛错。
+        let snapshotWarning = false;
+        let snapshotHint = '';
+        if (createSnapshotFlag) {
+            try {
+                await createSnapshot();
+                console.log('✅ 版本快照创建完成');
+            } catch (snapErr) {
+                console.warn('⚠️ 同步后版本快照未创建:', snapErr);
+                snapshotWarning = true;
+                if (snapErr._hint) snapshotHint = snapErr._hint;
+                else if (snapErr.code === '42501' || (snapErr.message && snapErr.message.includes('permission denied'))) {
+                    snapshotHint = '快照表权限不足，请在云同步页执行含 grant 的建表 SQL。';
+                }
+            }
+        }
+
         if (hasError) {
             console.error('❌ 同步过程中部分表失败，错误汇总:');
             errors.forEach(({ table, error }) => {
                 console.error(`  - ${table}:`, error.message || error);
             });
-            updateSyncStatus('同步失败', 'error');
+            updateSyncStatus(snapshotWarning ? ('同步失败（但快照已建）' + (snapshotHint ? '：' + snapshotHint : '')) : '同步失败', 'error');
             // 【v2修复】上传不完整时明确抛错：手动上传会弹出真实失败原因（不再显示“上传成功”），
             // 自动同步会保留 _pendingUpload 待下次重试，且不会执行后续拉取覆盖本地
             throw new Error('部分数据上传失败: ' + errors.map(e => e.table).join(', ') + '（云端数据未完整更新，本地修改已保留，将自动重试）');
@@ -3847,22 +3876,6 @@ async function syncToSupabase(createSnapshotFlag = false) {
             clearNodesEdits((appData.terminated || []).map(t => t && t.projectData));
             try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
             _pendingUpload = false;   // 已成功上传，清除“有待上传修改”标记
-            // 上传成功后创建版本快照（仅手动上传时），并重新加载云端数据
-            let snapshotWarning = false;
-            let snapshotHint = '';
-            if (createSnapshotFlag) {
-                try {
-                    await createSnapshot();
-                    console.log('✅ 版本快照创建完成');
-                } catch (snapErr) {
-                    console.warn('⚠️ 同步成功，但版本快照未创建:', snapErr);
-                    snapshotWarning = true;
-                    if (snapErr._hint) snapshotHint = snapErr._hint;
-                    else if (snapErr.code === '42501' || (snapErr.message && snapErr.message.includes('permission denied'))) {
-                        snapshotHint = '快照表权限不足，请在云同步页执行含 grant 的建表 SQL。';
-                    }
-                }
-            }
             // 【修复 v21.12】上传成功后不再用云端/快照数据覆盖本地。
             // 根因：自动上传的目的只是把本地修改推到云端，但这里却在推完后回读 loadFromSupabase()，
             // 用云端旧数据/旧快照整体覆盖 appData，导致用户刚改的节点状态被覆盖回滚、任务分配页显示旧状态。
@@ -4420,8 +4433,8 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
   	             const hadPending = _pendingUpload;
   	             if (_pendingUpload) {
     	                 try {
-    	                     console.log('⏰ 自动同步：检测到本地未上传修改，先上传再拉取...');
-    	                     await syncToSupabase();
+                    console.log('⏰ 自动同步：检测到本地未上传修改，先上传再拉取...');
+                    await syncToSupabase(true);   // 【v22】周期同步有本地改动时也建快照，避免桌面看板冻在旧快照
     	                 } catch (e) {
     	                     console.warn('⚠️ 自动上传本地修改失败，本次跳过拉取以免覆盖修改:', e);
     	                     return;
