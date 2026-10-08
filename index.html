@@ -1700,6 +1700,20 @@ function wbIsWorkday(d) {
 function wbNextWorkday(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); while (!wbIsWorkday(x)) x.setDate(x.getDate() + 1); return x; }
 function wbPrevWorkday(d) { const x = new Date(d.getFullYear(), d.getMonth(), d.getDate()); while (!wbIsWorkday(x)) x.setDate(x.getDate() - 1); return x; }
 
+// 【v21.45】任务条按工作日拆分：把 [start,end] 拆成连续工作日段（周末+法定节假日断开，调休补班算工作日）
+function wbParseYMD(s) { const p = String(s).split('-'); return new Date(+p[0], (+p[1] || 1) - 1, +p[2] || 1); }
+function wbWorkdaySegments(a, b) {
+    const segs = []; let segStart = null, cur = null;
+    const d = wbParseYMD(a), e = wbParseYMD(b);
+    if (isNaN(d) || isNaN(e) || d > e) return segs;
+    for (let t = new Date(d.getFullYear(), d.getMonth(), d.getDate()); t <= e; t.setDate(t.getDate() + 1)) {
+        if (wbIsWorkday(t)) { if (segStart === null) segStart = fmtLocal(t); cur = fmtLocal(t); }
+        else if (segStart !== null) { segs.push([segStart, cur]); segStart = null; cur = null; }
+    }
+    if (segStart !== null) segs.push([segStart, cur]);
+    return segs;
+}
+
 // 【v21.25】本地完成态改动标记 —— 让"网页端取消完成"也能生效
 // 背景：上传前的云端合并（mergeCloudStateBeforeUpload / _doneRes）只做"false→true"单调合并，
 // 导致网页把任务勾掉（false）后又被云端 true 顶回来，"取消完成永远无效"。
@@ -3657,14 +3671,25 @@ async function syncToSupabase(createSnapshotFlag = false) {
         try {
             const deletedTaskIds = (appData._deletedTaskIds || []).filter(id => id);
             if (deletedTaskIds.length > 0) {
-                const { error: tasksDelErr } = await supabaseClient.from('tasks').delete().in('id', deletedTaskIds);
+                                const { error: tasksDelErr } = await supabaseClient.from('tasks').delete().in('id', deletedTaskIds);
                 if (tasksDelErr) {
                     console.warn('⚠️ 清理已删除任务失败:', tasksDelErr);
                 } else {
-                    appData._deletedTaskIds = [];
-                    // 仅持久化清理标记，不触发上传
+                    // 【v21.45 修复】Supabase RLS 可能让 delete 变成"无报错但不生效"的 no-op，
+                    // 导致墓碑被过早清空、下次拉取又把任务拉回来。故删除后回查云端确认，
+                    // 仅清除云端确实已不存在的 id；云端仍在的保留墓碑、下次同步继续重试删除。
+                    try {
+                        const { data: _remain, error: _chkErr } = await supabaseClient.from('tasks').select('id').in('id', deletedTaskIds);
+                        if (!_chkErr && _remain && _remain.length > 0) {
+                            const _still = new Set(_remain.map(r => r.id));
+                            appData._deletedTaskIds = (appData._deletedTaskIds || []).filter(id => _still.has(id));
+                            console.warn(`⚠️ ${_remain.length} 条任务云端删除未生效（疑似 RLS/权限），保留墓碑下次重试`);
+                        } else {
+                            appData._deletedTaskIds = [];
+                        }
+                    } catch (_e) { /* 验证失败则保留墓碑，下次重试 */ }
                     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
-                    console.log(`🗑️ 已清理 ${deletedTaskIds.length} 条已删除任务`);
+                    console.log(`🗑️ 已清理已删除任务`);
                 }
             }
         } catch (err) { console.warn('⚠️ 清理已删除任务异常:', err); }
@@ -6826,17 +6851,22 @@ function renderSettlement(mc) {
                     if (t.completed) color = adjustColorBrightness(color, 0.6);
                     const icon = getTaskIcon(t.title);
 
-                    events.push({
-                        id: t.id,
-                        title: icon + ' ' + t.title,
-                        start: startDate,
-                        end: endMoment.format('YYYY-MM-DD'),
-                        color: color,
-                        textColor: '#fff',
-                        className: t.completed ? 'fc-event-done' : '',
-                        allDay: true,
-                        projectId: t.projectId,
-                        completed: t.completed
+                                        // 【v21.45】任务条按工作日拆分：休息日不画条，假期自动断开（同一任务多段，id 加 #segN 便于点击定位）
+                    const _segs = wbWorkdaySegments(startDate, endDate);
+                    _segs.forEach(function(_seg, _si) {
+                        const _segEnd = moment(_seg[1]).add(1, 'days').format('YYYY-MM-DD');
+                        events.push({
+                            id: t.id + '#seg' + _si,
+                            title: icon + ' ' + t.title,
+                            start: _seg[0],
+                            end: _segEnd,
+                            color: color,
+                            textColor: '#fff',
+                            className: t.completed ? 'fc-event-done' : '',
+                            allDay: true,
+                            projectId: t.projectId,
+                            completed: t.completed
+                        });
                     });
                 });
                 callback(events);
@@ -6849,13 +6879,15 @@ function renderSettlement(mc) {
                 timezone: 'local',
                 allDaySlot: true,
                 allDayText: '全天',
-                firstDay: 1,
+                firstDay: 0,
+                dayNames: ['星期日','星期一','星期二','星期三','星期四','星期五','星期六'],
+                dayNamesShort: ['周日','周一','周二','周三','周四','周五','周六'],
                 height: _calMobile ? 'auto' : 'parent',
                 fixedWeekCount: !_calMobile,
                 eventLimit: false,
                 events: getEventData,
                 eventClick: function(event, jsEvent, view) {
-                    const tid = event.id;
+                    const tid = (event.id || '').split('#')[0];
                     const task = appData.tasks.find(t => t.id === tid);
                     if (task) {
                         toggleTask(tid, !task.completed);
@@ -6891,9 +6923,11 @@ function renderSettlement(mc) {
             const container = document.getElementById('fcCalendar');
             if (!container) return;
             try {
-                const events = $(container).fullCalendar('getEvents') || [];
-                const total = events.length;
-                const done = events.filter(e => e.completed).length;
+                                const events = $(container).fullCalendar('getEvents') || [];
+                const _taskDone = {};
+                events.forEach(function(e) { const _id = (e.id || '').split('#')[0]; _taskDone[_id] = !!e.completed; });
+                const total = Object.keys(_taskDone).length;
+                const done = Object.keys(_taskDone).filter(function(k){ return _taskDone[k]; }).length;
                 const stats = document.getElementById('calStats');
                 if (stats) {
                     stats.innerHTML = `
