@@ -1,6 +1,18 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.42-mobile-split  2026-09-26  ★ 当前最新稿
+     v21.49-mobile-split  2026-10-10  ★ 当前最新稿
+     基于 v21.48-mobile-split 另存改写，原文件未改动。
+
+     v21.49 调整（专项：三处 UI 微调）：
+     · 数据填报页移除提成/合计显示（PC 端表格去掉"提成"列，移动端卡片去掉提成行，
+       底部合计移除），计算逻辑仍保留供结算管理使用。
+     · 工作日志输入框改小：PC/移动端高度分别由 150px/120px 改为 120px/100px，
+       并加 max-height:40vh，最多占页面一半。
+     · 结算管理数据填报行的"分期/备注/操作"列样式与普通项目行保持一致
+       （分期列居中对齐并设置 min-width:150px；未结算数据填报行仍优先于已结算显示）。
+     · 纯 UI 改动，不动任何数据结构与同步逻辑。
+
+     v21.42-mobile-split  2026-09-26
      基于 v21-mobile-split 另存改写，原文件未改动。
 
      v21.42 调整（专项：云同步页「版本历史与恢复」改为可折叠，缩短页面）：
@@ -6572,7 +6584,7 @@ function renderSettlement(mc) {
                                     <td>${r.year}-12-31</td>
                                     <td>${hide ? '***' : r.total.toFixed(2)}</td>
                                     <td>${hide ? '***' : _paid.toFixed(2)}</td>
-                                    <td style="text-align:center;">—</td>
+                                    <td style="text-align:center; min-width:150px;">—</td>
                                     <td>—</td>
                                     <td>${_settled ? '<span style="color:#94a3b8;">已结清</span>' : `<button class="btn btn-xs btn-primary" onclick="settleReportYear(${r.year})">结清</button>`}</td>
                                 </tr>`);
@@ -7285,7 +7297,7 @@ function renderLogs(mc) {
                     </div>
                 </div>
                 <div class="log-input-area" style="margin-top:10px;">
-                    <textarea id="logContent" placeholder="输入工作日志..." style="width:100%;height:120px;padding:12px;border:1px solid var(--m-border);border-radius:10px;font-size:16px;"></textarea>
+                    <textarea id="logContent" placeholder="输入工作日志..." style="width:100%;height:100px;max-height:40vh;padding:12px;border:1px solid var(--m-border);border-radius:10px;font-size:16px;"></textarea>
                     <button class="btn btn-primary" style="margin-top:8px;width:100%;" onclick="addWorkLog()">保存日志</button>
                 </div>
                 <div style="margin-top:16px;">
@@ -7337,7 +7349,7 @@ function renderLogs(mc) {
                 <span style="font-weight:500;font-size:13px;">📅 日期</span>
                 <input type="date" id="logDate" value="${fmtLocal()}" style="padding:4px 10px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
               </div>
-              <textarea id="logContent" placeholder="输入工作日志..." style="width:100%;height:150px;padding:12px;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;"></textarea>
+              <textarea id="logContent" placeholder="输入工作日志..." style="width:100%;height:120px;max-height:40vh;padding:12px;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;"></textarea>
               <button class="btn btn-primary" style="margin-top:8px;" onclick="addWorkLog()">保存日志</button>
               <div style="margin-top:16px;flex:1;overflow-y:auto;">
                 <h4 style="color:var(--primary);font-size:14px;">历史日志</h4>
@@ -7699,7 +7711,6 @@ function renderDataReport(mc) {
                                 </label>
                             `).join('')}
                         </div>
-                        <div class="m-comm-line" style="margin-top:6px;font-size:12px;color:#475569;">提成：<strong style="color:var(--primary);">${getRowCommission(r, true).toFixed(2)}</strong> 元</div>
                     </div>
                 `).join('') || '<div class="empty-state">暂无数据，点击"+公司"添加</div>';
                 const envCardsHtml = env.map((r, i) => `
@@ -7718,7 +7729,6 @@ function renderDataReport(mc) {
                                 </label>
                             `).join('')}
                         </div>
-                        <div class="m-comm-line" style="margin-top:6px;font-size:12px;color:#475569;">提成：<strong style="color:var(--primary);">${getRowCommission(r, false).toFixed(2)}</strong> 元</div>
                     </div>
                 `).join('') || '<div class="empty-state">暂无数据，点击"+公司"添加</div>';
                 return `
@@ -7739,16 +7749,14 @@ function renderDataReport(mc) {
                         <div style="display:flex;flex-direction:column;flex:1;gap:16px;min-height:0;overflow-y:auto;padding:12px;">
                             <div id="reportTabExec" class="report-tab-panel" style="display:${tabActive==='exec'?'flex':'none'};flex-direction:column;flex:1;">
                                 <div class="m-data-cards">${execCardsHtml}</div>
-                                <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+                                <div style="margin-top:8px;display:flex;justify-content:flex-start;align-items:center;">
                                     <button class="btn btn-sm" onclick="addExecRow(${sy})">+ 添加公司</button>
-                                    <div style="font-size:12px;color:#475569;">合计：<strong id="execTotal" style="color:var(--primary);">${execTotal.toFixed(2)}</strong> 元</div>
                                 </div>
                             </div>
                             <div id="reportTabEnv" class="report-tab-panel" style="display:${tabActive==='env'?'flex':'none'};flex-direction:column;flex:1;">
                                 <div class="m-data-cards">${envCardsHtml}</div>
-                                <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+                                <div style="margin-top:8px;display:flex;justify-content:flex-start;align-items:center;">
                                     <button class="btn btn-sm" onclick="addEnvRow(${sy})">+ 添加公司</button>
-                                    <div style="font-size:12px;color:#475569;">合计：<strong id="envTotal" style="color:var(--primary);">${envTotal.toFixed(2)}</strong> 元</div>
                                 </div>
                             </div>
                         </div>
@@ -7783,24 +7791,22 @@ function renderDataReport(mc) {
                       <div class="table-wrap" style="flex:1;">
                         <table class="data-table">
                           <thead><tr>
-                            <th class="sticky-col" style="width:14%;">公司</th>
-                            <th style="width:14%;">Q1</th><th style="width:14%;">Q2</th><th style="width:14%;">Q3</th><th style="width:14%;">Q4</th><th style="width:14%;">年报</th><th style="width:14%;">提成</th><th style="width:50px;">操作</th>
+                            <th class="sticky-col" style="width:16%;">公司</th>
+                            <th style="width:16%;">Q1</th><th style="width:16%;">Q2</th><th style="width:16%;">Q3</th><th style="width:16%;">Q4</th><th style="width:16%;">年报</th><th style="width:50px;">操作</th>
                           </tr></thead>
                           <tbody id="execTbody">
                             ${exec.map((r, i) => `
                               <tr class="exec-row" data-idx="${i}">
                                 <td class="sticky-col"><input value="${esc(r.company||'')}" class="execC" data-idx="${i}" onchange="refreshReportCommissionCells()" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
                                 ${['Q1','Q2','Q3','Q4','annual'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','exec',this.checked)"></td>`).join('')}
-                                <td class="comm-cell" data-idx="${i}" style="font-weight:600;color:var(--primary);">${getRowCommission(r, true).toFixed(2)}</td>
                                 <td><button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button></td>
                               </tr>
                             `).join('')}
                           </tbody>
                         </table>
                       </div>
-                      <div style="flex-shrink:0;margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+                      <div style="flex-shrink:0;margin-top:8px;display:flex;justify-content:flex-start;align-items:center;">
                         <button class="btn btn-sm" onclick="addExecRow(${sy})">+ 公司</button>
-                        <div style="font-size:13px;color:#475569;">执行报告合计：<strong id="execTotal" style="color:var(--primary);">${execTotal.toFixed(2)}</strong> 元</div>
                       </div>
                     </div>
                     <div id="reportTabEnv" class="report-tab-panel" style="display:${tabActive==='env'?'flex':'none'};flex-direction:column;flex:1;min-height:0;">
@@ -7808,24 +7814,22 @@ function renderDataReport(mc) {
                       <div class="table-wrap" style="flex:1;">
                         <table class="data-table">
                           <thead><tr>
-                            <th class="sticky-col" style="width:18%;">公司</th>
-                            <th style="width:18%;">Q1</th><th style="width:18%;">Q2</th><th style="width:18%;">Q3</th><th style="width:18%;">Q4</th><th style="width:18%;">提成</th><th style="width:50px;">操作</th>
+                            <th class="sticky-col" style="width:20%;">公司</th>
+                            <th style="width:20%;">Q1</th><th style="width:20%;">Q2</th><th style="width:20%;">Q3</th><th style="width:20%;">Q4</th><th style="width:50px;">操作</th>
                           </tr></thead>
                           <tbody id="envTbody">
                             ${env.map((r, i) => `
                               <tr class="env-row" data-idx="${i}">
                                 <td class="sticky-col"><input value="${esc(r.company||'')}" class="envC" data-idx="${i}" onchange="refreshReportCommissionCells()" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
                                 ${['Q1','Q2','Q3','Q4'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','env',this.checked)"></td>`).join('')}
-                                <td class="comm-cell" data-idx="${i}" style="font-weight:600;color:var(--primary);">${getRowCommission(r, false).toFixed(2)}</td>
                                 <td><button class="btn btn-xs btn-ghost" onclick="delEnvRow(${sy},${i})">✕</button></td>
                               </tr>
                             `).join('')}
                           </tbody>
                         </table>
                       </div>
-                      <div style="flex-shrink:0;margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+                      <div style="flex-shrink:0;margin-top:8px;display:flex;justify-content:flex-start;align-items:center;">
                         <button class="btn btn-sm" onclick="addEnvRow(${sy})">+ 公司</button>
-                        <div style="font-size:13px;color:#475569;">环保脸谱合计：<strong id="envTotal" style="color:var(--primary);">${envTotal.toFixed(2)}</strong> 元</div>
                       </div>
                     </div>
                   </div>
