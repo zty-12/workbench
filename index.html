@@ -1,6 +1,23 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.49-mobile-split  2026-10-10  ★ 当前最新稿
+     v21.50-mobile-split  2026-10-10  ★ 当前最新稿
+     基于 v21.49-mobile-split 另存改写，原文件未改动。
+
+     v21.50 调整（专项：结算管理数据填报行的「分期 / 备注 / 操作」三列改为与普通项目行一致）：
+     · 分期列：不再显示"—"，改为渲染一个 100% 单期分期（复选框 + 100% + 结清日期），
+       结构与普通项目行的 installment-item 完全相同；勾选 = 结清，点击日期改结清日期。
+     · 备注列：不再显示"—"，改为显示该行的备注文本（可为空），与普通行渲染一致。
+     · 操作列：不再显示"结清"按钮，改为"✎"编辑结算按钮（点击弹出编辑弹窗：结清日期 + 备注）。
+     · 结清粒度由「按年」细化为「类型+公司+年份」一行一条：
+       新状态存 appData.reportCommission.settled[`${type}|${company}|${year}`] = {paid, paidDate, note}；
+       旧 settledYears 按年份的状态仍作为兜底读取（_reportIsSettled 先查行级、再查年份级），历史已结清行不会回退。
+     · 桌面表格与移动端 m-settle-card 双端同步改造；数据填报行仍按「未结清在前、已结清在后」排序。
+     · 新增函数：_reportSettleKey / _reportSettleState / _reportIsSettled / _reportSettleNote /
+       toggleReportInst / openReportDatePicker / confirmReportDatePicker /
+       editReportSettlement / saveReportSettlementEdit。
+     · key 一律经 data-key 属性传递（this.dataset.key），避免公司名含特殊字符破坏内联 onclick。
+
+     v21.49-mobile-split  2026-10-10
      基于 v21.48-mobile-split 另存改写，原文件未改动。
 
      v21.49 调整（专项：三处 UI 微调）：
@@ -5839,6 +5856,121 @@ function renderProjects(mc) {
             showToast('✅ ' + y + ' 年数据填报提成已结清');
         }
 
+        // 【v21.50】数据填报结算行改为「100% 单期分期」模型：勾选分期 = 结清，日期 = 结清日期，
+        // 支持按 类型+公司+年份 单独结清；旧 settledYears 按年份的状态继续兼容读取。
+        function _reportSettleKey(type, company, year) {
+            return type + '|' + (company || '') + '|' + year;
+        }
+        function _reportSettleState(key) {
+            if (!appData.reportCommission) appData.reportCommission = { defaultAmount: 0, perCompany: {}, settledYears: {} };
+            const rc = appData.reportCommission;
+            if (!rc.settled) rc.settled = {};
+            if (!rc.settled[key] || typeof rc.settled[key] !== 'object') {
+                // 从旧年份级状态回填，保证历史「已结清」行不回退
+                const _y = key ? Number(String(key).split('|')[2]) : NaN;
+                const _legacy = !!(rc.settledYears && rc.settledYears[_y]);
+                rc.settled[key] = { paid: _legacy, paidDate: '', note: '' };
+            }
+            return rc.settled[key];
+        }
+        function _reportIsSettled(type, company, year) {
+            if (!appData.reportCommission) return false;
+            const st = appData.reportCommission.settled && appData.reportCommission.settled[_reportSettleKey(type, company, year)];
+            if (st && typeof st === 'object') return !!st.paid;
+            return !!(appData.reportCommission.settledYears && appData.reportCommission.settledYears[year]);
+        }
+        function _reportSettleNote(type, company, year) {
+            const st = appData.reportCommission && appData.reportCommission.settled && appData.reportCommission.settled[_reportSettleKey(type, company, year)];
+            return (st && typeof st === 'object') ? (st.note || '') : '';
+        }
+
+        // 勾选/取消该数据填报行的分期（100%）
+        function toggleReportInst(key, checked) {
+            try {
+                const st = _reportSettleState(key);
+                st.paid = !!checked;
+                if (checked) { st.paidDate = fmtLocal(); } else { st.paidDate = ''; }
+                saveData();
+                try { syncToSupabase(); } catch (e) {}
+                renderSettlement(document.getElementById('mainContent'));
+                showToast(checked ? '✅ 已结清' : '↩ 已取消结清');
+            } catch (e) { console.warn('⚠️ 数据填报结算状态保存失败:', e); }
+        }
+        // 选择结清日期（与普通项目的日期弹窗一致）
+        function openReportDatePicker(key) {
+            const st = _reportSettleState(key);
+            const html =
+                `<div class="modal" style="max-width:400px;"><button class="close-btn" onclick="closeModal()">✕</button><h3>📅 选择日期</h3><div class="form-group"><label>日期</label><input type="date" id="reportDatePickerInput" value="${st.paidDate || fmtLocal()}" style="width:100%;"></div><div class="confirm-actions"><button class="btn btn-primary" onclick="confirmReportDatePicker('${key}')">确认</button><button class="btn btn-ghost" onclick="closeModal()">取消</button></div></div>`;
+            createModal(html);
+        }
+        function confirmReportDatePicker(key) {
+            const input = document.getElementById('reportDatePickerInput');
+            if (!input) return;
+            const date = input.value;
+            if (!date) { showAlert('请选择日期'); return; }
+            const st = _reportSettleState(key);
+            st.paidDate = date;
+            st.paid = true;
+            saveData();
+            try { syncToSupabase(); } catch (e) {}
+            closeModal();
+            renderSettlement(document.getElementById('mainContent'));
+            showToast('✅ 日期已更新');
+        }
+        // 编辑数据填报行结算信息（与普通项目 ✎ 按钮对应：结清日期 + 备注）
+        function editReportSettlement(key) {
+            const parts = String(key).split('|');
+            const [type, company, year] = [parts[0] || '', parts[1] || '', parts[2] || ''];
+            const arr = (type === 'env')
+                ? (appData.dataReports.environmental || {})[Number(year)] || []
+                : (appData.dataReports.execution || {})[Number(year)] || [];
+            const row = arr.find(r => (r.company || '').trim() === company);
+            const cnt = row ? ((type === 'env') ? ['Q1', 'Q2', 'Q3', 'Q4'] : ['Q1', 'Q2', 'Q3', 'Q4', 'annual']).filter(q => row[q]).length : 0;
+            const rc = appData.reportCommission || { defaultAmount: 0, perCompany: {} };
+            const def = parseFloat(rc.defaultAmount) || 0;
+            const per = rc.perCompany || {};
+            const amt = (per[company] != null) ? parseFloat(per[company]) : def;
+            const total = cnt * (isNaN(amt) ? 0 : amt);
+            const st = _reportSettleState(key);
+            const reportLabel = (type === 'env') ? '环保脸谱' : '执行报告';
+            const html = `
+                <div class="modal" style="max-width:520px;">
+                  <button class="close-btn" onclick="closeModal()">✕</button>
+                  <h3>✎ 编辑结算信息</h3>
+                  <div style="font-size:12px;color:var(--text-secondary);margin-bottom:12px;padding:8px 10px;background:#f8fafc;border-radius:8px;border:1px solid #e9ecef;">
+                    ${esc(reportLabel)}（${esc(year)}年）· ${esc(company)} · 填报 ${cnt} 次 × 单价 ${isNaN(amt) ? 0 : amt.toFixed(2)} = <strong style="color:var(--primary);">${total.toFixed(2)}</strong> 元
+                    <div style="font-size:11px;color:#94a3b8;margin-top:4px;">💡 数据填报按「整年一次结清」计算，金额由填报次数与提成单价自动得出</div>
+                  </div>
+                  <div class="form-group">
+                    <label>结清日期</label>
+                    <input type="date" id="reportSettleDate" value="${st.paidDate || ''}" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">
+                  </div>
+                  <div class="form-group" style="margin-top:12px;">
+                    <label>备注</label>
+                    <textarea id="reportSettleNote" rows="3" placeholder="备注" style="width:100%;padding:8px 12px;border-radius:8px;border:1px solid #e2e8f0;font-size:13px;">${esc(st.note || '')}</textarea>
+                  </div>
+                  <div class="confirm-actions">
+                    <button class="btn btn-primary" onclick="saveReportSettlementEdit('${key}')">保存</button>
+                    <button class="btn btn-ghost" onclick="closeModal()">取消</button>
+                  </div>
+                </div>
+              `;
+            createModal(html);
+        }
+        function saveReportSettlementEdit(key) {
+            const st = _reportSettleState(key);
+            const dateInput = document.getElementById('reportSettleDate');
+            const noteInput = document.getElementById('reportSettleNote');
+            const date = dateInput ? dateInput.value : '';
+            if (date) { st.paidDate = date; st.paid = true; } else { st.paid = false; st.paidDate = ''; }
+            st.note = noteInput ? (noteInput.value || '') : '';
+            saveData();
+            try { syncToSupabase(); } catch (e) {}
+            closeModal();
+            renderSettlement(document.getElementById('mainContent'));
+            showToast('✅ 结算信息已更新');
+        }
+
         // ============================================================
         // 任务分配（完整）
         // ============================================================
@@ -6278,7 +6410,8 @@ function renderSettlement(mc) {
                 const amt = (per[comp] != null) ? parseFloat(per[comp]) : def;
                 const rowTotal = cnt * (isNaN(amt) ? 0 : amt);
                 if (searchComp && !comp.toLowerCase().includes(searchComp)) return;
-                reportRows.push({ _isReport: true, company: comp, year: y, reportType: label, type, count: cnt, total: rowTotal, settled: !!(_rcCfg.settledYears && _rcCfg.settledYears[y]) });
+                const _rKey = _reportSettleKey(type, comp, y);
+                reportRows.push({ _isReport: true, company: comp, year: y, reportType: label, type, count: cnt, total: rowTotal, key: _rKey, note: _reportSettleNote(type, comp, y), settledDate: (_rcCfg.settled && _rcCfg.settled[_rKey] && _rcCfg.settled[_rKey].paidDate) || '', settled: _reportIsSettled(type, comp, y) });
             });
         });
     });
@@ -6355,6 +6488,16 @@ function renderSettlement(mc) {
                 const _cls = _settled ? 'settlement-full' : 'settlement-unpaid';
                 const _statusText = _settled ? '✅已结清' : '📌待结清';
                 const _paid = _settled ? p.total : 0;
+                // 【v21.50】数据填报卡片同样提供「分期 / 备注 / 操作」三行，与普通项目卡片一致
+                const _repInstHtml = `<div class="installment-item" data-key="${escAttr(p.key)}">
+                    <div class="inst-row">
+                        <input type="checkbox" ${_settled ? 'checked' : ''} onchange="event.stopPropagation(); toggleReportInst(this.dataset.key,this.checked)">
+                        <span>100%</span>
+                    </div>
+                    <div class="inst-date-text" data-key="${escAttr(p.key)}" onclick="event.stopPropagation(); openReportDatePicker(this.dataset.key)" title="点击选择结清日期">
+                        ${p.settledDate || '选择日期'}
+                    </div>
+                </div>`;
                 return `<div class="m-settle-card" data-report onclick="void(0)">
                     <div class="m-settle-card-header">
                         <div class="m-settle-card-name">${esc(p.company)}</div>
@@ -6368,7 +6511,14 @@ function renderSettlement(mc) {
                         <div class="m-settle-detail-row"><span class="m-settle-detail-label">填报次数</span><span class="m-settle-detail-value">${p.count}</span></div>
                         <div class="m-settle-detail-row"><span class="m-settle-detail-label">提成</span><span class="m-settle-detail-value">${hide ? '***' : p.total.toFixed(2)}</span></div>
                         <div class="m-settle-detail-row"><span class="m-settle-detail-label">已结清</span><span class="m-settle-detail-value">${hide ? '***' : _paid.toFixed(2)}</span></div>
-                        <div class="m-settle-detail-row"><span class="m-settle-detail-label">操作</span><span class="m-settle-detail-value">${_settled ? '<span style="color:#94a3b8;">已结清</span>' : `<button class="btn btn-xs btn-primary" onclick="event.stopPropagation(); settleReportYear(${p.year})">结清</button>`}</span></div>
+                        <div class="m-settle-detail-row">
+                            <span class="m-settle-detail-label">分期</span>
+                            <span class="m-settle-detail-value">
+                                <div class="installment-container" style="display:flex;flex-wrap:wrap;gap:6px;">${_repInstHtml}</div>
+                            </span>
+                        </div>
+                        <div class="m-settle-detail-row"><span class="m-settle-detail-label">备注</span><span class="m-settle-detail-value">${esc(p.note || '')}</span></div>
+                        <div class="m-settle-detail-row"><span class="m-settle-detail-label">操作</span><span class="m-settle-detail-value"><button class="btn btn-xs" data-key="${escAttr(p.key)}" onclick="event.stopPropagation(); editReportSettlement(this.dataset.key)">✎ 编辑结算</button></span></div>
                     </div>
                 </div>`;
             }
@@ -6588,6 +6738,16 @@ function renderSettlement(mc) {
                                 const _bg = _settled ? 'rgba(40,167,69,0.08)' : 'rgba(255,193,7,0.08)';
                                 const _statusText = _settled ? '✅已结清' : '📌待结清';
                                 const _paid = _settled ? r.total : 0;
+                                // 【v21.50】分期列渲染为「100% 单期」，结构与普通项目行完全一致
+                                const _repInstHtml = `<div class="installment-item" data-key="${escAttr(r.key)}">
+                                    <div class="inst-row">
+                                        <input type="checkbox" ${_settled ? 'checked' : ''} onchange="toggleReportInst(this.dataset.key,this.checked)">
+                                        <span>100%</span>
+                                    </div>
+                                    <div class="inst-date-text" data-key="${escAttr(r.key)}" onclick="openReportDatePicker(this.dataset.key)" title="点击选择结清日期">
+                                        ${r.settledDate || '选择日期'}
+                                    </div>
+                                </div>`;
                                 _rows.push(`<tr class="${_cls}" style="background-color:${_bg};">
                                     <td class="sticky-col">${esc(r.company)}</td>
                                     <td>${esc(r.reportType)}（${r.year}年）</td>
@@ -6596,9 +6756,15 @@ function renderSettlement(mc) {
                                     <td>${r.year}-12-31</td>
                                     <td>${hide ? '***' : r.total.toFixed(2)}</td>
                                     <td>${hide ? '***' : _paid.toFixed(2)}</td>
-                                    <td style="text-align:center; min-width:150px;">—</td>
-                                    <td>—</td>
-                                    <td>${_settled ? '<span style="color:#94a3b8;">已结清</span>' : `<button class="btn btn-xs btn-primary" onclick="settleReportYear(${r.year})">结清</button>`}</td>
+                                    <td style="text-align:center; min-width:150px;">
+                                        <div class="installment-container" style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;">
+                                            ${_repInstHtml}
+                                        </div>
+                                    </td>
+                                    <td>${esc(r.note || '')}</td>
+                                    <td>
+                                        <button class="btn btn-xs" data-key="${escAttr(r.key)}" onclick="editReportSettlement(this.dataset.key)">✎</button>
+                                    </td>
                                 </tr>`);
                             });
                             return _rows.length ? _rows.join('') : '<tr><td colspan="10" style="text-align:center;padding:20px;color:#6c7a94;">暂无项目</td></tr>';
