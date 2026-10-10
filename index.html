@@ -5451,7 +5451,7 @@ function renderProjects(mc) {
             });
             cards += '</div>'; // m-proj-cards
             cards += '</div>'; // card
-            mc.innerHTML = cards + '<div class="card" onclick="navigateTo(\'data-report\')" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;border:1px dashed var(--primary);background:var(--primary-bg-light);"><div><h3 style="margin:0 0 4px;">📊 数据填报</h3><span style="color:#6c7a94;font-size:13px;">勾选季度/年报即计提成 · 点击进入填报与提成设置</span></div><span style="font-size:22px;color:var(--primary);">→</span></div>';
+            mc.innerHTML = cards + '<div class="card" onclick="goDataReport()" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;border:1px dashed var(--primary);background:var(--primary-bg-light);"><div><h3 style="margin:0 0 4px;">📊 数据填报</h3><span style="color:#6c7a94;font-size:13px;">勾选季度/年报即计提成 · 点击进入填报与提成设置</span></div><span style="font-size:22px;color:var(--primary);">→</span></div>';
             return; // 移动端渲染完毕，不再执行 PC 表格逻辑
         }
 
@@ -5528,7 +5528,7 @@ function renderProjects(mc) {
             html += `</tr>`;
         });
         html += `</tbody></table></div></div>`;
-        mc.innerHTML = html + '<div class="card" onclick="navigateTo(\'data-report\')" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;border:1px dashed var(--primary);background:var(--primary-bg-light);"><div><h3 style="margin:0 0 4px;">📊 数据填报</h3><span style="color:#6c7a94;font-size:13px;">勾选季度/年报即计提成 · 点击进入填报与提成设置</span></div><span style="font-size:22px;color:var(--primary);">→</span></div>';
+        mc.innerHTML = html + '<div class="card" onclick="goDataReport()" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;border:1px dashed var(--primary);background:var(--primary-bg-light);"><div><h3 style="margin:0 0 4px;">📊 数据填报</h3><span style="color:#6c7a94;font-size:13px;">勾选季度/年报即计提成 · 点击进入填报与提成设置</span></div><span style="font-size:22px;color:var(--primary);">→</span></div>';
 
         // 初始化行拖拽排序
         const tbody = document.getElementById('projectTableBody');
@@ -5710,6 +5710,8 @@ function renderProjects(mc) {
         // ============================================================
         // 【v21.46】数据填报提成相关
         // ============================================================
+        function goDataReport() { navigateTo('data-report'); }
+
         function onReportCheckChange(y, idx, q, type, checked) {
             try {
                 const map = (type === 'env') ? appData.dataReports.environmental : appData.dataReports.execution;
