@@ -1,7 +1,24 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.50-mobile-split  2026-10-10  ★ 当前最新稿
+     v21.51-mobile-split  2026-10-10  ★ 当前最新稿
+    结算管理排序：未结清的数据填报行排到所有普通项目之上，已结清的数据填报行排到最后
+      —— 截图反馈「平创/天鑫橡塑/花晓/三棉(📦归档+✅已结清)在上，乐亿达/晨合/海垦/创瑞/和泰
+         数据填报(📌待结清)在下」，未结清项应优先展示。
+      两处共用渲染器都改成同一顺序（跨公司前置，不再仅在公司组内前置）：
+        a) 桌面表格 IIFE：渲染顺序改为「未结清填报行 → 普通项目(未结+已结) → 已结清填报行」，
+           填报行渲染体提取为 _renderReportRow 复用。
+        b) 卡片模式 allProjects：同样的三段式全局分组，废弃原「按公司交错」拼接
+           （原口径会让较早公司的已结清项目压在较晚公司的待结清填报行之上）。
+      纯排序改动，不改数据结构、不改结算状态机、不改同步逻辑。
+     v21.50-mobile-split  2026-10-10
      基于 v21.49-mobile-split 另存改写，原文件未改动。
+     ★ 结算管理表格中数据填报行的「分期/备注/操作」三列已与普通项目行完全一致：
+       分期列渲染 100% 单期 installment-item（复选框 + 100% + 结清日期，勾选=结清、点日期改结清日期），
+       备注列显示备注文本，操作列 ✎ 弹编辑弹窗（结清日期 + 备注）。
+       结清粒度细化为「类型+公司+年份」：appData.reportCommission.settled[`${type}|${公司}|${year}`]
+       = {paid,paidDate,note}；行级缺失时回退旧 settledYears[year]，历史已结清行不回退。
+       key 一律 data-key + this.dataset.key 传参，避免公司名特殊字符破坏 onclick。
+       旧 settleReportYear(y) 已无 UI 调用但保留。排序未变（未结清在前）。
 
      v21.50 调整（专项：结算管理数据填报行的「分期 / 备注 / 操作」三列改为与普通项目行一致）：
      · 分期列：不再显示"—"，改为渲染一个 100% 单期分期（复选框 + 100% + 结清日期），
@@ -6429,19 +6446,16 @@ function renderSettlement(mc) {
     reportRows.sort((a, b) => (companyOrder[a.company] ?? Infinity) - (companyOrder[b.company] ?? Infinity) || a.year - b.year || (a.type === 'exec' ? -1 : 1));
     const _reportNotSettled = reportRows.filter(r => !r.settled);
     const _reportSettled = reportRows.filter(r => r.settled);
-    // 按公司交错：每个公司先普通项目（未结+已结），再数据填报行
-    const companyProjects = {};
-    const companyReports = {};
-    appData.companies.forEach(c => { companyProjects[c] = []; companyReports[c] = []; });
-    notSettled.forEach(p => { if (companyProjects[p.company]) companyProjects[p.company].push(p); });
-    settled.forEach(p => { if (companyProjects[p.company]) companyProjects[p.company].push(p); });
-    reportRows.forEach(r => { if (companyReports[r.company]) companyReports[r.company].push(r); });
-    const combinedRows = [];
-    appData.companies.forEach(c => {
-        combinedRows.push(...companyProjects[c]);
-        combinedRows.push(...companyReports[c]);
-    });
-    allProjects = combinedRows;
+    // 【v21.51】全局分组（与桌面表格渲染顺序完全一致）：
+    //   未结清数据填报行 → 普通项目(未结清在前、已结清在后) → 已结清数据填报行
+    // 这样「未结清」的数据填报行一定排在所有已结算完成的项目之上，无论公司先后。
+    // 注：companyProjects/companyReports 的「按公司交错」改为按状态全局分组——
+    // 截图反馈即为「已结清项目(平创等)压在待结清数据填报(乐亿达等)之上」，需要跨公司前置。
+    // 仍沿用原有口径：公司不在 appData.companies 列表内的行不进入结算列表。
+    const _compInList = k => appData.companies.indexOf(k) >= 0;
+    allProjects = _reportNotSettled.filter(r => _compInList(r.company))
+        .concat(notSettled.concat(settled).filter(p => _compInList(p.company)))
+        .concat(_reportSettled.filter(r => _compInList(r.company)));
 
     let totalCommissionSum = 0, totalSettledSum = 0;
     reportRows.forEach(r => {
@@ -6675,8 +6689,45 @@ function renderSettlement(mc) {
                             const _projectList = notSettled.concat(settled);
                             const _repNotSettled = reportRows.filter(r => !r.settled);
                             const _repSettled = reportRows.filter(r => r.settled);
-                            const _sortedReportRows = [..._repNotSettled, ..._repSettled];
                             const _rows = [];
+                            // 【v21.51】数据填报行渲染器（100% 单期分期，结构与普通项目行一致）
+                            const _renderReportRow = (r) => {
+                                const _settled = r.settled;
+                                const _cls = _settled ? 'settlement-full' : 'settlement-unpaid';
+                                const _bg = _settled ? 'rgba(40,167,69,0.08)' : 'rgba(255,193,7,0.08)';
+                                const _statusText = _settled ? '✅已结清' : '📌待结清';
+                                const _paid = _settled ? r.total : 0;
+                                // 【v21.50】分期列渲染为「100% 单期」，结构与普通项目行完全一致
+                                const _repInstHtml = `<div class="installment-item" data-key="${escAttr(r.key)}">
+                                    <div class="inst-row">
+                                        <input type="checkbox" ${_settled ? 'checked' : ''} onchange="toggleReportInst(this.dataset.key,this.checked)">
+                                        <span>100%</span>
+                                    </div>
+                                    <div class="inst-date-text" data-key="${escAttr(r.key)}" onclick="openReportDatePicker(this.dataset.key)" title="点击选择结清日期">
+                                        ${r.settledDate || '选择日期'}
+                                    </div>
+                                </div>`;
+                                _rows.push(`<tr class="${_cls}" style="background-color:${_bg};">
+                                    <td class="sticky-col">${esc(r.company)}</td>
+                                    <td>${esc(r.reportType)}（${r.year}年）</td>
+                                    <td><span class="tag">数据填报</span></td>
+                                    <td>${_statusText}</td>
+                                    <td>${r.year}-12-31</td>
+                                    <td>${hide ? '***' : r.total.toFixed(2)}</td>
+                                    <td>${hide ? '***' : _paid.toFixed(2)}</td>
+                                    <td style="text-align:center; min-width:150px;">
+                                        <div class="installment-container" style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;">
+                                            ${_repInstHtml}
+                                        </div>
+                                    </td>
+                                    <td>${esc(r.note || '')}</td>
+                                    <td>
+                                        <button class="btn btn-xs" data-key="${escAttr(r.key)}" onclick="editReportSettlement(this.dataset.key)">✎</button>
+                                    </td>
+                                </tr>`);
+                            };
+                            // 【v21.51】未结清数据填报行排在所有普通项目之上，已结清数据填报行排到最后
+                            _repNotSettled.forEach(_renderReportRow);
                             _projectList.forEach(p => {
                                 const s = appData.settlements.find(st => st.projectId === p.id);
                                 const status = calcStatus(p.nodes);
@@ -6732,41 +6783,8 @@ function renderSettlement(mc) {
                                     </td>
                                 </tr>`);
                             });
-                            _sortedReportRows.forEach(r => {
-                                const _settled = r.settled;
-                                const _cls = _settled ? 'settlement-full' : 'settlement-unpaid';
-                                const _bg = _settled ? 'rgba(40,167,69,0.08)' : 'rgba(255,193,7,0.08)';
-                                const _statusText = _settled ? '✅已结清' : '📌待结清';
-                                const _paid = _settled ? r.total : 0;
-                                // 【v21.50】分期列渲染为「100% 单期」，结构与普通项目行完全一致
-                                const _repInstHtml = `<div class="installment-item" data-key="${escAttr(r.key)}">
-                                    <div class="inst-row">
-                                        <input type="checkbox" ${_settled ? 'checked' : ''} onchange="toggleReportInst(this.dataset.key,this.checked)">
-                                        <span>100%</span>
-                                    </div>
-                                    <div class="inst-date-text" data-key="${escAttr(r.key)}" onclick="openReportDatePicker(this.dataset.key)" title="点击选择结清日期">
-                                        ${r.settledDate || '选择日期'}
-                                    </div>
-                                </div>`;
-                                _rows.push(`<tr class="${_cls}" style="background-color:${_bg};">
-                                    <td class="sticky-col">${esc(r.company)}</td>
-                                    <td>${esc(r.reportType)}（${r.year}年）</td>
-                                    <td><span class="tag">数据填报</span></td>
-                                    <td>${_statusText}</td>
-                                    <td>${r.year}-12-31</td>
-                                    <td>${hide ? '***' : r.total.toFixed(2)}</td>
-                                    <td>${hide ? '***' : _paid.toFixed(2)}</td>
-                                    <td style="text-align:center; min-width:150px;">
-                                        <div class="installment-container" style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;">
-                                            ${_repInstHtml}
-                                        </div>
-                                    </td>
-                                    <td>${esc(r.note || '')}</td>
-                                    <td>
-                                        <button class="btn btn-xs" data-key="${escAttr(r.key)}" onclick="editReportSettlement(this.dataset.key)">✎</button>
-                                    </td>
-                                </tr>`);
-                            });
+                            // 【v21.51】已结清的数据填报行排到最后
+                            _repSettled.forEach(_renderReportRow);
                             return _rows.length ? _rows.join('') : '<tr><td colspan="10" style="text-align:center;padding:20px;color:#6c7a94;">暂无项目</td></tr>';
                         })()}
                     </tbody>
