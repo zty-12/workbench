@@ -1,16 +1,7 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v22-mobile-split  2026-10-08  ★ 当前最新稿（基于线上 v21.43/44/45 混合版）
+     v21.42-mobile-split  2026-09-26  ★ 当前最新稿
      基于 v21-mobile-split 另存改写，原文件未改动。
-
-     v22 修复（专项：桌面看板"拉取不到任务"根因治理）：
-     · 【根因】syncToSupabase 原先在 if(hasError) 闸门里才建快照——任一表 upsert 失败即抛错、
-       不生成快照；桌面看板只读最新快照，于是被冻在旧快照（08:37 那条无未完成任务的快照），
-       表现为"拉取不到任务"。
-     · 修复：把 createSnapshot() 从 hasError 闸门解耦——无论表是否上传完整，只要本次同步要求建快照
-       （手动上传 / 自动上传防抖 / 周期同步有改动），都仍尝试生成快照，保证桌面拿到本地最新数据。
-     · 同步：startAutoSync 的"有本地改动先上传"分支由 syncToSupabase() 改为 syncToSupabase(true)，
-       让 30s 周期同步也能刷新快照（配合 v21.37 快照保留策略，不会无限增长）。
 
      v21.42 调整（专项：云同步页「版本历史与恢复」改为可折叠，缩短页面）：
      · 整卡改为 <details> 折叠面板，默认收起（summary=标题 + 展开/收起箭头）。
@@ -1524,7 +1515,7 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
             <a data-page="terminated" data-page-node-id="55U75FMS1i3tVwKVQ65F29">🛑 终止 <span class="badge" id="terminatedBadge" data-page-node-id="apbbsFPjaeqrsxd7xTQ2kM">0</span></a>
             <a data-page="archived" data-page-node-id="rFggN5O1CwWMFJ2ev2xk3w">📦 归档 <span class="badge" id="archivedBadge" data-page-node-id="l6qzXntpEEMwUIoNZLuG42">0</span></a>
             <div class="nav-label" data-page-node-id="WTEnaDhlsplHYM29NVMXbA">工具</div>
-            <a data-page="data-report" data-page-node-id="RumzUJo70NEVEqepZuselM">📊 数据填报</a>
+
             <a data-page="templates" data-page-node-id="9zUAg2aPltyAuwpAt6C9Fu">📐 模板中心</a>
             <a data-page="report-template" data-page-node-id="cO429kOC1eo1vQBXEphZly">📄 报告模板</a>
             <a data-page="knowledge" data-page-node-id="nRexmtOikwlk4OlR9B4H2s">🧠 知识库</a>
@@ -1695,42 +1686,6 @@ const WB_HOLIDAYS = {
     }
     // TODO: 2027 国务院安排约 2026-11 公布，届时补一行：'2027': { holidays:[...], workdays:[...] }
 };
-
-// 【v23】节假日云端托管：启动/同步时从 Supabase holiday_rules 拉取，覆盖/补充内置数据（离线回退内置+缓存）
-const HOLIDAY_RULES_CACHE_KEY = 'holiday_rules_cache_v1';
-let _holidayRulesLoading = false;
-async function mergeCloudHolidays(rows) {
-  if (!Array.isArray(rows)) return;
-  for (const r of rows) {
-    if (!r || r.year == null) continue;
-    const y = String(r.year);
-    WB_HOLIDAYS[y] = {
-      holidays: Array.isArray(r.holidays) ? r.holidays : (r.holidays ? JSON.parse(r.holidays) : []),
-      workdays: Array.isArray(r.workdays) ? r.workdays : (r.workdays ? JSON.parse(r.workdays) : []),
-    };
-  }
-}
-async function refreshHolidays() {
-  if (_holidayRulesLoading) return;
-  _holidayRulesLoading = true;
-  try {
-    if (!supabaseClient) throw new Error('supabaseClient 未就绪');
-    const { data, error } = await supabaseClient.from('holiday_rules').select('year,holidays,workdays');
-    if (error) throw error;
-    if (data && data.length) {
-      mergeCloudHolidays(data);
-      try { localStorage.setItem(HOLIDAY_RULES_CACHE_KEY, JSON.stringify({ ts: Date.now(), rows: data })); } catch (e) {}
-    }
-  } catch (e) {
-    console.warn('⚠️ 拉取 holiday_rules 失败，使用内置/缓存兜底:', e && e.message);
-    try {
-      const c = JSON.parse(localStorage.getItem(HOLIDAY_RULES_CACHE_KEY) || 'null');
-      if (c && Array.isArray(c.rows) && c.rows.length) mergeCloudHolidays(c.rows);
-    } catch (e2) {}
-  } finally {
-    _holidayRulesLoading = false;
-  }
-}
 function parseLocal(s) { const a = String(s).split('-'); return new Date(Number(a[0]), Number(a[1]) - 1, Number(a[2])); }
 function wbIsWorkday(d) {
     const key = fmtLocal(d);
@@ -2040,6 +1995,7 @@ async function mergeCloudStateBeforeUpload() {
             terminated: [],
             archived: [],
             dataReports: { execution: {}, environmental: {} },
+            reportCommission: { defaultAmount: 0, perCompany: {}, settledYears: {} },
             knowledgeUrl: '',
             reportTemplates: { weekly: ['项目概况', '本周工作内容', '完成进度', '下周计划', '存在问题'], monthly: ['项目概况', '本月工作内容',
                     '完成进度', '下月计划', '存在问题'
@@ -2789,8 +2745,8 @@ async function loadFromSupabase() {
                 Object.keys(appData.dataReports.execution || {}).length)) {
             console.warn('⚠️ data_reports 表不可用或为空，保留本地数据');
         } else {
-            appData.dataReports.execution = execMap;
-            appData.dataReports.environmental = envMap;
+            appData.dataReports.execution = (function(){const m=(c,l)=>{const o={};Object.keys(c||{}).forEach(y=>o[y]=c[y]);Object.keys(l||{}).forEach(y=>{const x=l[y];if(Array.isArray(x)&&x.length)o[y]=x;else if(!(y in o))o[y]=x||[]});return o};return m(execMap, appData.dataReports.execution);})();
+            appData.dataReports.environmental = (function(){const m=(c,l)=>{const o={};Object.keys(c||{}).forEach(y=>o[y]=c[y]);Object.keys(l||{}).forEach(y=>{const x=l[y];if(Array.isArray(x)&&x.length)o[y]=x;else if(!(y in o))o[y]=x||[]});return o};return m(envMap, appData.dataReports.environmental);})();
         }
 
         // ===== 加载报告模板 =====
@@ -2860,11 +2816,11 @@ async function loadFromSupabase() {
         // ---------- 版本快照管理 ----------
         function applySnapshotPayload(payload) {
             if (!payload || typeof payload !== 'object') throw new Error('无效的快照数据');
-            const expectedKeys = ['companies','templates','projects','tasks','workLogs','settlements','archived','shelved','terminated','dataReports','reportTemplates','commissionTemplates'];
+            const expectedKeys = ['companies','templates','projects','tasks','workLogs','settlements','archived','shelved','terminated','dataReports','reportTemplates','commissionTemplates','reportCommission'];
             expectedKeys.forEach(key => {
                 if (!(key in payload)) {
                     console.warn('快照缺少字段，使用本地默认值:', key);
-                    payload[key] = appData[key] || (key === 'dataReports' ? { execution: {}, environmental: {} } : []);
+                    payload[key] = appData[key] || (key === 'dataReports' ? { execution: {}, environmental: {} } : key === 'reportCommission' ? { defaultAmount: 0, perCompany: {}, settledYears: {} } : []);
                 }
             });
             // 【v21.26 / #25】墓碑保护：快照由上次上传时生成，可能不含本设备刚产生的删除标记。
@@ -3132,8 +3088,8 @@ async function loadFromSupabase() {
                         if (row.execution) em[row.year] = row.execution;
                         if (row.environmental) nm[row.year] = row.environmental;
                     });
-                    appData.dataReports.execution = em;
-                    appData.dataReports.environmental = nm;
+                    appData.dataReports.execution = (function(){const m=(c,l)=>{const o={};Object.keys(c||{}).forEach(y=>o[y]=c[y]);Object.keys(l||{}).forEach(y=>{const x=l[y];if(Array.isArray(x)&&x.length)o[y]=x;else if(!(y in o))o[y]=x||[]});return o};return m(em, appData.dataReports.execution);})();
+                    appData.dataReports.environmental = (function(){const m=(c,l)=>{const o={};Object.keys(c||{}).forEach(y=>o[y]=c[y]);Object.keys(l||{}).forEach(y=>{const x=l[y];if(Array.isArray(x)&&x.length)o[y]=x;else if(!(y in o))o[y]=x||[]});return o};return m(nm, appData.dataReports.environmental);})();
                 }
             }
 
@@ -3870,32 +3826,12 @@ async function syncToSupabase(createSnapshotFlag = false) {
             }
         } catch (e) { console.warn('⚠️ 清理已删除日志异常:', e); }
 
-        // 【v22 修复】版本快照与"表上传是否完整"解耦：无论任一张表 upsert 是否失败，
-        // 只要本次同步要求建快照（手动上传 / 自动上传防抖 / 周期同步有改动），都仍尝试生成快照。
-        // 本地 appData 已是用户最新修改，快照能让桌面看板（只读最新快照）拿到最新数据，
-        // 不再被 hasError 冻在旧快照上。快照生成失败仅告警，不影响下方对表上传失败的抛错。
-        let snapshotWarning = false;
-        let snapshotHint = '';
-        if (createSnapshotFlag) {
-            try {
-                await createSnapshot();
-                console.log('✅ 版本快照创建完成');
-            } catch (snapErr) {
-                console.warn('⚠️ 同步后版本快照未创建:', snapErr);
-                snapshotWarning = true;
-                if (snapErr._hint) snapshotHint = snapErr._hint;
-                else if (snapErr.code === '42501' || (snapErr.message && snapErr.message.includes('permission denied'))) {
-                    snapshotHint = '快照表权限不足，请在云同步页执行含 grant 的建表 SQL。';
-                }
-            }
-        }
-
         if (hasError) {
             console.error('❌ 同步过程中部分表失败，错误汇总:');
             errors.forEach(({ table, error }) => {
                 console.error(`  - ${table}:`, error.message || error);
             });
-            updateSyncStatus(snapshotWarning ? ('同步失败（但快照已建）' + (snapshotHint ? '：' + snapshotHint : '')) : '同步失败', 'error');
+            updateSyncStatus('同步失败', 'error');
             // 【v2修复】上传不完整时明确抛错：手动上传会弹出真实失败原因（不再显示“上传成功”），
             // 自动同步会保留 _pendingUpload 待下次重试，且不会执行后续拉取覆盖本地
             throw new Error('部分数据上传失败: ' + errors.map(e => e.table).join(', ') + '（云端数据未完整更新，本地修改已保留，将自动重试）');
@@ -3912,6 +3848,22 @@ async function syncToSupabase(createSnapshotFlag = false) {
             clearNodesEdits((appData.terminated || []).map(t => t && t.projectData));
             try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
             _pendingUpload = false;   // 已成功上传，清除“有待上传修改”标记
+            // 上传成功后创建版本快照（仅手动上传时），并重新加载云端数据
+            let snapshotWarning = false;
+            let snapshotHint = '';
+            if (createSnapshotFlag) {
+                try {
+                    await createSnapshot();
+                    console.log('✅ 版本快照创建完成');
+                } catch (snapErr) {
+                    console.warn('⚠️ 同步成功，但版本快照未创建:', snapErr);
+                    snapshotWarning = true;
+                    if (snapErr._hint) snapshotHint = snapErr._hint;
+                    else if (snapErr.code === '42501' || (snapErr.message && snapErr.message.includes('permission denied'))) {
+                        snapshotHint = '快照表权限不足，请在云同步页执行含 grant 的建表 SQL。';
+                    }
+                }
+            }
             // 【修复 v21.12】上传成功后不再用云端/快照数据覆盖本地。
             // 根因：自动上传的目的只是把本地修改推到云端，但这里却在推完后回读 loadFromSupabase()，
             // 用云端旧数据/旧快照整体覆盖 appData，导致用户刚改的节点状态被覆盖回滚、任务分配页显示旧状态。
@@ -3971,7 +3923,6 @@ async function syncToSupabase(createSnapshotFlag = false) {
             let _needWorkLogPull = false;  // 【v21.36】完整拉取被跳过时，仍需单独补拉工作日志（跨设备）
             console.log('🔵 开始加载数据...');
             const configured = initSupabase();
-            if (configured) refreshHolidays();  // 【v23】节假日云端托管：启动时拉取（失败回退内置）
 
             // 【v21.17 修复】localStorage 键值可能被手动改坏，JSON.parse 失败会让 loadData 抛错 → 整页白屏。包 try 兜底。
             let _uploadMode = null, _syncMode = null;
@@ -4154,6 +4105,9 @@ async function syncToSupabase(createSnapshotFlag = false) {
             if (!appData.terminated) appData.terminated = [];
             if (!appData.archived) appData.archived = [];
             if (!appData.dataReports) appData.dataReports = { execution: {}, environmental: {} };
+            if (!appData.reportCommission || typeof appData.reportCommission !== 'object') appData.reportCommission = { defaultAmount: 0, perCompany: {}, settledYears: {} };
+            if (!appData.reportCommission.perCompany) appData.reportCommission.perCompany = {};
+            if (!appData.reportCommission.settledYears) appData.reportCommission.settledYears = {};
             if (!appData.reportTemplates) appData.reportTemplates = { weekly: [], monthly: [] };
             if (!appData.commissionTemplates) appData.commissionTemplates = {};
             if (!appData.projectTypeColors) appData.projectTypeColors = {};
@@ -4470,8 +4424,8 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
   	             const hadPending = _pendingUpload;
   	             if (_pendingUpload) {
     	                 try {
-                    console.log('⏰ 自动同步：检测到本地未上传修改，先上传再拉取...');
-                    await syncToSupabase(true);   // 【v22】周期同步有本地改动时也建快照，避免桌面看板冻在旧快照
+    	                     console.log('⏰ 自动同步：检测到本地未上传修改，先上传再拉取...');
+    	                     await syncToSupabase();
     	                 } catch (e) {
     	                     console.warn('⚠️ 自动上传本地修改失败，本次跳过拉取以免覆盖修改:', e);
     	                     return;
@@ -5497,7 +5451,7 @@ function renderProjects(mc) {
             });
             cards += '</div>'; // m-proj-cards
             cards += '</div>'; // card
-            mc.innerHTML = cards;
+            mc.innerHTML = cards + '<div class="card" onclick="navigateTo(\'data-report\')" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;border:1px dashed var(--primary);background:var(--primary-bg-light);"><div><h3 style="margin:0 0 4px;">📊 数据填报</h3><span style="color:#6c7a94;font-size:13px;">勾选季度/年报即计提成 · 点击进入填报与提成设置</span></div><span style="font-size:22px;color:var(--primary);">→</span></div>';
             return; // 移动端渲染完毕，不再执行 PC 表格逻辑
         }
 
@@ -5574,7 +5528,7 @@ function renderProjects(mc) {
             html += `</tr>`;
         });
         html += `</tbody></table></div></div>`;
-        mc.innerHTML = html;
+        mc.innerHTML = html + '<div class="card" onclick="navigateTo(\'data-report\')" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;border:1px dashed var(--primary);background:var(--primary-bg-light);"><div><h3 style="margin:0 0 4px;">📊 数据填报</h3><span style="color:#6c7a94;font-size:13px;">勾选季度/年报即计提成 · 点击进入填报与提成设置</span></div><span style="font-size:22px;color:var(--primary);">→</span></div>';
 
         // 初始化行拖拽排序
         const tbody = document.getElementById('projectTableBody');
@@ -5749,6 +5703,102 @@ function renderProjects(mc) {
             closeModal();
             renderProjects(document.getElementById('mainContent'));
             showToast('✅ 项目已更新');
+        }
+
+
+
+        // ============================================================
+        // 【v21.46】数据填报提成相关
+        // ============================================================
+        function onReportCheckChange(y, idx, q, type, checked) {
+            try {
+                const map = (type === 'env') ? appData.dataReports.environmental : appData.dataReports.execution;
+                if (!map[y] || !map[y][idx]) return;
+                map[y][idx][q] = !!checked;
+                saveData();
+            } catch (e) { console.warn('⚠️ 勾选状态保存失败:', e); }
+        }
+
+        function calcReportCommission(year) {
+            if (!appData.reportCommission) appData.reportCommission = { defaultAmount: 0, perCompany: {}, settledYears: {} };
+            const rc = appData.reportCommission;
+            const def = parseFloat(rc.defaultAmount) || 0;
+            const per = rc.perCompany || {};
+            let count = 0, total = 0;
+            const detail = [];
+            const proc = (arr, hasAnnual) => {
+                (arr || []).forEach(r => {
+                    const comp = (r.company || '').trim();
+                    if (!comp) return;
+                    const qs = hasAnnual ? ['Q1', 'Q2', 'Q3', 'Q4', 'annual'] : ['Q1', 'Q2', 'Q3', 'Q4'];
+                    const rcCount = qs.filter(q => r[q]).length;
+                    if (rcCount === 0) return;
+                    const amt = (per[comp] != null) ? parseFloat(per[comp]) : def;
+                    const rowTotal = rcCount * (isNaN(amt) ? 0 : amt);
+                    count += rcCount; total += rowTotal;
+                    detail.push({ company: comp, count: rcCount, amount: amt, total: rowTotal });
+                });
+            };
+            proc(appData.dataReports.execution[year], true);
+            proc(appData.dataReports.environmental[year], false);
+            return { count, total, detail };
+        }
+
+        function openReportCommissionConfig() {
+            if (!appData.reportCommission) appData.reportCommission = { defaultAmount: 0, perCompany: {}, settledYears: {} };
+            const rc = appData.reportCommission;
+            const comps = new Set();
+            const collect = (arr) => { (arr || []).forEach(r => { const c = (r.company || '').trim(); if (c) comps.add(c); }); };
+            Object.values(appData.dataReports.execution || {}).forEach(collect);
+            Object.values(appData.dataReports.environmental || {}).forEach(collect);
+            Object.keys(rc.perCompany || {}).forEach(c => comps.add(c));
+            const compList = Array.from(comps).sort();
+            const rows = compList.map(c => {
+                const v = (rc.perCompany && rc.perCompany[c] != null) ? rc.perCompany[c] : '';
+                return `<div class="form-row" style="align-items:center;"><div class="form-group" style="flex:1;"><label>${esc(c)}</label></div>`
+                    + `<div class="form-group"><input type="number" min="0" step="0.01" data-company="${escAttr(c)}" value="${v}" placeholder="用默认" style="width:130px;"></div></div>`;
+            }).join('') || '<div style="color:#6c7a94;padding:8px 0;">暂无公司，请先在数据填报中添加公司</div>';
+            const html = `<div class="modal"><button class="close-btn" onclick="closeModal()">✕</button>
+                <h3>⚙️ 填报提成设置</h3>
+                <div class="form-row"><div class="form-group" style="flex:1;"><label>默认单次填报提成金额（每个勾选的季度/年报）</label></div>
+                    <div class="form-group"><input type="number" min="0" step="0.01" id="rcDefault" value="${rc.defaultAmount || 0}" style="width:140px;"></div></div>
+                <p style="color:#6c7a94;margin:4px 0 12px;">留空的单公司金额表示使用默认。每个勾选的季度或年报计为一次填报。</p>
+                <h4 style="margin:8px 0;">单公司覆盖金额</h4>
+                <div id="rcCompList">${rows}</div>
+                <div class="confirm-actions"><button class="btn btn-primary" onclick="saveReportCommissionConfig()">保存</button><button class="btn btn-ghost" onclick="closeModal()">取消</button></div>
+            </div>`;
+            createModal(html);
+        }
+
+        function saveReportCommissionConfig() {
+            if (!appData.reportCommission) appData.reportCommission = { defaultAmount: 0, perCompany: {}, settledYears: {} };
+            const rc = appData.reportCommission;
+            rc.defaultAmount = parseFloat(document.getElementById('rcDefault')?.value) || 0;
+            const perCompany = {};
+            document.querySelectorAll('#rcCompList input[data-company]').forEach(inp => {
+                const c = inp.dataset.company;
+                const v = parseFloat(inp.value);
+                if (c && !isNaN(v) && v > 0) perCompany[c] = v;
+            });
+            rc.perCompany = perCompany;
+            saveData();
+            try { syncToSupabase(); } catch (e) {}
+            closeModal();
+            const mc = document.getElementById('mainContent');
+            if (window._currentPage === 'settlement') renderSettlement(mc);
+            else if (window._currentPage === 'projects') renderProjects(mc);
+            else if (window._currentPage === 'data-report') renderDataReport(mc);
+            showToast('✅ 填报提成设置已保存');
+        }
+
+        function settleReportYear(y) {
+            if (!appData.reportCommission) appData.reportCommission = { defaultAmount: 0, perCompany: {}, settledYears: {} };
+            if (!appData.reportCommission.settledYears) appData.reportCommission.settledYears = {};
+            appData.reportCommission.settledYears[y] = true;
+            saveData();
+            try { syncToSupabase(); } catch (e) {}
+            renderSettlement(document.getElementById('mainContent'));
+            showToast('✅ ' + y + ' 年数据填报提成已结清');
         }
 
         // ============================================================
@@ -6136,6 +6186,14 @@ function renderSettlement(mc) {
     const endDate = document.getElementById('settlementEnd')?.value || '';
     const typeFilter = document.getElementById('settlementTypeFilter')?.value || 'all';
     const searchComp = document.getElementById('settlementSearch')?.value?.toLowerCase() || '';
+    // 【v21.46】数据填报提成（按年）汇总
+    const _rcCfg = appData.reportCommission || { defaultAmount: 0, perCompany: {}, settledYears: {} };
+    const _repYears = Array.from(new Set([
+        ...Object.keys(appData.dataReports.execution || {}),
+        ...Object.keys(appData.dataReports.environmental || {})
+    ])).map(Number).filter(y => !isNaN(y)).sort((a, b) => a - b);
+    let _repTotalAll = 0, _repSettled = 0;
+    _repYears.forEach(y => { const c = calcReportCommission(y); _repTotalAll += c.total; if (_rcCfg.settledYears && _rcCfg.settledYears[y]) _repSettled += c.total; });
 
     let allProjects = [];
     appData.projects.forEach(p => allProjects.push({ ...p, _status: 'active' }));
@@ -6353,6 +6411,18 @@ function renderSettlement(mc) {
                 <div class="stat-item"><span class="label">💰 总提成金额：</span><span class="value">${hide ? '****' : totalCommissionSum.toFixed(2)}</span></div>
                 <div class="stat-item"><span class="label">✅ 已发金额：</span><span class="value">${hide ? '****' : totalSettledSum.toFixed(2)}</span></div>
                 <div class="stat-item"><span class="label">📌 待发金额：</span><span class="value">${hide ? '****' : (totalCommissionSum - totalSettledSum).toFixed(2)}</span></div>
+            </div>
+            <div class="card" style="margin-top:16px;">
+              <div class="card-header"><h3>📊 数据填报提成（按年结清）</h3>
+                <button class="btn btn-sm" onclick="openReportCommissionConfig()">⚙️ 提成设置</button></div>
+              <div class="settlement-summary">
+                <div class="stat-item"><span class="label">💰 填报提成合计：</span><span class="value">${hide?'****':_repTotalAll.toFixed(2)}</span></div>
+                <div class="stat-item"><span class="label">✅ 已结清：</span><span class="value">${hide?'****':_repSettled.toFixed(2)}</span></div>
+                <div class="stat-item"><span class="label">📌 待结清(年底一次)：</span><span class="value">${hide?'****':(_repTotalAll-_repSettled).toFixed(2)}</span></div>
+              </div>
+              <div class="table-wrap"><table><thead><tr><th>年份</th><th>填报次数</th><th>提成合计</th><th>状态</th><th>操作</th></tr></thead><tbody>
+                ${_repYears.map(y => { const c = calcReportCommission(y); const settled = !!(appData.reportCommission.settledYears && appData.reportCommission.settledYears[y]); return `<tr><td>${y}年</td><td>${c.count}</td><td>${hide?'****':c.total.toFixed(2)}</td><td>${settled?'✅已结清':'📌待结清'}</td><td>${settled?'<span style="color:#94a3b8;">已结清</span>':'<button class="btn btn-xs btn-primary" onclick="settleReportYear(${y})">结清</button>'}</td></tr>`; }).join('') || '<tr><td colspan="5" style="color:#6c7a94;">暂无填报数据</td></tr>'}
+              </tbody></table></div>
             </div>
             <div class="table-wrap m-cards" id="settlementTableWrap">
                 <table>
@@ -7510,7 +7580,7 @@ function renderDataReport(mc) {
                 <div class="m-data-quarter-row">
                     ${['Q1','Q2','Q3','Q4','annual'].map(q => `
                         <label class="m-data-q-btn ${r[q]?'checked':''}">
-                            <input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="this.parentElement.classList.toggle('checked', this.checked)">
+                            <input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','exec',this.checked); this.parentElement.classList.toggle('checked', this.checked)">
                             ${q==='annual'?'年报':q}
                         </label>
                     `).join('')}
@@ -7528,7 +7598,7 @@ function renderDataReport(mc) {
                 <div class="m-data-quarter-row">
                     ${['Q1','Q2','Q3','Q4'].map(q => `
                         <label class="m-data-q-btn ${r[q]?'checked':''}">
-                            <input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="this.parentElement.classList.toggle('checked', this.checked)">
+                            <input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','env',this.checked); this.parentElement.classList.toggle('checked', this.checked)">
                             ${q}
                         </label>
                     `).join('')}
@@ -7544,7 +7614,7 @@ function renderDataReport(mc) {
                 <div class="m-year-bar">
                     <button class="btn btn-primary btn-sm" onclick="addRY()">+ 年</button>
                     <select onchange="setRY(parseInt(this.value))">${yearOpts}</select>
-                    <button class="btn btn-xs btn-ghost" onclick="delYear(${sy})">🗑️</button>
+                    <button class="btn btn-xs btn-ghost" onclick="delYear(${sy})">🗑️</button> <button class="btn btn-xs" onclick="openReportCommissionConfig()">⚙️</button>
                 </div>
                 <div style="display:flex;flex-direction:column;flex:1;gap:16px;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;">
                     <div>
@@ -7577,7 +7647,7 @@ function renderDataReport(mc) {
                 <button class="btn btn-primary btn-sm" onclick="addRY()">+ 年</button>
               </div>
               <!-- 新增冻结列按钮 -->
-              <button class="btn btn-sm" onclick="toggleFreeze('dataReport')">📌 ${freezeState ? '取消冻结' : '冻结列'}</button>
+              <button class="btn btn-sm" onclick="toggleFreeze('dataReport')">📌 ${freezeState ? '取消冻结' : '冻结列'}</button> <button class="btn btn-sm" onclick="openReportCommissionConfig()">⚙️ 填报提成</button>
             </div>
           </div>
           <div style="display:flex;flex-direction:column;flex:1;gap:12px;min-height:0;">
@@ -7594,7 +7664,7 @@ function renderDataReport(mc) {
                     ${exec.map((r, i) => `
                       <tr class="exec-row">
                         <td class="sticky-col"><input value="${esc(r.company||'')}" class="execC" data-idx="${i}" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
-                        ${['Q1','Q2','Q3','Q4','annual'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}"></td>`).join('')}
+                        ${['Q1','Q2','Q3','Q4','annual'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','exec',this.checked)"></td>`).join('')}
                         <td><button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button></td>
                       </tr>
                     `).join('')}
@@ -7617,7 +7687,7 @@ function renderDataReport(mc) {
                       <tr class="env-row">
                         <!-- 公司输入框列添加 sticky-col -->
                         <td class="sticky-col"><input value="${esc(r.company||'')}" class="envC" data-idx="${i}" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
-                        ${['Q1','Q2','Q3','Q4'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}"></td>`).join('')}
+                        ${['Q1','Q2','Q3','Q4'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','env',this.checked)"></td>`).join('')}
                         <td><button class="btn btn-xs btn-ghost" onclick="delEnvRow(${sy},${i})">✕</button></td>
                       </tr>
                     `).join('')}
@@ -8963,6 +9033,7 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                             companies: [], templates: [], projects: [], tasks: [], workLogs: [],
                             settlements: [], shelved: [], terminated: [], archived: [],
                             dataReports: { execution: {}, environmental: {} },
+                            reportCommission: { defaultAmount: 0, perCompany: {}, settledYears: {} },
                             knowledgeUrl: '', reportTemplates: {}, commissionTemplates: {},
                             _idCounter: 0, _deletedProjectIds: [], _deletedTaskIds: [], _deletedWorkLogIds: [], _deletedCompanyNames: []
                         };
