@@ -10,7 +10,9 @@
        并加 max-height:40vh，最多占页面一半。
      · 结算管理数据填报行的"分期/备注/操作"列样式与普通项目行保持一致
        （分期列居中对齐并设置 min-width:150px；未结算数据填报行仍优先于已结算显示）。
-     · 纯 UI 改动，不动任何数据结构与同步逻辑。
+     · 数据填报公司名输入由 onchange 整页重绘改为 oninput 即时写入 appData 并 saveData()
+       （onReportCompanyChange），避免改公司名后整页重绘把刚输入的内容回退。
+     · 纯 UI/输入行为改动，不动任何数据结构与同步逻辑。
 
      v21.42-mobile-split  2026-09-26
      基于 v21-mobile-split 另存改写，原文件未改动。
@@ -5745,6 +5747,16 @@ function renderProjects(mc) {
             } catch (e) { console.warn('⚠️ 勾选状态保存失败:', e); }
         }
 
+        // 【v21.49】数据填报公司名编辑：直接写入 appData 并持久化，不重绘整页（避免输入内容被回退）
+        function onReportCompanyChange(type, y, idx, value) {
+            try {
+                const map = (type === 'env') ? appData.dataReports.environmental : appData.dataReports.execution;
+                if (!map[y] || !map[y][idx]) return;
+                map[y][idx].company = value;
+                saveData();
+            } catch (e) { console.warn('⚠️ 公司名称保存失败:', e); }
+        }
+
         function calcReportCommission(year) {
             if (!appData.reportCommission) appData.reportCommission = { defaultAmount: 0, perCompany: {}, settledYears: {} };
             const rc = appData.reportCommission;
@@ -7679,18 +7691,6 @@ function renderDataReport(mc) {
             const per = rc.perCompany || {};
             const tabActive = window._reportTab || 'exec';
 
-            function getRowCommission(r, hasAnnual) {
-                const comp = (r.company || '').trim();
-                if (!comp) return 0;
-                const qs = hasAnnual ? ['Q1','Q2','Q3','Q4','annual'] : ['Q1','Q2','Q3','Q4'];
-                const cnt = qs.filter(q => r[q]).length;
-                if (cnt === 0) return 0;
-                const amt = (per[comp] != null) ? parseFloat(per[comp]) : def;
-                return cnt * (isNaN(amt) ? 0 : amt);
-            }
-            const execTotal = exec.reduce((sum, r) => sum + getRowCommission(r, true), 0);
-            const envTotal = env.reduce((sum, r) => sum + getRowCommission(r, false), 0);
-
             if (_isMobile) {
                 const yearOpts = [...years].sort().map(y =>
                     `<option value="${y}" ${sy===y?'selected':''}>${y}年</option>`
@@ -7699,7 +7699,7 @@ function renderDataReport(mc) {
                     <div class="exec-row" data-idx="${i}">
                         <div class="m-data-card-header">
                             <div class="m-data-card-title">
-                                <input value="${esc(r.company||'')}" class="execC" data-idx="${i}" placeholder="公司名称" onchange="refreshReportCommissionCells()">
+                                <input value="${esc(r.company||'')}" class="execC" data-idx="${i}" placeholder="公司名称" oninput="onReportCompanyChange('exec',${sy},${i},this.value)">
                             </div>
                             <button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button>
                         </div>
@@ -7717,7 +7717,7 @@ function renderDataReport(mc) {
                     <div class="env-row" data-idx="${i}">
                         <div class="m-data-card-header">
                             <div class="m-data-card-title">
-                                <input value="${esc(r.company||'')}" class="envC" data-idx="${i}" placeholder="公司名称" onchange="refreshReportCommissionCells()">
+                                <input value="${esc(r.company||'')}" class="envC" data-idx="${i}" placeholder="公司名称" oninput="onReportCompanyChange('env',${sy},${i},this.value)">
                             </div>
                             <button class="btn btn-xs btn-ghost" onclick="delEnvRow(${sy},${i})">✕</button>
                         </div>
@@ -7797,7 +7797,7 @@ function renderDataReport(mc) {
                           <tbody id="execTbody">
                             ${exec.map((r, i) => `
                               <tr class="exec-row" data-idx="${i}">
-                                <td class="sticky-col"><input value="${esc(r.company||'')}" class="execC" data-idx="${i}" onchange="refreshReportCommissionCells()" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
+                                <td class="sticky-col"><input value="${esc(r.company||'')}" class="execC" data-idx="${i}" oninput="onReportCompanyChange('exec',${sy},${i},this.value)" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
                                 ${['Q1','Q2','Q3','Q4','annual'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','exec',this.checked)"></td>`).join('')}
                                 <td><button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button></td>
                               </tr>
@@ -7820,7 +7820,7 @@ function renderDataReport(mc) {
                           <tbody id="envTbody">
                             ${env.map((r, i) => `
                               <tr class="env-row" data-idx="${i}">
-                                <td class="sticky-col"><input value="${esc(r.company||'')}" class="envC" data-idx="${i}" onchange="refreshReportCommissionCells()" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
+                                <td class="sticky-col"><input value="${esc(r.company||'')}" class="envC" data-idx="${i}" oninput="onReportCompanyChange('env',${sy},${i},this.value)" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
                                 ${['Q1','Q2','Q3','Q4'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','env',this.checked)"></td>`).join('')}
                                 <td><button class="btn btn-xs btn-ghost" onclick="delEnvRow(${sy},${i})">✕</button></td>
                               </tr>
