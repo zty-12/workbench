@@ -1506,6 +1506,7 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
             <div class="nav-label" data-page-node-id="n8pb2kHcizjdNcGE1l8pyc">核心</div>
             <a data-page="home" class="active" data-page-node-id="2poYDiOAfO2HF7dGsPZKEq">🏠 首页看板</a>
             <a data-page="projects" data-page-node-id="U2E6Pzshq9yKaR0QStONT2">📁 项目总表</a>
+            <a data-page="data-report" data-page-node-id="cO429kOC1eo1vQBXEphZly">📊 数据填报</a>
             <a data-page="tasks" data-page-node-id="J2BwfHCWeBDu3mpKtwTlV3">📋 任务分配</a>
             <a data-page="calendar" data-page-node-id="zGeP8HsaxdllzES9tbYLtn">📅 日历视图</a>
             <div class="nav-label" data-page-node-id="sBVHrMWVaXeeGngeFLhdJH">管理</div>
@@ -5455,8 +5456,7 @@ function renderProjects(mc) {
             });
             cards += '</div>'; // m-proj-cards
             cards += '</div>'; // card
-            mc.innerHTML = cards + '<div id="embeddedReportCard" class="card" style="margin-top:12px;flex:1;min-height:0;display:flex;flex-direction:column;"></div>';
-            renderEmbeddedDataReport();
+            mc.innerHTML = cards;
             return; // 移动端渲染完毕，不再执行 PC 表格逻辑
         }
 
@@ -5535,8 +5535,7 @@ function renderProjects(mc) {
             html += `</tr>`;
         });
         html += `</tbody></table></div></div>`;
-        mc.innerHTML = html + '<div id="embeddedReportCard" class="card" style="margin-top:12px;flex:1;min-height:0;display:flex;flex-direction:column;"></div>';
-        renderEmbeddedDataReport();
+        mc.innerHTML = html;
 
         // 初始化行拖拽排序
         const tbody = document.getElementById('projectTableBody');
@@ -6201,14 +6200,6 @@ function renderSettlement(mc) {
     const endDate = document.getElementById('settlementEnd')?.value || '';
     const typeFilter = document.getElementById('settlementTypeFilter')?.value || 'all';
     const searchComp = document.getElementById('settlementSearch')?.value?.toLowerCase() || '';
-    // 【v21.46】数据填报提成（按年）汇总
-    const _rcCfg = appData.reportCommission || { defaultAmount: 0, perCompany: {}, settledYears: {} };
-    const _repYears = Array.from(new Set([
-        ...Object.keys(appData.dataReports.execution || {}),
-        ...Object.keys(appData.dataReports.environmental || {})
-    ])).map(Number).filter(y => !isNaN(y)).sort((a, b) => a - b);
-    let _repTotalAll = 0, _repSettled = 0;
-    _repYears.forEach(y => { const c = calcReportCommission(y); _repTotalAll += c.total; if (_rcCfg.settledYears && _rcCfg.settledYears[y]) _repSettled += c.total; });
 
     let allProjects = [];
     appData.projects.forEach(p => allProjects.push({ ...p, _status: 'active' }));
@@ -6241,6 +6232,33 @@ function renderSettlement(mc) {
         return ta - tb;
     });
 
+    // 【v21.48】构造数据填报结算行（公司/年份/类型），并入结算表格
+    const reportRows = [];
+    const _rcCfg = appData.reportCommission || { defaultAmount: 0, perCompany: {}, settledYears: {} };
+    const _repYears = Array.from(new Set([
+        ...Object.keys(appData.dataReports.execution || {}),
+        ...Object.keys(appData.dataReports.environmental || {})
+    ])).map(Number).filter(y => !isNaN(y));
+    _repYears.forEach(y => {
+        [['execution', '执行报告', 'exec'], ['environmental', '环保脸谱', 'env']].forEach(([key, label, type]) => {
+            const rc = appData.reportCommission || { defaultAmount: 0, perCompany: {} };
+            const def = parseFloat(rc.defaultAmount) || 0;
+            const per = rc.perCompany || {};
+            const arr = appData.dataReports[key]?.[y] || [];
+            arr.forEach(r => {
+                const comp = (r.company || '').trim();
+                if (!comp) return;
+                const qs = (type === 'exec') ? ['Q1','Q2','Q3','Q4','annual'] : ['Q1','Q2','Q3','Q4'];
+                const cnt = qs.filter(q => r[q]).length;
+                if (cnt === 0) return;
+                const amt = (per[comp] != null) ? parseFloat(per[comp]) : def;
+                const rowTotal = cnt * (isNaN(amt) ? 0 : amt);
+                if (searchComp && !comp.toLowerCase().includes(searchComp)) return;
+                reportRows.push({ _isReport: true, company: comp, year: y, reportType: label, type, count: cnt, total: rowTotal, settled: !!(_rcCfg.settledYears && _rcCfg.settledYears[y]) });
+            });
+        });
+    });
+
     const settled = [];
     const notSettled = [];
     allProjects.forEach(p => {
@@ -6251,10 +6269,31 @@ function renderSettlement(mc) {
             notSettled.push(p);
         }
     });
-    allProjects = [...notSettled, ...settled];
+    reportRows.sort((a, b) => (companyOrder[a.company] ?? Infinity) - (companyOrder[b.company] ?? Infinity) || a.year - b.year || (a.type === 'exec' ? -1 : 1));
+    const _reportNotSettled = reportRows.filter(r => !r.settled);
+    const _reportSettled = reportRows.filter(r => r.settled);
+    // 按公司交错：每个公司先普通项目（未结+已结），再数据填报行
+    const companyProjects = {};
+    const companyReports = {};
+    appData.companies.forEach(c => { companyProjects[c] = []; companyReports[c] = []; });
+    notSettled.forEach(p => { if (companyProjects[p.company]) companyProjects[p.company].push(p); });
+    settled.forEach(p => { if (companyProjects[p.company]) companyProjects[p.company].push(p); });
+    reportRows.forEach(r => { if (companyReports[r.company]) companyReports[r.company].push(r); });
+    const combinedRows = [];
+    appData.companies.forEach(c => {
+        combinedRows.push(...companyProjects[c]);
+        combinedRows.push(...companyReports[c]);
+    });
+    allProjects = combinedRows;
 
     let totalCommissionSum = 0, totalSettledSum = 0;
+    reportRows.forEach(r => {
+        totalCommissionSum += r.total;
+        if (r.settled) totalSettledSum += r.total;
+    });
+
     allProjects.forEach(p => {
+        if (p._isReport) return;
         const s = appData.settlements.find(st => st.projectId === p.id);
         if (!s) return;
         // 【v21.26 / P2】只统计"已完成"项目的提成与已结算额：未开工项目也会按提成模板
@@ -6287,6 +6326,28 @@ function renderSettlement(mc) {
     if (_isMobile) {
         if (!window._expandedSettleCards) window._expandedSettleCards = {};
         const cardsHtml = allProjects.map(p => {
+            if (p._isReport) {
+                const _settled = p.settled;
+                const _cls = _settled ? 'settlement-full' : 'settlement-unpaid';
+                const _statusText = _settled ? '✅已结清' : '📌待结清';
+                const _paid = _settled ? p.total : 0;
+                return `<div class="m-settle-card" data-report onclick="void(0)">
+                    <div class="m-settle-card-header">
+                        <div class="m-settle-card-name">${esc(p.company)}</div>
+                        <span class="m-settle-card-status ${_cls}">${_statusText}</span>
+                    </div>
+                    <div class="m-settle-card-meta">
+                        <span class="m-settle-card-meta-item">${esc(p.reportType)}（${p.year}年）</span>
+                        <span class="m-settle-card-settle-tag ${_cls}">${_statusText}</span>
+                    </div>
+                    <div class="m-settle-card-detail" style="display:block;">
+                        <div class="m-settle-detail-row"><span class="m-settle-detail-label">填报次数</span><span class="m-settle-detail-value">${p.count}</span></div>
+                        <div class="m-settle-detail-row"><span class="m-settle-detail-label">提成</span><span class="m-settle-detail-value">${hide ? '***' : p.total.toFixed(2)}</span></div>
+                        <div class="m-settle-detail-row"><span class="m-settle-detail-label">已结清</span><span class="m-settle-detail-value">${hide ? '***' : _paid.toFixed(2)}</span></div>
+                        <div class="m-settle-detail-row"><span class="m-settle-detail-label">操作</span><span class="m-settle-detail-value">${_settled ? '<span style="color:#94a3b8;">已结清</span>' : `<button class="btn btn-xs btn-primary" onclick="event.stopPropagation(); settleReportYear(${p.year})">结清</button>`}</span></div>
+                    </div>
+                </div>`;
+            }
             const s = appData.settlements.find(st => st.projectId === p.id);
             const status = calcStatus(p.nodes);
             const isDone = status === 'done';
@@ -6427,18 +6488,7 @@ function renderSettlement(mc) {
                 <div class="stat-item"><span class="label">✅ 已发金额：</span><span class="value">${hide ? '****' : totalSettledSum.toFixed(2)}</span></div>
                 <div class="stat-item"><span class="label">📌 待发金额：</span><span class="value">${hide ? '****' : (totalCommissionSum - totalSettledSum).toFixed(2)}</span></div>
             </div>
-            <div class="card" style="margin-top:16px;">
-              <div class="card-header"><h3>📊 数据填报提成（按年结清）</h3>
-                <button class="btn btn-sm" onclick="openReportCommissionConfig()">⚙️ 提成设置</button></div>
-              <div class="settlement-summary">
-                <div class="stat-item"><span class="label">💰 填报提成合计：</span><span class="value">${hide?'****':_repTotalAll.toFixed(2)}</span></div>
-                <div class="stat-item"><span class="label">✅ 已结清：</span><span class="value">${hide?'****':_repSettled.toFixed(2)}</span></div>
-                <div class="stat-item"><span class="label">📌 待结清(年底一次)：</span><span class="value">${hide?'****':(_repTotalAll-_repSettled).toFixed(2)}</span></div>
-              </div>
-              <div class="table-wrap"><table><thead><tr><th>年份</th><th>填报次数</th><th>提成合计</th><th>状态</th><th>操作</th></tr></thead><tbody>
-                ${_repYears.map(y => { const c = calcReportCommission(y); const settled = !!(appData.reportCommission.settledYears && appData.reportCommission.settledYears[y]); return `<tr><td>${y}年</td><td>${c.count}</td><td>${hide?'****':c.total.toFixed(2)}</td><td>${settled?'✅已结清':'📌待结清'}</td><td>${settled?'<span style="color:#94a3b8;">已结清</span>':'<button class="btn btn-xs btn-primary" onclick="settleReportYear(${y})">结清</button>'}</td></tr>`; }).join('') || '<tr><td colspan="5" style="color:#6c7a94;">暂无填报数据</td></tr>'}
-              </tbody></table></div>
-            </div>
+
             <div class="table-wrap m-cards" id="settlementTableWrap">
                 <table>
                     <thead><tr>
@@ -6447,62 +6497,88 @@ function renderSettlement(mc) {
                         <th>项目</th><th>标签</th><th>状态</th><th>完成日期</th><th>总提成</th><th>已结算</th><th style="min-width:150px;">分期</th><th>备注</th><th>操作</th>
                     </tr></thead>
                     <tbody>
-                        ${allProjects.map(p => {
-                            const s = appData.settlements.find(st => st.projectId === p.id);
-                            const status = calcStatus(p.nodes);
-                            const isDone = status === 'done';
-                            const total = s ? (s.totalCommission || 0) : 0;
-                            const paid = s ? (s.settledAmount || 0) : 0;
-                            const cls = isDone ? (s?.fullySettled ? 'settlement-full' : paid > 0 ? 'settlement-partial' : 'settlement-unpaid') : 'settlement-default';
-                            const tagDisplay = p.tag ? esc(p.tag) : '（无）';
-                            const priorityHtml = getPriorityBadgeHtml(p);
-                            let statusText = isDone ? '✅已完成' : status === 'progress' ? '🔄进行中' : '⏳未开始';
-                            if (p._status === 'archived') statusText = '📦归档';
-                            const bgColor = getStatusColor(p);
+                        ${(() => {
+                            const _projectList = notSettled.concat(settled);
+                            const _repNotSettled = reportRows.filter(r => !r.settled);
+                            const _repSettled = reportRows.filter(r => r.settled);
+                            const _sortedReportRows = [..._repNotSettled, ..._repSettled];
+                            const _rows = [];
+                            _projectList.forEach(p => {
+                                const s = appData.settlements.find(st => st.projectId === p.id);
+                                const status = calcStatus(p.nodes);
+                                const isDone = status === 'done';
+                                const total = s ? (s.totalCommission || 0) : 0;
+                                const paid = s ? (s.settledAmount || 0) : 0;
+                                const cls = isDone ? (s?.fullySettled ? 'settlement-full' : paid > 0 ? 'settlement-partial' : 'settlement-unpaid') : 'settlement-default';
+                                const tagDisplay = p.tag ? esc(p.tag) : '（无）';
+                                const priorityHtml = getPriorityBadgeHtml(p);
+                                let statusText = isDone ? '✅已完成' : status === 'progress' ? '🔄进行中' : '⏳未开始';
+                                if (p._status === 'archived') statusText = '📦归档';
+                                const bgColor = getStatusColor(p);
 
-                            let installmentsHtml = '';
-                            if (s && s.installments && s.installments.length > 0) {
-                                const filtered = s.installments.map((inst, idx) => ({ inst, idx })).filter(({ inst }) => inst.ratio > 0);
-                                if (filtered.length === 0) {
-                                    installmentsHtml = isDone ? '<span style="color:#6c7a94;">未配置</span>' : '—';
+                                let installmentsHtml = '';
+                                if (s && s.installments && s.installments.length > 0) {
+                                    const filtered = s.installments.map((inst, idx) => ({ inst, idx })).filter(({ inst }) => inst.ratio > 0);
+                                    if (filtered.length === 0) {
+                                        installmentsHtml = isDone ? '<span style="color:#6c7a94;">未配置</span>' : '—';
+                                    } else {
+                                        installmentsHtml = filtered.map(({ inst, idx }) => {
+                                            let displayDate = inst.paidDate || inst.paidDateMonth || '';
+                                            return `<div class="installment-item" data-idx="${idx}">
+                                                <div class="inst-row">
+                                                    <input type="checkbox" ${inst.paid ? 'checked' : ''} onchange="toggleInst('${s.id}',${idx},this.checked)" ${!isDone ? 'disabled' : ''}>
+                                                    <span>${inst.ratio}%</span>
+                                                </div>
+                                                <div class="inst-date-text" onclick="${isDone ? `openDatePicker('${s.id}',${idx})` : ''}" title="${isDone ? '点击选择日期' : '项目未完成'}">
+                                                    ${displayDate || (isDone ? '选择日期' : '—')}
+                                                </div>
+                                            </div>`;
+                                        }).join('');
+                                    }
                                 } else {
-                                    installmentsHtml = filtered.map(({ inst, idx }) => {
-                                        let displayDate = inst.paidDate || inst.paidDateMonth || '';
-                                        return `<div class="installment-item" data-idx="${idx}">
-                                            <div class="inst-row">
-                                                <input type="checkbox" ${inst.paid ? 'checked' : ''} onchange="toggleInst('${s.id}',${idx},this.checked)" ${!isDone ? 'disabled' : ''}>
-                                                <span>${inst.ratio}%</span>
-                                            </div>
-                                            <div class="inst-date-text" onclick="${isDone ? `openDatePicker('${s.id}',${idx})` : ''}" title="${isDone ? '点击选择日期' : '项目未完成'}">
-                                                ${displayDate || (isDone ? '选择日期' : '—')}
-                                            </div>
-                                        </div>`;
-                                    }).join('');
+                                    installmentsHtml = isDone ? '<span style="color:#6c7a94;">未配置</span>' : '—';
                                 }
-                            } else {
-                                installmentsHtml = isDone ? '<span style="color:#6c7a94;">未配置</span>' : '—';
-                            }
 
-                            // 公司列添加 sticky-col
-                            return `<tr class="${cls}" style="background-color: ${bgColor};">
-                                <td class="sticky-col">${esc(p.company)}</td>
-                                <td>${esc(getTplName(p.templateId))} ${priorityHtml}</td>
-                                <td><span class="tag">${tagDisplay}</span></td>
-                                <td>${statusText}</td>
-                                <td>${p.doneDate || '-'}</td>
-                                <td>${hide ? '***' : total.toFixed(2)}</td>
-                                <td>${hide ? '***' : paid.toFixed(2)}</td>
-                                <td style="text-align:center; min-width:150px;">
-                                    <div class="installment-container" style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;">
-                                        ${installmentsHtml}
-                                    </div>
-                                </td>
-                                <td>${s ? esc(s.note || '') : '-'}</td>
-                                <td>
-                                    ${isDone ? `<button class="btn btn-xs" onclick="editSettlement('${p.id}')">✎</button>` : '<span style="font-size:10px;color:#94a3b8;">未完成</span>'}
-                                </td>
-                            </tr>`;
-                        }).join('') || '<tr><td colspan="10" style="text-align:center;padding:20px;color:#6c7a94;">暂无项目</td></tr>'}
+                                _rows.push(`<tr class="${cls}" style="background-color: ${bgColor};">
+                                    <td class="sticky-col">${esc(p.company)}</td>
+                                    <td>${esc(getTplName(p.templateId))} ${priorityHtml}</td>
+                                    <td><span class="tag">${tagDisplay}</span></td>
+                                    <td>${statusText}</td>
+                                    <td>${p.doneDate || '-'}</td>
+                                    <td>${hide ? '***' : total.toFixed(2)}</td>
+                                    <td>${hide ? '***' : paid.toFixed(2)}</td>
+                                    <td style="text-align:center; min-width:150px;">
+                                        <div class="installment-container" style="display:flex;flex-wrap:wrap;gap:6px;justify-content:center;">
+                                            ${installmentsHtml}
+                                        </div>
+                                    </td>
+                                    <td>${s ? esc(s.note || '') : '-'}</td>
+                                    <td>
+                                        ${isDone ? `<button class="btn btn-xs" onclick="editSettlement('${p.id}')">✎</button>` : '<span style="font-size:10px;color:#94a3b8;">未完成</span>'}
+                                    </td>
+                                </tr>`);
+                            });
+                            _sortedReportRows.forEach(r => {
+                                const _settled = r.settled;
+                                const _cls = _settled ? 'settlement-full' : 'settlement-unpaid';
+                                const _bg = _settled ? 'rgba(40,167,69,0.08)' : 'rgba(255,193,7,0.08)';
+                                const _statusText = _settled ? '✅已结清' : '📌待结清';
+                                const _paid = _settled ? r.total : 0;
+                                _rows.push(`<tr class="${_cls}" style="background-color:${_bg};">
+                                    <td class="sticky-col">${esc(r.company)}</td>
+                                    <td>${esc(r.reportType)}（${r.year}年）</td>
+                                    <td><span class="tag">数据填报</span></td>
+                                    <td>${_statusText}</td>
+                                    <td>${r.year}-12-31</td>
+                                    <td>${hide ? '***' : r.total.toFixed(2)}</td>
+                                    <td>${hide ? '***' : _paid.toFixed(2)}</td>
+                                    <td style="text-align:center;">—</td>
+                                    <td>—</td>
+                                    <td>${_settled ? '<span style="color:#94a3b8;">已结清</span>' : `<button class="btn btn-xs btn-primary" onclick="settleReportYear(${r.year})">结清</button>`}</td>
+                                </tr>`);
+                            });
+                            return _rows.length ? _rows.join('') : '<tr><td colspan="10" style="text-align:center;padding:20px;color:#6c7a94;">暂无项目</td></tr>';
+                        })()}
                     </tbody>
                 </table>
             </div>
@@ -7821,12 +7897,14 @@ function renderDataReport(mc) {
         }
 
         function refreshReportCommissionCells() {
-            if (currentPage === 'data-report') renderDataReport(document.getElementById('mainContent'));
-            else renderEmbeddedDataReport();
+            const mc = document.getElementById('mainContent');
+            if (currentPage === 'data-report') renderDataReport(mc);
+            else if (currentPage === 'settlement') renderSettlement(mc);
         }
-        function setRY(y) { window._ry = y;
+        function setRY(y) {
+            window._ry = y;
             if (currentPage === 'data-report') renderDataReport(document.getElementById('mainContent'));
-            else renderEmbeddedDataReport(); }
+        }
 
         function delYear(y) {
             showConfirm(`确认删除 ${y} 年数据？`, function() {
