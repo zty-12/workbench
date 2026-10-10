@@ -5345,6 +5345,7 @@ function renderProjects(mc) {
         appData.terminated.forEach(t => allProjects.push(ensureNodes({ ...t.projectData, _status: 'terminated', _terminatedAt: t.terminatedAt })));
 
         const filterTemplateId = window._projectFilter || 'all';
+        const hideDoneProjects = window._hideDoneProjects;
 
         const companyProgress = {};
         appData.companies.forEach(comp => {
@@ -5359,6 +5360,7 @@ function renderProjects(mc) {
             if (compAll.length === 0) return false;
             return compAll.every(p => p._status !== 'active');
         };
+        const isProjectDone = (p) => calcStatus(p.nodes) === 'done';
         const getCellColor = (proj) => {
             if (!proj) return '';
             const status = proj._status;
@@ -5378,6 +5380,7 @@ function renderProjects(mc) {
             cards += '<button class="btn btn-primary btn-sm" onclick="openAddCompanyModal()" title="新增公司">+</button>';
             cards += '<button class="btn btn-sm" onclick="openBatchImport()" title="批量导入">📋</button>';
             cards += '<button class="btn btn-sm btn-info" onclick="openProjectStatusColorSettings()" title="颜色设置">🎨</button>';
+            cards += '<button class="btn btn-sm" onclick="toggleHideDoneProjects()" title="折叠已完成项目">' + (hideDoneProjects ? '显示已完成' : '折叠已完成') + '</button>';
             cards += '<select class="m-filter-select m-proj-type-select" onchange="toggleProjectFilter(this.value); renderProjects(document.getElementById(\'mainContent\'));">';
             cards += '<option value="all"' + (filterTemplateId==='all'?' selected':'') + '>全部类型</option>';
             appData.templates.forEach(t => {
@@ -5397,6 +5400,7 @@ function renderProjects(mc) {
                 if (!hasMatching) return;
 
                 const compProjects = allProjects.filter(p => p.company === comp);
+                if (hideDoneProjects && compProjects.length > 0 && compProjects.every(isProjectDone)) return;
                 const activeProjects = compProjects.filter(p => p._status === 'active');
                 const inactiveProjects = compProjects.filter(p => p._status !== 'active');
                 const progPct = companyProgress[comp];
@@ -5451,7 +5455,8 @@ function renderProjects(mc) {
             });
             cards += '</div>'; // m-proj-cards
             cards += '</div>'; // card
-            mc.innerHTML = cards + '<div class="card" onclick="goDataReport()" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;border:1px dashed var(--primary);background:var(--primary-bg-light);"><div><h3 style="margin:0 0 4px;">📊 数据填报</h3><span style="color:#6c7a94;font-size:13px;">勾选季度/年报即计提成 · 点击进入填报与提成设置</span></div><span style="font-size:22px;color:var(--primary);">→</span></div>';
+            mc.innerHTML = cards + '<div id="embeddedReportCard" class="card" style="margin-top:12px;flex:1;min-height:0;display:flex;flex-direction:column;"></div>';
+            renderEmbeddedDataReport();
             return; // 移动端渲染完毕，不再执行 PC 表格逻辑
         }
 
@@ -5467,6 +5472,7 @@ function renderProjects(mc) {
                   <button class="btn btn-sm btn-info" onclick="openProjectStatusColorSettings()">🎨 颜色设置</button>
                   <!-- 新增冻结列按钮 -->
                   <button class="btn btn-sm" onclick="toggleFreeze('projects')">📌 ${freezeState ? '取消冻结' : '冻结列'}</button>
+                  <button class="btn btn-sm" onclick="toggleHideDoneProjects()" title="折叠已完成项目">${window._hideDoneProjects ? '显示已完成' : '折叠已完成'}</button>
                   ${filterTemplateId !== 'all' ? `<button class="btn btn-sm btn-ghost" onclick="clearProjectFilter()">清除筛选</button>` : ''}
                   <span style="font-size:11px;color:#6c7a94;margin-left:6px;">💡 拖动 ☰ 调整公司顺序</span>
                 </div>
@@ -5494,6 +5500,7 @@ function renderProjects(mc) {
             if (!hasMatching) return;
 
             const allInactive = isAllInactive(comp);
+            if (hideDoneProjects && allProjects.filter(p => p.company === comp).every(isProjectDone)) return;
             let rowBg = '';
             if (allInactive) {
                 const statuses = ['terminated', 'shelved', 'archived'];
@@ -5528,7 +5535,8 @@ function renderProjects(mc) {
             html += `</tr>`;
         });
         html += `</tbody></table></div></div>`;
-        mc.innerHTML = html + '<div class="card" onclick="goDataReport()" style="margin-top:12px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;border:1px dashed var(--primary);background:var(--primary-bg-light);"><div><h3 style="margin:0 0 4px;">📊 数据填报</h3><span style="color:#6c7a94;font-size:13px;">勾选季度/年报即计提成 · 点击进入填报与提成设置</span></div><span style="font-size:22px;color:var(--primary);">→</span></div>';
+        mc.innerHTML = html + '<div id="embeddedReportCard" class="card" style="margin-top:12px;flex:1;min-height:0;display:flex;flex-direction:column;"></div>';
+        renderEmbeddedDataReport();
 
         // 初始化行拖拽排序
         const tbody = document.getElementById('projectTableBody');
@@ -5572,6 +5580,10 @@ function renderProjects(mc) {
     } catch (e) { console.error(e);
         mc.innerHTML = '<div class="card"><p style="color:red;">渲染出错</p></div>'; }
 }
+        function toggleHideDoneProjects() {
+            window._hideDoneProjects = !window._hideDoneProjects;
+            renderProjects(document.getElementById('mainContent'));
+        }
         function toggleProjectFilter(templateId) {
             if (window._projectFilter === templateId) window._projectFilter = 'all';
             else window._projectFilter = templateId;
@@ -5718,6 +5730,7 @@ function renderProjects(mc) {
                 if (!map[y] || !map[y][idx]) return;
                 map[y][idx][q] = !!checked;
                 saveData();
+                updateReportRowCommission(y, idx, type);
             } catch (e) { console.warn('⚠️ 勾选状态保存失败:', e); }
         }
 
@@ -5787,9 +5800,9 @@ function renderProjects(mc) {
             try { syncToSupabase(); } catch (e) {}
             closeModal();
             const mc = document.getElementById('mainContent');
-            if (window._currentPage === 'settlement') renderSettlement(mc);
-            else if (window._currentPage === 'projects') renderProjects(mc);
-            else if (window._currentPage === 'data-report') renderDataReport(mc);
+            if (currentPage === 'settlement') renderSettlement(mc);
+            else if (currentPage === 'projects') renderProjects(mc);
+            else if (currentPage === 'data-report') renderDataReport(mc);
             showToast('✅ 填报提成设置已保存');
         }
 
@@ -5946,7 +5959,7 @@ function renderProjects(mc) {
                       <h4 style="color:var(--primary);font-size:14px;flex-shrink:0;">已分配的任务</h4>
                       <div class="table-wrap m-cards" id="taskTableWrap">
                         <table><thead><tr><th>任务</th><th>项目</th><th>进度</th><th>时间段</th><th>日期</th><th>状态</th><th>操作</th></tr></thead>
-                        <tbody>${appData.tasks.map(t => {
+                        <tbody>${[...appData.tasks].sort((a,b)=>{ if(a.completed!==b.completed) return a.completed?1:-1; const ta=a.startDate||a.dueDate||''; const tb=b.startDate||b.dueDate||''; return String(ta).localeCompare(String(tb)); }).map(t => {
                           const p = t.projectId ? appData.projects.find(pr=>pr.id===t.projectId) : null;
                           const pct = p ? getProgressPercent(p.nodes) : 0;
                           return `<tr><td>${esc(t.title)}</td><td>${p ? esc(p.company)+'-'+esc(getTplName(p.templateId)) : '-'}</td><td><div class="progress-bar"><div class="progress-fill ${progressClass(pct)}" style="width:${pct}%;"></div></div></td><td>${t.weekLabel||t.monthLabel||'-'}</td><td>${(t.startDate||t.endDate) ? `${t.startDate||''} ~ ${t.endDate||t.dueDate||''}` : (t.dueDate||'')}</td><td>${t.completed?'<span style="color:#10b981;">✅完成</span>':'<span style="color:#94a3b8;">⏳待办</span>'}</td><td><button class="btn btn-xs" onclick="editTaskDates('${t.id}')" title="编辑起止时间">📅</button><button class="btn btn-xs" onclick="editTask('${t.id}')">✎</button><button class="btn btn-xs btn-ghost" onclick="deleteTask('${t.id}')">✕</button></td></tr>`;
@@ -7556,158 +7569,264 @@ function renderArchived(mc) {
 function renderDataReport(mc) {
     const _mt = mc ? mc.scrollTop : 0;
     requestAnimationFrame(() => { if (mc) { const _mx = Math.max(0, mc.scrollHeight - mc.clientHeight); mc.scrollTop = Math.min(_mt, _mx); } });
-    // 读取冻结状态（新增）
-    const freezeState = localStorage.getItem('freeze_state_dataReport') === 'true';
-    const cy = new Date().getFullYear();
-    const years = new Set([cy, ...Object.keys(appData.dataReports.execution || {}), ...Object.keys(appData.dataReports.environmental || {})].map(Number));
-    const sy = window._ry || cy;
-    const exec = appData.dataReports.execution[sy] || [],
-        env = appData.dataReports.environmental[sy] || [];
-    const yearPills = [...years].sort().map(y =>
-        `<span class="${sy===y?'active':''}" onclick="setRY(${y})">${y}年</span>`).join('');
-    // =====【v21.3】移动端卡片式数据填报=====
-    const _isMobile = window.innerWidth <= 768;
-    if (_isMobile) {
-        const yearOpts = [...years].sort().map(y =>
-            `<option value="${y}" ${sy===y?'selected':''}>${y}年</option>`
-        ).join('');
-        const execCardsHtml = exec.map((r, i) => `
-            <div class="exec-row">
-                <div class="m-data-card-header">
-                    <div class="m-data-card-title">
-                        <input value="${esc(r.company||'')}" class="execC" data-idx="${i}" placeholder="公司名称">
-                    </div>
-                    <button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button>
-                </div>
-                <div class="m-data-quarter-row">
-                    ${['Q1','Q2','Q3','Q4','annual'].map(q => `
-                        <label class="m-data-q-btn ${r[q]?'checked':''}">
-                            <input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','exec',this.checked); this.parentElement.classList.toggle('checked', this.checked)">
-                            ${q==='annual'?'年报':q}
-                        </label>
-                    `).join('')}
-                </div>
-            </div>
-        `).join('') || '<div class="empty-state">暂无数据，点击"+公司"添加</div>';
-        const envCardsHtml = env.map((r, i) => `
-            <div class="env-row">
-                <div class="m-data-card-header">
-                    <div class="m-data-card-title">
-                        <input value="${esc(r.company||'')}" class="envC" data-idx="${i}" placeholder="公司名称">
-                    </div>
-                    <button class="btn btn-xs btn-ghost" onclick="delEnvRow(${sy},${i})">✕</button>
-                </div>
-                <div class="m-data-quarter-row">
-                    ${['Q1','Q2','Q3','Q4'].map(q => `
-                        <label class="m-data-q-btn ${r[q]?'checked':''}">
-                            <input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','env',this.checked); this.parentElement.classList.toggle('checked', this.checked)">
-                            ${q}
-                        </label>
-                    `).join('')}
-                </div>
-            </div>
-        `).join('') || '<div class="empty-state">暂无数据，点击"+公司"添加</div>';
-        mc.innerHTML = `
-            <div class="card" id="dataReportCard" style="flex:1;display:flex;flex-direction:column;">
-                <div class="card-header">
-                    <h3>📊 数据填报</h3>
-                </div>
-                <!-- 【v21.15】+年按钮与年份下拉框合并到同一行 -->
-                <div class="m-year-bar">
-                    <button class="btn btn-primary btn-sm" onclick="addRY()">+ 年</button>
-                    <select onchange="setRY(parseInt(this.value))">${yearOpts}</select>
-                    <button class="btn btn-xs btn-ghost" onclick="delYear(${sy})">🗑️</button> <button class="btn btn-xs" onclick="openReportCommissionConfig()">⚙️</button>
-                </div>
-                <div style="display:flex;flex-direction:column;flex:1;gap:16px;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;">
-                    <div>
-                        <h4 style="color:var(--primary);margin:0 0 8px 0;font-size:14px;">📋 执行报告</h4>
-                        <div class="m-data-cards">${execCardsHtml}</div>
-                        <button class="btn btn-sm" onclick="addExecRow(${sy})" style="margin-top:8px;width:100%;">+ 添加公司</button>
-                    </div>
-                    <div>
-                        <h4 style="color:var(--primary);margin:0 0 8px 0;font-size:14px;">🌿 环保脸谱</h4>
-                        <div class="m-data-cards">${envCardsHtml}</div>
-                        <button class="btn btn-sm" onclick="addEnvRow(${sy})" style="margin-top:8px;width:100%;">+ 添加公司</button>
-                    </div>
-                </div>
-                <div style="margin-top:12px;">
-                    <button class="btn btn-primary" onclick="saveReportData(${sy})" style="width:100%;">保存</button>
-                </div>
-            </div>
-        `;
-        return;
-    }
-    mc.innerHTML = `
-        <!-- 修改：卡片容器添加 id 和 freeze-enabled 类 -->
-        <div class="card ${freezeState ? 'freeze-enabled' : ''}" id="dataReportCard" style="flex:1;display:flex;flex-direction:column;">
-          <div class="card-header">
-            <h3>📊 数据填报</h3>
-            <div>
-              <div class="filter-pills" style="display:inline-flex;gap:4px;">
-                ${yearPills}
-                <button class="btn btn-xs btn-ghost" onclick="delYear(${sy})">🗑️</button>
-                <button class="btn btn-primary btn-sm" onclick="addRY()">+ 年</button>
-              </div>
-              <!-- 新增冻结列按钮 -->
-              <button class="btn btn-sm" onclick="toggleFreeze('dataReport')">📌 ${freezeState ? '取消冻结' : '冻结列'}</button> <button class="btn btn-sm" onclick="openReportCommissionConfig()">⚙️ 填报提成</button>
-            </div>
-          </div>
-          <div style="display:flex;flex-direction:column;flex:1;gap:12px;min-height:0;">
-            <div style="flex:1;min-height:0;display:flex;flex-direction:column;">
-              <h4 style="color:var(--primary);margin:0 0 6px 0;flex-shrink:0;">📋 执行报告</h4>
-              <div class="table-wrap" style="flex:1;">
-                <table class="data-table">
-                  <thead><tr>
-                    <!-- 公司列添加 sticky-col -->
-                    <th class="sticky-col" style="width:16.66%;">公司</th>
-                    <th style="width:16.66%;">Q1</th><th style="width:16.66%;">Q2</th><th style="width:16.66%;">Q3</th><th style="width:16.66%;">Q4</th><th style="width:16.66%;">年报</th><th style="width:50px;">操作</th>
-                  </tr></thead>
-                  <tbody id="execTbody">
-                    ${exec.map((r, i) => `
-                      <tr class="exec-row">
-                        <td class="sticky-col"><input value="${esc(r.company||'')}" class="execC" data-idx="${i}" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
-                        ${['Q1','Q2','Q3','Q4','annual'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','exec',this.checked)"></td>`).join('')}
-                        <td><button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button></td>
-                      </tr>
-                    `).join('')}
-                  </tbody>
-                </table>
-              </div>
-              <div style="flex-shrink:0;margin-top:4px;"><button class="btn btn-sm" onclick="addExecRow(${sy})">+ 公司</button></div>
-            </div>
-            <div style="flex:1;min-height:0;display:flex;flex-direction:column;">
-              <h4 style="color:var(--primary);margin:0 0 6px 0;flex-shrink:0;">🌿 环保脸谱</h4>
-              <div class="table-wrap" style="flex:1;">
-                <table class="data-table">
-                  <thead><tr>
-                    <!-- 公司列添加 sticky-col -->
-                    <th class="sticky-col" style="width:20%;">公司</th>
-                    <th style="width:20%;">Q1</th><th style="width:20%;">Q2</th><th style="width:20%;">Q3</th><th style="width:20%;">Q4</th><th style="width:50px;">操作</th>
-                  </tr></thead>
-                  <tbody id="envTbody">
-                    ${env.map((r, i) => `
-                      <tr class="env-row">
-                        <!-- 公司输入框列添加 sticky-col -->
-                        <td class="sticky-col"><input value="${esc(r.company||'')}" class="envC" data-idx="${i}" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
-                        ${['Q1','Q2','Q3','Q4'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','env',this.checked)"></td>`).join('')}
-                        <td><button class="btn btn-xs btn-ghost" onclick="delEnvRow(${sy},${i})">✕</button></td>
-                      </tr>
-                    `).join('')}
-                  </tbody>
-                </table>
-              </div>
-              <div style="flex-shrink:0;margin-top:4px;"><button class="btn btn-sm" onclick="addEnvRow(${sy})">+ 公司</button></div>
-            </div>
-          </div>
-          <div style="flex-shrink:0;margin-top:12px;text-align:right;">
-            <button class="btn btn-primary" onclick="saveReportData(${sy})">保存</button>
-          </div>
-        </div>
-      `;
-    window._ry = sy;
+    mc.innerHTML = buildDataReportHtml();
+    window._ry = window._ry || new Date().getFullYear();
 }
+
+        // ============================================================
+        // 【v21.47】数据填报内嵌项目总表 + Tab 切换 + 行级提成显示
+        // ============================================================
+        function buildDataReportHtml() {
+            const freezeState = localStorage.getItem('freeze_state_dataReport') === 'true';
+            const cy = new Date().getFullYear();
+            const years = new Set([cy, ...Object.keys(appData.dataReports.execution || {}), ...Object.keys(appData.dataReports.environmental || {})].map(Number));
+            const sy = window._ry || cy;
+            const exec = appData.dataReports.execution[sy] || [],
+                env = appData.dataReports.environmental[sy] || [];
+            const yearPills = [...years].sort().map(y =>
+                `<span class="${sy===y?'active':''}" onclick="setRY(${y})">${y}年</span>`).join('');
+            const _isMobile = window.innerWidth <= 768;
+            const rc = appData.reportCommission || { defaultAmount: 0, perCompany: {} };
+            const def = parseFloat(rc.defaultAmount) || 0;
+            const per = rc.perCompany || {};
+            const tabActive = window._reportTab || 'exec';
+
+            function getRowCommission(r, hasAnnual) {
+                const comp = (r.company || '').trim();
+                if (!comp) return 0;
+                const qs = hasAnnual ? ['Q1','Q2','Q3','Q4','annual'] : ['Q1','Q2','Q3','Q4'];
+                const cnt = qs.filter(q => r[q]).length;
+                if (cnt === 0) return 0;
+                const amt = (per[comp] != null) ? parseFloat(per[comp]) : def;
+                return cnt * (isNaN(amt) ? 0 : amt);
+            }
+            const execTotal = exec.reduce((sum, r) => sum + getRowCommission(r, true), 0);
+            const envTotal = env.reduce((sum, r) => sum + getRowCommission(r, false), 0);
+
+            if (_isMobile) {
+                const yearOpts = [...years].sort().map(y =>
+                    `<option value="${y}" ${sy===y?'selected':''}>${y}年</option>`
+                ).join('');
+                const execCardsHtml = exec.map((r, i) => `
+                    <div class="exec-row" data-idx="${i}">
+                        <div class="m-data-card-header">
+                            <div class="m-data-card-title">
+                                <input value="${esc(r.company||'')}" class="execC" data-idx="${i}" placeholder="公司名称" onchange="refreshReportCommissionCells()">
+                            </div>
+                            <button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button>
+                        </div>
+                        <div class="m-data-quarter-row">
+                            ${['Q1','Q2','Q3','Q4','annual'].map(q => `
+                                <label class="m-data-q-btn ${r[q]?'checked':''}">
+                                    <input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','exec',this.checked); this.parentElement.classList.toggle('checked', this.checked)">
+                                    ${q==='annual'?'年报':q}
+                                </label>
+                            `).join('')}
+                        </div>
+                        <div class="m-comm-line" style="margin-top:6px;font-size:12px;color:#475569;">提成：<strong style="color:var(--primary);">${getRowCommission(r, true).toFixed(2)}</strong> 元</div>
+                    </div>
+                `).join('') || '<div class="empty-state">暂无数据，点击"+公司"添加</div>';
+                const envCardsHtml = env.map((r, i) => `
+                    <div class="env-row" data-idx="${i}">
+                        <div class="m-data-card-header">
+                            <div class="m-data-card-title">
+                                <input value="${esc(r.company||'')}" class="envC" data-idx="${i}" placeholder="公司名称" onchange="refreshReportCommissionCells()">
+                            </div>
+                            <button class="btn btn-xs btn-ghost" onclick="delEnvRow(${sy},${i})">✕</button>
+                        </div>
+                        <div class="m-data-quarter-row">
+                            ${['Q1','Q2','Q3','Q4'].map(q => `
+                                <label class="m-data-q-btn ${r[q]?'checked':''}">
+                                    <input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','env',this.checked); this.parentElement.classList.toggle('checked', this.checked)">
+                                    ${q}
+                                </label>
+                            `).join('')}
+                        </div>
+                        <div class="m-comm-line" style="margin-top:6px;font-size:12px;color:#475569;">提成：<strong style="color:var(--primary);">${getRowCommission(r, false).toFixed(2)}</strong> 元</div>
+                    </div>
+                `).join('') || '<div class="empty-state">暂无数据，点击"+公司"添加</div>';
+                return `
+                    <div class="card ${freezeState ? 'freeze-enabled' : ''}" id="dataReportCard" style="flex:1;display:flex;flex-direction:column;">
+                        <div class="card-header">
+                            <h3>📊 数据填报</h3>
+                        </div>
+                        <div class="m-year-bar">
+                            <button class="btn btn-primary btn-sm" onclick="addRY()">+ 年</button>
+                            <select onchange="setRY(parseInt(this.value))">${yearOpts}</select>
+                            <button class="btn btn-xs btn-ghost" onclick="delYear(${sy})">🗑️</button>
+                            <button class="btn btn-xs" onclick="openReportCommissionConfig()">⚙️</button>
+                        </div>
+                        <div class="filter-pills" style="padding:0 12px 8px;border-bottom:1px solid var(--border);">
+                            <span class="${tabActive==='exec'?'active':''}" onclick="switchReportTab('exec')">📋 执行报告</span>
+                            <span class="${tabActive==='env'?'active':''}" onclick="switchReportTab('env')">🌿 环保脸谱</span>
+                        </div>
+                        <div style="display:flex;flex-direction:column;flex:1;gap:16px;min-height:0;overflow-y:auto;padding:12px;">
+                            <div id="reportTabExec" class="report-tab-panel" style="display:${tabActive==='exec'?'flex':'none'};flex-direction:column;flex:1;">
+                                <div class="m-data-cards">${execCardsHtml}</div>
+                                <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+                                    <button class="btn btn-sm" onclick="addExecRow(${sy})">+ 添加公司</button>
+                                    <div style="font-size:12px;color:#475569;">合计：<strong id="execTotal" style="color:var(--primary);">${execTotal.toFixed(2)}</strong> 元</div>
+                                </div>
+                            </div>
+                            <div id="reportTabEnv" class="report-tab-panel" style="display:${tabActive==='env'?'flex':'none'};flex-direction:column;flex:1;">
+                                <div class="m-data-cards">${envCardsHtml}</div>
+                                <div style="margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+                                    <button class="btn btn-sm" onclick="addEnvRow(${sy})">+ 添加公司</button>
+                                    <div style="font-size:12px;color:#475569;">合计：<strong id="envTotal" style="color:var(--primary);">${envTotal.toFixed(2)}</strong> 元</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div style="margin:12px;">
+                            <button class="btn btn-primary" onclick="saveReportData(${sy})" style="width:100%;">保存</button>
+                        </div>
+                    </div>
+                `;
+            }
+
+            return `
+                <div class="card ${freezeState ? 'freeze-enabled' : ''}" id="dataReportCard" style="flex:1;display:flex;flex-direction:column;">
+                  <div class="card-header">
+                    <h3>📊 数据填报</h3>
+                    <div>
+                      <div class="filter-pills" style="display:inline-flex;gap:4px;">
+                        ${yearPills}
+                        <button class="btn btn-xs btn-ghost" onclick="delYear(${sy})">🗑️</button>
+                        <button class="btn btn-primary btn-sm" onclick="addRY()">+ 年</button>
+                      </div>
+                      <button class="btn btn-sm" onclick="toggleFreeze('dataReport')">📌 ${freezeState ? '取消冻结' : '冻结列'}</button>
+                      <button class="btn btn-sm" onclick="openReportCommissionConfig()">⚙️ 填报提成</button>
+                    </div>
+                  </div>
+                  <div class="filter-pills" style="padding:0 16px 8px;border-bottom:1px solid var(--border);">
+                    <span class="${tabActive==='exec'?'active':''}" onclick="switchReportTab('exec')">📋 执行报告</span>
+                    <span class="${tabActive==='env'?'active':''}" onclick="switchReportTab('env')">🌿 环保脸谱</span>
+                  </div>
+                  <div style="display:flex;flex-direction:column;flex:1;gap:12px;min-height:0;overflow-y:auto;padding:12px 16px;">
+                    <div id="reportTabExec" class="report-tab-panel" style="display:${tabActive==='exec'?'flex':'none'};flex-direction:column;flex:1;min-height:0;">
+                      <h4 style="color:var(--primary);margin:0 0 6px 0;flex-shrink:0;">📋 执行报告</h4>
+                      <div class="table-wrap" style="flex:1;">
+                        <table class="data-table">
+                          <thead><tr>
+                            <th class="sticky-col" style="width:14%;">公司</th>
+                            <th style="width:14%;">Q1</th><th style="width:14%;">Q2</th><th style="width:14%;">Q3</th><th style="width:14%;">Q4</th><th style="width:14%;">年报</th><th style="width:14%;">提成</th><th style="width:50px;">操作</th>
+                          </tr></thead>
+                          <tbody id="execTbody">
+                            ${exec.map((r, i) => `
+                              <tr class="exec-row" data-idx="${i}">
+                                <td class="sticky-col"><input value="${esc(r.company||'')}" class="execC" data-idx="${i}" onchange="refreshReportCommissionCells()" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
+                                ${['Q1','Q2','Q3','Q4','annual'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="execCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','exec',this.checked)"></td>`).join('')}
+                                <td class="comm-cell" data-idx="${i}" style="font-weight:600;color:var(--primary);">${getRowCommission(r, true).toFixed(2)}</td>
+                                <td><button class="btn btn-xs btn-ghost" onclick="delExecRow(${sy},${i})">✕</button></td>
+                              </tr>
+                            `).join('')}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div style="flex-shrink:0;margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+                        <button class="btn btn-sm" onclick="addExecRow(${sy})">+ 公司</button>
+                        <div style="font-size:13px;color:#475569;">执行报告合计：<strong id="execTotal" style="color:var(--primary);">${execTotal.toFixed(2)}</strong> 元</div>
+                      </div>
+                    </div>
+                    <div id="reportTabEnv" class="report-tab-panel" style="display:${tabActive==='env'?'flex':'none'};flex-direction:column;flex:1;min-height:0;">
+                      <h4 style="color:var(--primary);margin:0 0 6px 0;flex-shrink:0;">🌿 环保脸谱</h4>
+                      <div class="table-wrap" style="flex:1;">
+                        <table class="data-table">
+                          <thead><tr>
+                            <th class="sticky-col" style="width:18%;">公司</th>
+                            <th style="width:18%;">Q1</th><th style="width:18%;">Q2</th><th style="width:18%;">Q3</th><th style="width:18%;">Q4</th><th style="width:18%;">提成</th><th style="width:50px;">操作</th>
+                          </tr></thead>
+                          <tbody id="envTbody">
+                            ${env.map((r, i) => `
+                              <tr class="env-row" data-idx="${i}">
+                                <td class="sticky-col"><input value="${esc(r.company||'')}" class="envC" data-idx="${i}" onchange="refreshReportCommissionCells()" style="width:90%;padding:4px 8px;border-radius:30px;border:1px solid #e2e8f0;font-size:13px;text-align:center;"></td>
+                                ${['Q1','Q2','Q3','Q4'].map(q => `<td><input type="checkbox" ${r[q]?'checked':''} class="envCb" data-idx="${i}" data-q="${q}" onchange="onReportCheckChange(${sy},${i},'${q}','env',this.checked)"></td>`).join('')}
+                                <td class="comm-cell" data-idx="${i}" style="font-weight:600;color:var(--primary);">${getRowCommission(r, false).toFixed(2)}</td>
+                                <td><button class="btn btn-xs btn-ghost" onclick="delEnvRow(${sy},${i})">✕</button></td>
+                              </tr>
+                            `).join('')}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div style="flex-shrink:0;margin-top:8px;display:flex;justify-content:space-between;align-items:center;">
+                        <button class="btn btn-sm" onclick="addEnvRow(${sy})">+ 公司</button>
+                        <div style="font-size:13px;color:#475569;">环保脸谱合计：<strong id="envTotal" style="color:var(--primary);">${envTotal.toFixed(2)}</strong> 元</div>
+                      </div>
+                    </div>
+                  </div>
+                  <div style="flex-shrink:0;margin-top:12px;text-align:right;padding:0 16px 16px;">
+                    <button class="btn btn-primary" onclick="saveReportData(${sy})">保存</button>
+                  </div>
+                </div>
+            `;
+        }
+
+        function renderEmbeddedDataReport() {
+            const container = document.getElementById('embeddedReportCard');
+            if (!container) return;
+            container.innerHTML = buildDataReportHtml();
+        }
+
+        function switchReportTab(tab) {
+            window._reportTab = tab;
+            const execPanel = document.getElementById('reportTabExec');
+            const envPanel = document.getElementById('reportTabEnv');
+            if (execPanel) execPanel.style.display = tab === 'exec' ? 'flex' : 'none';
+            if (envPanel) envPanel.style.display = tab === 'env' ? 'flex' : 'none';
+            const tabs = document.querySelectorAll('#dataReportCard > .filter-pills span');
+            tabs.forEach((el, idx) => el.classList.toggle('active', (tab === 'exec' && idx === 0) || (tab === 'env' && idx === 1)));
+        }
+
+        function updateReportRowCommission(y, idx, type) {
+            const rc = appData.reportCommission || { defaultAmount: 0, perCompany: {} };
+            const def = parseFloat(rc.defaultAmount) || 0;
+            const per = rc.perCompany || {};
+            const arr = type === 'env' ? appData.dataReports.environmental[y] : appData.dataReports.execution[y];
+            const r = arr ? arr[idx] : null;
+            if (!r) return;
+            const hasAnnual = type !== 'env';
+            const comp = (r.company || '').trim();
+            const qs = hasAnnual ? ['Q1','Q2','Q3','Q4','annual'] : ['Q1','Q2','Q3','Q4'];
+            const cnt = qs.filter(q => r[q]).length;
+            const amt = comp ? ((per[comp] != null) ? parseFloat(per[comp]) : def) : 0;
+            const totalAmt = cnt * (isNaN(amt) ? 0 : amt);
+
+            const pcCell = document.querySelector(type === 'exec' ? `#execTbody tr[data-idx="${idx}"] .comm-cell` : `#envTbody tr[data-idx="${idx}"] .comm-cell`);
+            if (pcCell) pcCell.textContent = totalAmt.toFixed(2);
+
+            const mCard = document.querySelector(type === 'exec' ? `.exec-row[data-idx="${idx}"]` : `.env-row[data-idx="${idx}"]`);
+            if (mCard) {
+                const strong = mCard.querySelector('.m-comm-line strong');
+                if (strong) strong.textContent = totalAmt.toFixed(2);
+            }
+            refreshReportTabTotal(type);
+        }
+
+        function refreshReportTabTotal(type) {
+            const rc = appData.reportCommission || { defaultAmount: 0, perCompany: {} };
+            const def = parseFloat(rc.defaultAmount) || 0;
+            const per = rc.perCompany || {};
+            const sy = window._ry || new Date().getFullYear();
+            const arr = type === 'env' ? appData.dataReports.environmental[sy] : appData.dataReports.execution[sy];
+            const hasAnnual = type !== 'env';
+            let total = 0;
+            (arr || []).forEach(r => {
+                const comp = (r.company || '').trim();
+                const qs = hasAnnual ? ['Q1','Q2','Q3','Q4','annual'] : ['Q1','Q2','Q3','Q4'];
+                const cnt = qs.filter(q => r[q]).length;
+                const amt = comp ? ((per[comp] != null) ? parseFloat(per[comp]) : def) : 0;
+                total += cnt * (isNaN(amt) ? 0 : amt);
+            });
+            const el = document.getElementById(type === 'exec' ? 'execTotal' : 'envTotal');
+            if (el) el.textContent = total.toFixed(2);
+        }
+
+        function refreshReportCommissionCells() {
+            if (currentPage === 'data-report') renderDataReport(document.getElementById('mainContent'));
+            else renderEmbeddedDataReport();
+        }
         function setRY(y) { window._ry = y;
-            renderDataReport(document.getElementById('mainContent')); }
+            if (currentPage === 'data-report') renderDataReport(document.getElementById('mainContent'));
+            else renderEmbeddedDataReport(); }
 
         function delYear(y) {
             showConfirm(`确认删除 ${y} 年数据？`, function() {
@@ -7754,6 +7873,7 @@ function renderDataReport(mc) {
             });
             appData.dataReports.environmental[y] = envData;
             saveData();
+            refreshReportCommissionCells();
             showToast('✅ 数据已保存');
         }
 
