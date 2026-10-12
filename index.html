@@ -1,6 +1,24 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.51-mobile-split  2026-10-10  ★ 当前最新稿
+     v21.52-mobile-split  2026-10-12  ★ 当前最新稿
+    修复「数据填报勾选结清后，再次同步就被清掉」：
+      根因1（快照覆盖）：reportCommission 只存在于快照 payload 与 localStorage、没有独立表。
+        v21.50 才新增 settled{`${type}|${公司}|${年份}`:{paid,paidDate,note}} 映射，早于 v21.50 生成的
+        旧快照里 reportCommission 只有 defaultAmount/perCompany/settledYears。
+        applySnapshotPayload 对快照字段是整体覆盖 → 旧快照一应用，所有勾选的结清被静默清空。
+      根因2（兜底源错误）：applySnapshotPayload 缺字段时用 appData[key] 兜底，但 loadData() 首次启动
+        的顺序是先 loadFromSupabase()、之后才读 localStorage，此刻 appData 还是初始默认值
+        （reportCommission 无 settled 桶）→ 兜底值再经 localStorage.setItem 落盘，把刚勾选的结清永久抹掉。
+      根因3（快照停滞）：startAutoSync 30s tick 发现 _pendingUpload 时调 syncToSupabase()（无快照标记），
+        只写分表就清掉 _pendingUpload，云端快照永不前进 → 每 30 秒都在拿同一份旧快照覆盖本地。
+      修复：① 新增 _mergeReportCommission —— settled/settledYears 按 key 并集、"true 不回退"
+        （本地已结清永远优先，快照里已有的 paid=false 保留）；perCompany/defaultAmount 快照优先、缺失补本地。
+        ② 新增 _localCacheValue —— 兜底与合并一律取自拉取前已落盘的本地缓存，而非启动瞬间的 appData。
+        ③ startAutoSync 的 _pendingUpload 分支改 syncToSupabase(true)，上传同时生成快照。
+        ④ 数据填报四个写入口（toggleReportInst / confirmReportDatePicker / saveReportSettlementEdit /
+           saveReportCommissionConfig）改 syncToSupabase(true)，结清状态才真正进云端快照。
+      纯同步/合并逻辑改动，不动数据结构、不动排序、不动渲染。
+v21.51-mobile-split  2026-10-10
     结算管理排序：未结清的数据填报行排到所有普通项目之上，已结清的数据填报行排到最后
       —— 截图反馈「平创/天鑫橡塑/花晓/三棉(📦归档+✅已结清)在上，乐亿达/晨合/海垦/创瑞/和泰
          数据填报(📌待结清)在下」，未结清项应优先展示。
@@ -2863,15 +2881,79 @@ async function loadFromSupabase() {
 }
 
         // ---------- 版本快照管理 ----------
+        // 【v21.52】reportCommission 合并（修复「数据填报勾选结清后，再同步就被清掉」）：
+        // reportCommission 只存在于快照 payload 与 localStorage，没有独立表。v21.50 才新增
+        // settled{`${type}|${company}|${year}`:{paid,paidDate,note}} 结清映射，早于 v21.50 生成的
+        // 旧快照里 reportCommission 只有 defaultAmount / perCompany / settledYears —— 直接整体
+        // 覆盖本地，所有勾选的结清状态会被静默清空。
+        // 语义与任务完成态一致：「true 不回退」。本地 paid=true / settledYears[y]=true 永远优先；
+        // 快照里已有的 paid=false 仍保留（本地明确取消结清的意图以快照为准）。
+        function _mergeReportCommission(payload, localCache) {
+            try {
+                const snap = payload.reportCommission;
+                const local = _localCacheValue(localCache, 'reportCommission');
+                if (!snap || typeof snap !== 'object') {
+                    if (local && typeof local === 'object') {
+                        payload.reportCommission = JSON.parse(JSON.stringify(local));
+                        console.log('🧩 快照缺 reportCommission，已用本地数据补齐');
+                    }
+                    return;
+                }
+                if (!local || typeof local !== 'object') {
+                    if (!snap.settled || typeof snap.settled !== 'object') snap.settled = {};
+                    if (!snap.settledYears || typeof snap.settledYears !== 'object') snap.settledYears = {};
+                    return;
+                }
+                const sSettled = (snap.settled && typeof snap.settled === 'object') ? snap.settled : {};
+                const lSettled = (local.settled && typeof local.settled === 'object') ? local.settled : {};
+                Object.keys(lSettled).forEach(k => {
+                    const lv = lSettled[k];
+                    if (!lv || typeof lv !== 'object') return;
+                    const sv = sSettled[k];
+                    // 快照缺该 key，或快照未结清而本地已结清 → 以本地为准
+                    if (!sv || typeof sv !== 'object' || (lv.paid && !sv.paid)) {
+                        sSettled[k] = JSON.parse(JSON.stringify(lv));
+                    }
+                });
+                snap.settled = sSettled;
+                const sYears = (snap.settledYears && typeof snap.settledYears === 'object') ? snap.settledYears : {};
+                const lYears = (local.settledYears && typeof local.settledYears === 'object') ? local.settledYears : {};
+                Object.keys(lYears).forEach(k => { if (lYears[k] && !sYears[k]) sYears[k] = true; });
+                snap.settledYears = sYears;
+                const sPer = (snap.perCompany && typeof snap.perCompany === 'object') ? snap.perCompany : {};
+                const lPer = (local.perCompany && typeof local.perCompany === 'object') ? local.perCompany : {};
+                Object.keys(lPer).forEach(k => { if (sPer[k] == null) sPer[k] = lPer[k]; });
+                snap.perCompany = sPer;
+                if (typeof snap.defaultAmount !== 'number' && typeof local.defaultAmount === 'number' && local.defaultAmount > 0) snap.defaultAmount = local.defaultAmount;
+                payload.reportCommission = snap;
+            } catch (e) {
+                console.warn('⚠️ reportCommission 合并失败（保留快照原值）:', e);
+            }
+        }
+        // 【v21.52】"本地优先"取值必须来自**拉取前已落盘的本地缓存**，不能用当前 appData：
+        // loadData() 首次启动的顺序是先 loadFromSupabase()、之后才读 localStorage；此刻 appData 还是
+        // 初始默认值（reportCommission 没有 settled 桶）。拿默认值兜底再落盘，会把刚勾选的结清
+        // 状态永久抹掉（这是"勾选后同步就消失"的第二个放大器）。
+        function _localCacheValue(localCache, key) {
+            if (localCache && localCache[key] != null) return localCache[key];
+            return (appData[key] != null) ? appData[key] : null;
+        }
+
         function applySnapshotPayload(payload) {
             if (!payload || typeof payload !== 'object') throw new Error('无效的快照数据');
+            let _localCache = null;
+            try { _localCache = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null'); } catch (e) { _localCache = null; }
             const expectedKeys = ['companies','templates','projects','tasks','workLogs','settlements','archived','shelved','terminated','dataReports','reportTemplates','commissionTemplates','reportCommission'];
             expectedKeys.forEach(key => {
                 if (!(key in payload)) {
-                    console.warn('快照缺少字段，使用本地默认值:', key);
-                    payload[key] = appData[key] || (key === 'dataReports' ? { execution: {}, environmental: {} } : key === 'reportCommission' ? { defaultAmount: 0, perCompany: {}, settledYears: {} } : []);
+                    console.warn('快照缺少字段，使用本地数据兜底:', key);
+                    const _lv = _localCacheValue(_localCache, key);
+                    if (_lv != null) { payload[key] = _lv; return; }
+                    payload[key] = (key === 'dataReports' ? { execution: {}, environmental: {} } : key === 'reportCommission' ? { defaultAmount: 0, perCompany: {}, settledYears: {} } : []);
                 }
             });
+            // 【v21.52】旧快照（v21.50 之前生成）缺 settled 桶时合并本地结清状态，勾选不再被清
+            _mergeReportCommission(payload, _localCache);
             // 【v21.26 / #25】墓碑保护：快照由上次上传时生成，可能不含本设备刚产生的删除标记。
             // 直接整体赋值会把 _deletedXxxIds 清空 → 上传时不再删除云端行 → 已取消的项目/任务/日志复活（出现重复）。
             // 这些内部标记取「本地 ∪ 快照」的并集，其余业务字段照常以快照覆盖。
@@ -4474,7 +4556,11 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
   	             if (_pendingUpload) {
     	                 try {
     	                     console.log('⏰ 自动同步：检测到本地未上传修改，先上传再拉取...');
-    	                     await syncToSupabase();
+    	                     // 【v21.52】必须带快照标记：无标记的上传只写分表就清掉 _pendingUpload，
+    	                     // 而 reportCommission（含数据填报结清状态）只存在快照 payload 里、没有独立表 →
+    	                     // 只要本地改动总被这个分支"抢走"，云端快照就永远停留在最初那一次，
+    	                     // 下次拉取又拿旧快照整体覆盖本地，刚勾选的结清被静默清掉。
+    	                     await syncToSupabase(true);
     	                 } catch (e) {
     	                     console.warn('⚠️ 自动上传本地修改失败，本次跳过拉取以免覆盖修改:', e);
     	                     return;
@@ -5854,7 +5940,7 @@ function renderProjects(mc) {
             });
             rc.perCompany = perCompany;
             saveData();
-            try { syncToSupabase(); } catch (e) {}
+            try { syncToSupabase(true); } catch (e) {}   // 【v21.52】带快照标记，提成设置才进云端快照
             closeModal();
             const mc = document.getElementById('mainContent');
             if (currentPage === 'settlement') renderSettlement(mc);
@@ -5908,7 +5994,7 @@ function renderProjects(mc) {
                 st.paid = !!checked;
                 if (checked) { st.paidDate = fmtLocal(); } else { st.paidDate = ''; }
                 saveData();
-                try { syncToSupabase(); } catch (e) {}
+                try { syncToSupabase(true); } catch (e) {}   // 【v21.52】带快照标记：结清状态只存在快照里，不带 true 云端快照永不更新
                 renderSettlement(document.getElementById('mainContent'));
                 showToast(checked ? '✅ 已结清' : '↩ 已取消结清');
             } catch (e) { console.warn('⚠️ 数据填报结算状态保存失败:', e); }
@@ -5929,7 +6015,7 @@ function renderProjects(mc) {
             st.paidDate = date;
             st.paid = true;
             saveData();
-            try { syncToSupabase(); } catch (e) {}
+            try { syncToSupabase(true); } catch (e) {}   // 【v21.52】带快照标记，结清状态才进云端快照
             closeModal();
             renderSettlement(document.getElementById('mainContent'));
             showToast('✅ 日期已更新');
@@ -5982,7 +6068,7 @@ function renderProjects(mc) {
             if (date) { st.paidDate = date; st.paid = true; } else { st.paid = false; st.paidDate = ''; }
             st.note = noteInput ? (noteInput.value || '') : '';
             saveData();
-            try { syncToSupabase(); } catch (e) {}
+            try { syncToSupabase(true); } catch (e) {}   // 【v21.52】带快照标记，结清状态才进云端快照
             closeModal();
             renderSettlement(document.getElementById('mainContent'));
             showToast('✅ 结算信息已更新');
