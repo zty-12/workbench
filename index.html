@@ -1,6 +1,17 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.52-mobile-split  2026-10-12  ★ 当前最新稿
+     v21.53-mobile-split  2026-10-14  ★ 当前最新稿
+    修复「周报周期显示 10 月，本周工作内容却显示 9 月的任务」：
+      根因：reportContents 会缓存每个字段的生成内容。用户上次生成周报时，「本周工作内容」被写成
+        2026-09-14 ~ 2026-09-20 的文本。之后进入报告模板再点「刷新预览」，预览逻辑先读缓存
+        contents[f]，只要缓存非空就直接使用，不再调用 generateReportContent 重新按当前日期计算。
+        而报告周期（reportPeriod）是在 previewReportFromEditor 里实时算的，所以显示正确，
+        字段内容却停留在旧缓存。
+      修复：previewReportFromEditor 刷新预览时，对「项目概况/完成进度/工作日志/本周工作内容/
+        本月工作内容/下周计划/下月计划/存在问题/风险/阻碍/逾期」等数据驱动字段，强制忽略缓存、
+        重新生成。手动编辑类字段（不在列表内）仍保留缓存，避免误覆盖。
+      纯报告预览逻辑改动，不动数据结构、不动排序、不动同步。
+v21.52-mobile-split  2026-10-12
     修复「数据填报勾选结清后，再次同步就被清掉」：
       根因1（快照覆盖）：reportCommission 只存在于快照 payload 与 localStorage、没有独立表。
         v21.50 才新增 settled{`${type}|${公司}|${年份}`:{paid,paidDate,note}} 映射，早于 v21.50 生成的
@@ -8839,9 +8850,14 @@ function previewReportFromEditor() {
 
     // 生成每个字段的内容
     let sectionsHtml = '';
+    // 【v21.53】数据驱动字段：刷新预览时强制重新生成，避免上周/上月缓存继续显示
+    const isAutoReportField = (field) => {
+        const f = field.toLowerCase();
+        return ['项目概况','完成进度','工作日志','本周工作内容','本月工作内容','下周计划','下月计划','存在问题','风险','阻碍','逾期'].some(k => f.includes(k));
+    };
     fields.forEach(f => {
         let content = contents[f] || '';
-        if (!content || content.trim() === '') {
+        if (!content || content.trim() === '' || isAutoReportField(f)) {
             content = generateReportContent(type, f);
         }
         const formattedContent = reportContentToSafeHtml(content);
