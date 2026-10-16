@@ -1,6 +1,20 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.53-mobile-split  2026-10-14  ★ 当前最新稿
+     v21.54-mobile-split  2026-10-16  ★ 当前最新稿
+    项目节点完成计入周报/月报「本周/本月工作内容」：
+      背景：用户直接在项目卡片/详情里点击节点完成（未走「任务分配」生成 task），希望该完成节点
+        能出现在周报/月报的「本周工作内容」「本月工作内容」里。
+      改动1（数据结构）：节点完成时记录 completedDate。
+        completeAllNodes：批量完成节点时给每个节点写 completedDate = today。
+        cycleNode：单点切换节点到 done 时写 completedDate；从 done 切回其他状态时清空。
+        已有关联 task 的同步逻辑保持不变。
+      改动2（报告生成）：generateReportContent 的「本周工作内容」「本月工作内容」在原有
+        allTasks 筛选基础上，追加遍历 activeProjects 的 nodes，筛选「status==='done' 且
+        completedDate 落在本周/本月范围内」的节点；若该节点已有关联 task 且 task 已计入列表，
+        则跳过避免重复。
+      向后兼容：旧节点无 completedDate 不会计入（无法判断完成日期），新完成节点正常计入。
+      纯节点/报告生成逻辑改动，不动同步、不动排序。
+v21.53-mobile-split  2026-10-14
     修复「周报周期显示 10 月，本周工作内容却显示 9 月的任务」：
       根因：reportContents 会缓存每个字段的生成内容。用户上次生成周报时，「本周工作内容」被写成
         2026-09-14 ~ 2026-09-20 的文本。之后进入报告模板再点「刷新预览」，预览逻辑先读缓存
@@ -5107,6 +5121,8 @@ function renderHome(mc) {
             const today = fmtLocal();
             p.nodes.forEach((n, idx) => {
                 n.status = 'done';
+                // 【v21.54】记录节点完成日期，用于周报/月报「本周/本月工作内容」统计
+                if (!n.completedDate) n.completedDate = today;
                 // 同步更新关联 task，确保日历视图等基于 tasks 渲染的地方能立即反映完成状态
                 const t = appData.tasks.find(task => task.projectId === pid && task.nodeIndex === idx);
                 if (t) {
@@ -5129,10 +5145,13 @@ function renderHome(mc) {
             if (!p) return;
             const n = p.nodes[i];
             n.status = n.status === 'pending' ? 'progress' : n.status === 'progress' ? 'done' : 'pending';
+            // 【v21.54】记录节点完成日期，用于周报/月报「本周/本月工作内容」统计
+            const today = fmtLocal();
+            if (n.status === 'done') { if (!n.completedDate) n.completedDate = today; }
+            else { n.completedDate = null; }
             // 同步更新关联 task，确保日历视图等基于 tasks 渲染的地方能立即反映状态变化
             const t = appData.tasks.find(task => task.projectId === pid && task.nodeIndex === i);
             if (t) {
-                const today = fmtLocal();
                 if (n.status === 'done') {
                     t.completed = true;
                     t.completedDate = today;
@@ -8545,14 +8564,27 @@ function generateReportContent(type, fieldName) {
             const due = t.dueDate || t.planDate || t.startDate;
             return due && due >= weekStartStr && due <= weekEndStr;
         });
-        if (weekTasks.length === 0) return '本周暂无工作记录。';
-        const doneWeek = weekTasks.filter(t => t.completed).length;
-        const taskList = weekTasks.map(t => {
-            const p = appData.projects.find(pr => pr.id === t.projectId);
-            const projName = p ? `${p.company}` : '未知项目';
-            return `• ${t.title}${t.completed ? '✅' : '⏳'}`;
+        // 【v21.54】本周内完成的项目节点（含未分配任务、直接点节点完成的）也计入本周工作
+        const weekNodes = [];
+        activeProjects.forEach(p => {
+            p.nodes.forEach((n, idx) => {
+                if (n.status !== 'done' || !n.completedDate) return;
+                if (n.completedDate < weekStartStr || n.completedDate > weekEndStr) return;
+                // 若该节点已有关联 task 且 task 已被计入 weekTasks，则避免重复列出
+                const hasTask = weekTasks.some(t => t.projectId === p.id && t.nodeIndex === idx);
+                if (!hasTask) weekNodes.push({ p, n });
+            });
+        });
+        if (weekTasks.length === 0 && weekNodes.length === 0) return '本周暂无工作记录。';
+        const doneWeek = weekTasks.filter(t => t.completed).length + weekNodes.length;
+        const taskList = weekTasks.map(t => `• ${t.title}${t.completed ? '✅' : '⏳'}`).join('\n');
+        const nodeList = weekNodes.map(({ p, n }) => {
+            const tpl = appData.templates.find(t => t.id === p.templateId);
+            return `• ${p.company} - ${tpl ? tpl.name : '未知类型'} - ${n.name} ✅`;
         }).join('\n');
-        return `本周（${weekStartStr} ~ ${weekEndStr}）共 ${weekTasks.length} 个任务，已完成 ${doneWeek} 个。\n${taskList}`;
+        const allList = [taskList, nodeList].filter(Boolean).join('\n');
+        const totalCount = weekTasks.length + weekNodes.length;
+        return `本周（${weekStartStr} ~ ${weekEndStr}）共 ${totalCount} 个工作项，已完成 ${doneWeek} 个。\n${allList}`;
     }
 
     // ---- 完成进度 ----
@@ -8619,14 +8651,26 @@ function generateReportContent(type, fieldName) {
             const due = t.dueDate || t.planDate || t.startDate;
             return due && due >= monthStartStr && due <= monthEndStr;
         });
-        if (monthTasks.length === 0) return '本月暂无任务记录。';
-        const doneMonth = monthTasks.filter(t => t.completed).length;
-        const taskList = monthTasks.map(t => {
-            const p = appData.projects.find(pr => pr.id === t.projectId);
-            const projName = p ? `${p.company}` : '未知项目';
-            return `• ${t.title}${t.completed ? '✅' : '⏳'}`;
+        // 【v21.54】本月内完成的项目节点也计入本月工作
+        const monthNodes = [];
+        activeProjects.forEach(p => {
+            p.nodes.forEach((n, idx) => {
+                if (n.status !== 'done' || !n.completedDate) return;
+                if (n.completedDate < monthStartStr || n.completedDate > monthEndStr) return;
+                const hasTask = monthTasks.some(t => t.projectId === p.id && t.nodeIndex === idx);
+                if (!hasTask) monthNodes.push({ p, n });
+            });
+        });
+        if (monthTasks.length === 0 && monthNodes.length === 0) return '本月暂无任务记录。';
+        const doneMonth = monthTasks.filter(t => t.completed).length + monthNodes.length;
+        const taskList = monthTasks.map(t => `• ${t.title}${t.completed ? '✅' : '⏳'}`).join('\n');
+        const nodeList = monthNodes.map(({ p, n }) => {
+            const tpl = appData.templates.find(t => t.id === p.templateId);
+            return `• ${p.company} - ${tpl ? tpl.name : '未知类型'} - ${n.name} ✅`;
         }).join('\n');
-        return `本月（${monthStartStr} ~ ${monthEndStr}）共 ${monthTasks.length} 个任务，已完成 ${doneMonth} 个。\n${taskList}`;
+        const allList = [taskList, nodeList].filter(Boolean).join('\n');
+        const totalCount = monthTasks.length + monthNodes.length;
+        return `本月（${monthStartStr} ~ ${monthEndStr}）共 ${totalCount} 个工作项，已完成 ${doneMonth} 个。\n${allList}`;
     }
 
     // ---- 下月计划 ----
