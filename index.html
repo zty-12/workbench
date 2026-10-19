@@ -1,6 +1,17 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.54-mobile-split  2026-10-16  ★ 当前最新稿
+     v21.55-mobile-split  2026-10-19  ★ 当前最新稿
+    修复「每次打开都必须 Ctrl+Shift+R 才能看到最新版」：
+      根因：sw.js 导航请求用 fetch(req,{cache:'reload'})，该模式遇服务器 304 Not Modified
+        时浏览器会沿用 HTTP 缓存里的旧 index.html 副本（之前打开时缓存的版本），
+        普通打开永远拿到旧页面，只有强刷（无条件请求）才拿新的。
+      改动1（sw.js，缓存名升 v45）：导航/带 _= 参数的请求改为 fetch(req,{cache:'no-store'})，
+        真正绕过 HTTP 缓存；去掉旧的 cache.put 离线缓存（避免旧副本被回退），离线才 fallback 到 .。
+      改动2（index.html）：新增 <meta name="app-version" content="21.55"> 版本戳；
+        页面末尾加版本探测脚本，每次打开用 index.html?_=时间戳（Fastly 按完整 URL 缓存，
+        随机参数回源拿最新）拉回文本，比对 app-version，不一致则 location.reload(true) 自动刷新。
+      双保险：no-store 导航保底拿最新 + 版本戳探测在缓存仍命中旧版时自动 reload。
+v21.54-mobile-split  2026-10-16
     项目节点完成计入周报/月报「本周/本月工作内容」：
       背景：用户直接在项目卡片/详情里点击节点完成（未走「任务分配」生成 task），希望该完成节点
         能出现在周报/月报的「本周工作内容」「本月工作内容」里。
@@ -565,6 +576,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
+    <meta name="app-version" content="21.55">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -10321,6 +10333,30 @@ function toggleFreeze(page) {
           location.reload();
         });
       }
+    </script>
+    <!-- 【v21.55】版本探测自动刷新：每次打开时用随机参数请求（Fastly 按完整 URL 缓存，随机参数会回源拿最新 index.html），
+         比对线上 app-version 与当前页面，不一致则自动刷新，避免必须手动 Ctrl+Shift+R。探测失败静默忽略。 -->
+    <script>
+      (function () {
+        try {
+          var cur = document.querySelector('meta[name="app-version"]');
+          if (!cur) return;
+          var curV = cur.getAttribute('content');
+          var base = location.pathname.replace(/index\.html$/, '');
+          var url = base + 'index.html?_=' + Date.now();
+          fetch(url, { cache: 'no-store' })
+            .then(function (r) { return r.text(); })
+            .then(function (txt) {
+              var m = txt.match(/name="app-version"\s+content="([^"]+)"/);
+              if (m && m[1] && m[1] !== curV) {
+                console.log('🔄 检测到新版本 (' + curV + ' → ' + m[1] + ')，自动刷新');
+                try { sessionStorage.setItem('wb_auto_reloaded', '1'); } catch (e) {}
+                location.reload(true);
+              }
+            })
+            .catch(function () {});
+        } catch (e) {}
+      })();
     </script>
 </body>
 </html>
