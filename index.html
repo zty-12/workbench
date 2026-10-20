@@ -1,6 +1,16 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.55-mobile-split  2026-10-19  ★ 当前最新稿
+     v21.56-mobile-split  2026-10-20  ★ 当前最新稿
+    修复「结算管理类型筛选（如排污登记）后，执行报告/环保脸谱数据填报行仍显示」：
+      根因：renderSettlement 的类型筛选（typeFilter → templateId）只作用于普通项目 allProjects，
+        数据填报行 reportRows 只应用了公司搜索过滤，未应用类型/日期筛选。
+      修复：reportRows 构造时追加过滤——
+        a) 类型：按「模板名 == 填报类型名」匹配。选「排污登记」时执行报告/环保脸谱行全部隐藏；
+           若模板列表建了「执行报告」「环保脸谱」同名模板，选中时对应填报行正确显示。
+        b) 日期：填报行完成日期口径 `${year}-12-31`，与普通项目 doneDate 同规则过滤起止。
+      统计摘要（项目数/总提成/已结算/待结算）随过滤结果自动联动。
+      移动端结算卡片走同一 allProjects，自动跟随。
+v21.55-mobile-split  2026-10-19
     修复「每次打开都必须 Ctrl+Shift+R 才能看到最新版」：
       根因：sw.js 导航请求用 fetch(req,{cache:'reload'})，该模式遇服务器 304 Not Modified
         时浏览器会沿用 HTTP 缓存里的旧 index.html 副本（之前打开时缓存的版本），
@@ -576,7 +586,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.55">
+    <meta name="app-version" content="21.56">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -6536,6 +6546,12 @@ function renderSettlement(mc) {
     // 【v21.48】构造数据填报结算行（公司/年份/类型），并入结算表格
     const reportRows = [];
     const _rcCfg = appData.reportCommission || { defaultAmount: 0, perCompany: {}, settledYears: {} };
+    // 【v21.56】类型/日期筛选同样作用于数据填报行：
+    //   类型：按「模板名 == 填报类型名」匹配——选「排污登记」时执行报告/环保脸谱行全部隐藏；
+    //         若模板列表里建了「执行报告」「环保脸谱」同名模板，选中时也能正确显示对应填报行。
+    //   日期：填报行的完成日期口径为 `${year}-12-31`，与普通项目 doneDate 同规则过滤。
+    const _selTpl = (typeFilter && typeFilter !== 'all') ? appData.templates.find(t => t.id === typeFilter) : null;
+    const _selTplName = _selTpl ? _selTpl.name : '';
     const _repYears = Array.from(new Set([
         ...Object.keys(appData.dataReports.execution || {}),
         ...Object.keys(appData.dataReports.environmental || {})
@@ -6555,6 +6571,10 @@ function renderSettlement(mc) {
                 const amt = (per[comp] != null) ? parseFloat(per[comp]) : def;
                 const rowTotal = cnt * (isNaN(amt) ? 0 : amt);
                 if (searchComp && !comp.toLowerCase().includes(searchComp)) return;
+                if (_selTplName && label !== _selTplName) return;                     // 【v21.56】类型筛选
+                const _repDate = y + '-12-31';
+                if (startDate && _repDate < startDate) return;                        // 【v21.56】完成日期起
+                if (endDate && _repDate > endDate) return;                            // 【v21.56】完成日期止
                 const _rKey = _reportSettleKey(type, comp, y);
                 reportRows.push({ _isReport: true, company: comp, year: y, reportType: label, type, count: cnt, total: rowTotal, key: _rKey, note: _reportSettleNote(type, comp, y), settledDate: (_rcCfg.settled && _rcCfg.settled[_rKey] && _rcCfg.settled[_rKey].paidDate) || '', settled: _reportIsSettled(type, comp, y) });
             });
