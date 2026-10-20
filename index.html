@@ -586,7 +586,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.56">
+    <meta name="app-version" content="21.57">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1793,13 +1793,53 @@ function fmtLocalYM(d) {
 // 休息日 = 周六/周日（且非调休补班日） 或 法定节假日
 // 工作日 = 周一~周五 或 调休补班日（周末被安排上班）
 // 按年维护：holidays = 法定节假日(休息日)；workdays = 调休补班日(周末变工作日)
-const WB_HOLIDAYS = {
+let WB_HOLIDAYS = {
     '2026': {
         holidays: ['2026-01-01','2026-01-02','2026-01-03','2026-02-15','2026-02-16','2026-02-17','2026-02-18','2026-02-19','2026-02-20','2026-02-21','2026-02-22','2026-02-23','2026-04-04','2026-04-05','2026-04-06','2026-05-01','2026-05-02','2026-05-03','2026-05-04','2026-05-05','2026-06-19','2026-06-20','2026-06-21','2026-09-25','2026-09-26','2026-09-27','2026-10-01','2026-10-02','2026-10-03','2026-10-04','2026-10-05','2026-10-06','2026-10-07'],
         workdays: ['2026-01-04','2026-02-14','2026-02-28','2026-05-09','2026-09-20','2026-10-10']
     }
     // TODO: 2027 国务院安排约 2026-11 公布，届时补一行：'2027': { holidays:[...], workdays:[...] }
 };
+
+// ---------- 【v21.57】节假日云端托管（与桌面看板共用 Supabase holiday_rules 表）----------
+const HOLIDAY_RULES_CACHE_KEY = 'holiday_rules_cache_v1';
+let _holidayRulesLoading = false;
+async function mergeCloudHolidays(rows) {
+    if (!rows || !rows.length) return;
+    for (const row of rows) {
+        const y = String(row.year);
+        if (!row.holidays && !row.workdays) continue;
+        WB_HOLIDAYS[y] = { holidays: (row.holidays || []), workdays: (row.workdays || []) };
+    }
+    console.log('☁️ 已合并云端节假日规则，覆盖年份：', rows.map(r => r.year).join(','));
+    try { localStorage.setItem(HOLIDAY_RULES_CACHE_KEY, JSON.stringify(WB_HOLIDAYS)); } catch (e) {}
+}
+async function refreshHolidays() {
+    if (_holidayRulesLoading) return;
+    _holidayRulesLoading = true;
+    try {
+        if (!supabaseClient) throw new Error('Supabase 未初始化');
+        const { data, error } = await supabaseClient.from('holiday_rules').select('year,holidays,workdays');
+        if (error) throw error;
+        if (data && data.length) {
+            mergeCloudHolidays(data);
+        } else {
+            try {
+                const cached = localStorage.getItem(HOLIDAY_RULES_CACHE_KEY);
+                if (cached) { const obj = JSON.parse(cached); for (const y in obj) WB_HOLIDAYS[y] = obj[y]; }
+            } catch (e) {}
+        }
+    } catch (e) {
+        console.warn('⚠️ 节假日云端同步失败，回退内置/本地缓存：', e);
+        try {
+            const cached = localStorage.getItem(HOLIDAY_RULES_CACHE_KEY);
+            if (cached) { const obj = JSON.parse(cached); for (const y in obj) WB_HOLIDAYS[y] = obj[y]; }
+        } catch (e2) {}
+    } finally {
+        _holidayRulesLoading = false;
+    }
+}
+
 function parseLocal(s) { const a = String(s).split('-'); return new Date(Number(a[0]), Number(a[1]) - 1, Number(a[2])); }
 function wbIsWorkday(d) {
     const key = fmtLocal(d);
@@ -4101,6 +4141,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
             let _needWorkLogPull = false;  // 【v21.36】完整拉取被跳过时，仍需单独补拉工作日志（跨设备）
             console.log('🔵 开始加载数据...');
             const configured = initSupabase();
+            if (configured) refreshHolidays();  // 【v21.57】启动时拉取云端节假日（失败静默回退内置）
 
             // 【v21.17 修复】localStorage 键值可能被手动改坏，JSON.parse 失败会让 loadData 抛错 → 整页白屏。包 try 兜底。
             let _uploadMode = null, _syncMode = null;
@@ -10362,15 +10403,23 @@ function toggleFreeze(page) {
           var cur = document.querySelector('meta[name="app-version"]');
           if (!cur) return;
           var curV = cur.getAttribute('content');
+          // 【v21.57 修复】会话护栏：同一版本最多自动刷新一次，防止解析异常导致死循环
+          var _guardKey = 'wb_auto_reloaded_' + curV;
+          try { if (sessionStorage.getItem(_guardKey)) return; } catch (e) {}
           var base = location.pathname.replace(/index\.html$/, '');
           var url = base + 'index.html?_=' + Date.now();
           fetch(url, { cache: 'no-store' })
             .then(function (r) { return r.text(); })
             .then(function (txt) {
-              var m = txt.match(/name="app-version"\s+content="([^"]+)"/);
-              if (m && m[1] && m[1] !== curV) {
-                console.log('🔄 检测到新版本 (' + curV + ' → ' + m[1] + ')，自动刷新');
-                try { sessionStorage.setItem('wb_auto_reloaded', '1'); } catch (e) {}
+              var onlineV = null;
+              try {
+                var doc = new DOMParser().parseFromString(txt, 'text/html');
+                var m = doc.querySelector('meta[name="app-version"]');
+                if (m) onlineV = m.getAttribute('content');
+              } catch (e) {}
+              if (onlineV && onlineV !== curV) {
+                console.log('🔄 检测到新版本 (' + curV + ' → ' + onlineV + ')，自动刷新');
+                try { sessionStorage.setItem(_guardKey, '1'); } catch (e) {}
                 location.reload(true);
               }
             })
