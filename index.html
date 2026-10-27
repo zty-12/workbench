@@ -1,6 +1,33 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.56-mobile-split  2026-10-20  ★ 当前最新稿
+     v21.58-mobile-split  2026-10-20  ★ 当前最新稿
+    修复「工作日志界面新增日志，显示上传成功后却消失；Ctrl+Shift+R 强制刷新后又出现」：
+      云端取证（work_logs 表 44 条 / snapshots 表 61 份快照）确认四层叠加根因：
+      ① 快照整体覆盖 workLogs：applySnapshotPayload 里 `Object.keys(payload).forEach(k => appData[k]=payload[k])`
+         把本地 workLogs 整体换成快照的（旧快照里没有刚新增的日志）→ 新日志被抹掉。
+         v21.52 只给 reportCommission 做了"本地优先"合并保护，workLogs 漏了。
+      ② id 计数器高水位回退 → 新 id 撞上云端已占用 id → upsert(onConflict:'id') 直接覆盖那条记录。
+         云端实测 _idCounter 在 2919→2918→2911→2909 之间反复回退；且 id_2910 只在快照里、
+         id_mvhwutpxft 只在表里 —— 两边各缺一半，getNextId() 只扫本地，看不见云端独有的高位 id。
+      ③ 快照分支的顺序缺陷：合并云端 work_logs 发生在 applySnapshotPayload 内部算 maxId **之后**，
+         云端独有的高位 id 那时还没并进来 → 计数器漏算。
+      ④ 假成功：work_logs 整批 upsert 失败后降级逐条，但 `if (ok.length>0) continue;` 把失败行静默吞掉
+         → 界面弹"✅ 已同步"而实际没进云端 → 下次拉取被旧快照覆盖 → 用户看到的"消失"。
+      修复：
+        a) applySnapshotPayload：合并快照后保留「本地有而快照没有」的日志（本地优先，与 reportCommission 同语义）。
+        b) 抽出 _refreshIdCounterHighWater() 统一计算 id 计数器高水位（快照/分表两分支共用），
+           并把「拉取前本地缓存的计数器」纳入，只增不减。
+        c) 快照分支在 mergeWorkLogsFromCloud 之后补调 _refreshIdCounterHighWater()（修顺序缺陷）。
+        d) getNextId() 扫描范围加上墓碑 id（_deletedProjectIds/_deletedTaskIds/_deletedWorkLogIds），
+           已删除的 id 不再被复用。
+        e) mergeWorkLogsFromCloud：云端行也检查墓碑（原来只检查本地行）→ 已删除的日志不会被云端"复活"。
+        f) 上传链路：work_logs 整批失败降级逐条后，失败行再"置空 project_id"二次重试；仍失败的记入
+           _failedWorkLogIds 并置 hasError（如实报失败，不再静默吞掉）；上传结束后统一回查云端确认落库，
+           缺失的单条补写。addWorkLog 上传后回查该 id 是否真在云端表里，据实提示成功/失败。
+      纯数据一致性/同步逻辑改动，不动界面、不动排序、不动结算与报告逻辑。
+v21.57-mobile-split  2026-10-20
+    线上 v21.57 增量（节假日云端托管 + 自动刷新会话护栏），本版以其为基准继续修补。
+v21.56-mobile-split  2026-10-20
     修复「结算管理类型筛选（如排污登记）后，执行报告/环保脸谱数据填报行仍显示」：
       根因：renderSettlement 的类型筛选（typeFilter → templateId）只作用于普通项目 allProjects，
         数据填报行 reportRows 只应用了公司搜索过滤，未应用类型/日期筛选。
@@ -586,7 +613,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.57">
+    <meta name="app-version" content="21.58">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -2235,6 +2262,12 @@ async function mergeCloudStateBeforeUpload() {
             (appData.archived || []).forEach(a => { if (a && a.projectData) _allIds.push(a.projectData); });
             (appData.shelved || []).forEach(s => { if (s && s.projectData) _allIds.push(s.projectData); });
             (appData.terminated || []).forEach(t => { if (t && t.projectData) _allIds.push(t.projectData); });
+            // 【v21.58】墓碑里的 id 也要扫描：已删除的记录虽然不在实体数组里，但云端删除可能
+            // 尚未生效（RLS 拦截）——若复用了该 id，upsert(onConflict:'id') 会把云端那条"已删除但
+            // 仍存在"的行改写成新内容，表现为"旧记录被顶掉/内容变了"。删除过的 id 一律不再复用。
+            ['_deletedProjectIds', '_deletedTaskIds', '_deletedWorkLogIds'].forEach(k => {
+                (appData[k] || []).forEach(id => { if (typeof id === 'string') _allIds.push({ id }); });
+            });
             _allIds.forEach(it => {
                 if (it && it.id && typeof it.id === 'string' && it.id.startsWith('id_')) {
                     const n = parseInt(it.id.substring(3));
@@ -2459,6 +2492,13 @@ async function loadFromSupabase() {
                         // 【v21.23】改为按 id 合并：本地有而云端没有的日志（多半是尚未上传成功的新日志）
                         // 不再被抹掉，避免"保存成功但过一会儿日志消失"
                         mergeWorkLogsFromCloud(wlData, '【快照】');
+                        // 【v21.58】合并完云端日志后必须重算 id 计数器高水位。
+                        // 原因：applySnapshotPayload 内部的 maxId 计算发生在**云端日志合并之前**，
+                        // 而快照可能来自另一台设备/较早时刻，不含云端已存在的高位 id
+                        // （云端实测：id_2910 只在快照里、id_mvhwutpxft 只在表里，两边各缺一半）。
+                        // 计数器一旦低估，新分配的 id 就会撞上云端已占用的 id，
+                        // upsert(onConflict:'id') 会**直接覆盖**那条记录 → 那条日志凭空消失。
+                        _refreshIdCounterHighWater();
                     }
                 } catch (e2) {
                     console.error('❌ 合并云端工作日志失败（桌面端日志可能未显示，请重试同步）:', e2);
@@ -2934,17 +2974,7 @@ async function loadFromSupabase() {
         syncSettlementsWithProjects();
 
         // 更新 id 计数器
-        let maxId = 0;
-        [...appData.projects, ...appData.templates, ...appData.tasks, ...appData.workLogs, ...appData.settlements]
-        .forEach(item => {
-            if (item.id && item.id.startsWith('id_')) {
-                const num = parseInt(item.id.substring(3));
-                if (!isNaN(num) && num > maxId) maxId = num;
-            }
-        });
-        // 【v21.24】只增不减：分表拉取时同样不能把计数器调低（否则会复用云端已占用的 id，
-        // 上传按 conflict:'id' upsert 会顶掉别人的行）
-        appData._idCounter = Math.max(appData._idCounter || 0, maxId);
+        _refreshIdCounterHighWater();
 
         // 【v21.7】云端拉取后再同步一次"幽灵公司"，确保有项目的公司都登记进 companies，下次上传也会带上
         reconcileCompaniesFromProjects();
@@ -3066,25 +3096,67 @@ async function loadFromSupabase() {
             if (_dTS_snap3.size && Array.isArray(appData.tasks)) appData.tasks = appData.tasks.filter(t => !_dTS_snap3.has(t.id));
             const _dLS_snap3 = new Set(appData._deletedWorkLogIds || []);
             if (_dLS_snap3.size && Array.isArray(appData.workLogs)) appData.workLogs = appData.workLogs.filter(l => !_dLS_snap3.has(l.id));
+            // 【v21.58】工作日志保护：快照整体覆盖会抹掉「本地有、快照没有」的日志 ——
+            // 典型就是"刚新增、还没成功上传到云端"的那条（上传被整批失败连带静默吞掉，
+            // 界面却提示"✅ 已同步"）。下次拉取时快照一覆盖，本地新日志就没了 → 用户看到的
+            // "新增日志上传成功后消失，Ctrl+Shift+R 又出现"。语义与 v21.52 的 reportCommission 一致：
+            // 本地独有的日志一律保留（云端已有的仍以云端为准，由随后的 mergeWorkLogsFromCloud 处理）。
+            // 来源用「拉取前已落盘的本地缓存」_localCache，不能用当前 appData
+            // （loadData 首次启动是先拉云端后读 localStorage，此刻 appData 还是初始默认值）。
+            if (_localCache && Array.isArray(_localCache.workLogs) && _localCache.workLogs.length) {
+                const _snapWLIds = new Set((appData.workLogs || []).map(l => l && l.id).filter(Boolean));
+                const _delWL = new Set(appData._deletedWorkLogIds || []);
+                const _keepWL = _localCache.workLogs.filter(l => l && l.id && !_snapWLIds.has(l.id) && !_delWL.has(l.id));
+                if (_keepWL.length) {
+                    appData.workLogs = (appData.workLogs || []).concat(_keepWL);
+                    console.log('🧩 快照工作日志合并：保留本地独有 ' + _keepWL.length + ' 条（本地有而快照没有）');
+                }
+            }
             ensureColors();
             syncSettlementsWithProjects();
-            // 更新 id 计数器
-            let maxId = 0;
-            [...(appData.projects || []), ...(appData.templates || []), ...(appData.tasks || []), ...(appData.workLogs || []), ...(appData.settlements || []),
-                ...(appData.archived || []).map(a => a && a.projectData).filter(Boolean),
-                ...(appData.shelved || []).map(s => s && s.projectData).filter(Boolean),
-                ...(appData.terminated || []).map(t => t && t.projectData).filter(Boolean)]
-                .forEach(item => {
-                    if (item.id && item.id.startsWith('id_')) {
+            // 更新 id 计数器（【v21.58】统一用 _refreshIdCounterHighWater，与分表分支共用同一实现）
+            _refreshIdCounterHighWater();
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+        }
+
+        // 【v21.58】id 计数器高水位重算（快照分支 / 分表分支共用）。
+        // 扫描范围覆盖所有实体（含 archived/shelved/terminated 里的项目），取 id_NNNN 的最大 N。
+        // 计数器只增不减：一旦低估，新分配的 id 会撞上云端已占用的 id，
+        // upsert(onConflict:'id') 会直接覆盖那条记录 → 该条数据凭空消失（用户可见的"日志消失"）。
+        function _refreshIdCounterHighWater() {
+            try {
+                let maxId = 0;
+                const _scan = [
+                    ...(appData.projects || []),
+                    ...(appData.templates || []),
+                    ...(appData.tasks || []),
+                    ...(appData.workLogs || []),
+                    ...(appData.settlements || [])
+                ];
+                (appData.archived || []).forEach(a => { if (a && a.projectData) _scan.push(a.projectData); });
+                (appData.shelved || []).forEach(s => { if (s && s.projectData) _scan.push(s.projectData); });
+                (appData.terminated || []).forEach(t => { if (t && t.projectData) _scan.push(t.projectData); });
+                _scan.forEach(item => {
+                    if (item && typeof item.id === 'string' && item.id.startsWith('id_')) {
                         const num = parseInt(item.id.substring(3));
                         if (!isNaN(num) && num > maxId) maxId = num;
                     }
                 });
-            // 【v21.24】只增不减：快照越旧 maxId 越小，若直接赋值会让计数器回退，
-            // getNextId() 又只看本地数据、看不见云端仍存在的高位 id → 新记录复用云端已占用的 id
-            // → upsert 顶掉别人的行（历史上"第二个任务替换第一个"的同源漏洞）
-            appData._idCounter = Math.max(appData._idCounter || 0, maxId);
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+                const before = appData._idCounter || 0;
+                // 【v21.58】把「拉取前本地缓存的计数器」也纳入高水位：快照整体覆盖会把
+                // appData._idCounter 换成快照里的值（可能更小），只增不减必须额外兜住本地原值。
+                let _localCounter = 0;
+                try {
+                    const _lc = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
+                    if (_lc && typeof _lc._idCounter === 'number' && !isNaN(_lc._idCounter)) _localCounter = _lc._idCounter;
+                } catch (e) { /* 缓存不可读则忽略 */ }
+                appData._idCounter = Math.max(before, _localCounter, maxId);
+                if (appData._idCounter !== before) {
+                    console.log('🔢 id 计数器高水位更新: ' + before + ' → ' + appData._idCounter + '（maxId=' + maxId + ', local=' + _localCounter + '）');
+                }
+            } catch (e) {
+                console.warn('⚠️ id 计数器高水位计算失败:', e);
+            }
         }
 
         // 【v21.22】任务完成态最终保障：云端 tasks.completed 是桌面看板直接 PATCH 的目标列，
@@ -3162,8 +3234,13 @@ async function loadFromSupabase() {
             const deleted = new Set((appData._deletedWorkLogIds || []).filter(x => x));
             const merged = [];
             const seen = new Set();
+            // 【v21.58】云端行也要检查墓碑：原实现只在"本地独有"分支检查 deleted，
+            // 云端行直接无脑并入 → 用户删过的日志只要云端删除没生效（RLS 拦截/删除失败），
+            // 每次拉取都会被"复活"，且复活后占用 id，与新记录撞车。
+            let revived = 0;
             cloudRows.forEach(w => {
                 if (!w || !w.id || seen.has(w.id)) return;
+                if (deleted.has(w.id)) { revived++; return; }   // 已删除 → 不复活
                 merged.push({
                     id: w.id,
                     date: w.date,
@@ -3183,7 +3260,8 @@ async function loadFromSupabase() {
             });
             appData.workLogs = merged;
             console.log('📥 ' + contextLabel + ' 工作日志合并：云端 ' + seen.size + ' 条 / 本地原有 ' + before +
-                ' 条 → 合并后 ' + merged.length + ' 条（本地独有的 ' + kept + ' 条已保留，' + killed + ' 条因已删除未复活）');
+                ' 条 → 合并后 ' + merged.length + ' 条（本地独有的 ' + kept + ' 条已保留，' + killed + ' 条因已删除未复活，' +
+                ' 云端 ' + revived + ' 条因已删除未复活）');
         }
 
         // 【v21.26 / P2】PostgREST 单次最多返回 1000 行（Supabase 默认 max-rows），
@@ -4005,14 +4083,38 @@ async function syncToSupabase(createSnapshotFlag = false) {
                     if (table.name === 'work_logs' && table.data.length > 0) {
                         console.warn('⚠️ work_logs 批量上传失败，降级为逐条重试:', error.message || error);
                         const { ok, failed } = await upsertRowsOneByOne('work_logs', table.data, table.conflict);
-                        if (failed.length) {
-                            console.error('❌ work_logs 逐条重试后仍有 ' + failed.length + ' 条失败:');
-                            failed.forEach(f => console.error('   - ' + (f.row && f.row.id) + ':', (f.err && (f.err.message || f.err)) || f.err));
+                        // 【v21.58】二次重试：把失败行的 project_id 置空再写一次。
+                        // 外键约束（work_logs_project_id_fkey）是日志写入失败的头号原因，
+                        // 置空关联后日志正文仍能入库（关联信息可后续从本地恢复），比整条丢弃好。
+                        const _stillFailed = [];
+                        for (const f of failed) {
+                            const _row = { ...f.row, project_id: null };
+                            const { error: _e2 } = await supabaseClient
+                                .from('work_logs').upsert(_row, { onConflict: table.conflict });
+                            if (_e2) { _stillFailed.push(f); }
+                            else { ok.push(_row); console.log('✅ work_logs 解除项目关联后写入成功:', _row.id); }
                         }
-                        if (ok.length > 0) {
+                        if (_stillFailed.length) {
+                            console.error('❌ work_logs 逐条重试后仍有 ' + _stillFailed.length + ' 条失败:');
+                            _stillFailed.forEach(f => console.error('   - ' + (f.row && f.row.id) + ':', (f.err && (f.err.message || f.err)) || f.err));
+                            // 【v21.58】失败行不能被静默吞掉：原实现只要 ok.length>0 就 continue，
+                            // 于是这几条永远没进云端，界面却提示"已保存并同步到云端"（假成功），
+                            // 用户新写的日志随后被下次拉取的旧快照覆盖 → "新增日志保存后消失"。
+                            // 改为：记入待重试清单 + 置 _pendingUpload（后续自动同步重试），
+                            // 并如实上报失败（hasError）而不是报成功。
+                            const _failedIds = _stillFailed.map(f => f.row && f.row.id).filter(Boolean);
+                            if (_failedIds.length) {
+                                appData._failedWorkLogIds = Array.from(new Set([...(appData._failedWorkLogIds || []), ..._failedIds]));
+                                errors.push({ table: 'work_logs', error: new Error(_stillFailed.length + ' 条日志未写入云端（外键或约束限制），已保留本地并自动重试: ' + _failedIds.slice(0, 5).join(', ')) });
+                                hasError = true;
+                                console.error('❌ work_logs 有 ' + _stillFailed.length + ' 条未上传，已记录待重试:', _failedIds.join(', '));
+                            }
+                        }
+                        if (!failed.length || _stillFailed.length === 0) {
                             console.log(`✅ work_logs 降级逐条写入：${ok.length}/${table.data.length} 条成功`);
-                            continue;  // 已抢救回大部分，不再判定为整体失败
+                            continue;  // 全部成功才算完全成功
                         }
+                        // 仍有失败行 → 不 continue，落到下面的 hasError 分支如实上报
                     }
                     console.error(`❌ ${table.name} 同步失败:`, error);
                     errors.push({ table: table.name, error });
@@ -4043,6 +4145,54 @@ async function syncToSupabase(createSnapshotFlag = false) {
                 }
             }
         } catch (e) { console.warn('⚠️ 清理已删除日志异常:', e); }
+
+        // 【v21.58】上传后校验：确认本轮待上传的日志是否真的落到云端 work_logs 表。
+        // 背景：批量 upsert 返回"成功"但受 RLS 影响可能静默不生效（无报错但行没写进去），
+        // 界面照样提示"✅ 已同步"。此时下次拉取就会用旧快照覆盖本地 → 用户看到"日志保存后消失"。
+        // 这里逐条回查云端，缺失的立即单独补写（单条 upsert 不受批量事务影响），
+        // 并把补写结果如实反馈，避免"假成功"。
+        if (supabaseClient && (appData._failedWorkLogIds || []).length) {
+            try {
+                const _pendingIds = (appData._failedWorkLogIds || []).filter(Boolean);
+                const _toCheck = _pendingIds.slice(0, 50);
+                const { data: _exist, error: _exErr } = await supabaseClient
+                    .from('work_logs').select('id').in('id', _toCheck);
+                if (_exErr) {
+                    console.warn('⚠️ 日志落库校验查询失败:', _exErr.message || _exErr);
+                } else {
+                    const _existSet = new Set((_exist || []).map(r => r.id));
+                    const _missing = _toCheck.filter(id => !_existSet.has(id));
+                    if (_missing.length) {
+                        console.log('🔁 日志落库校验：' + _missing.length + ' 条未入库，尝试单独补写');
+                        const _missingLogs = (appData.workLogs || []).filter(l => _missing.includes(l.id));
+                        for (const l of _missingLogs) {
+                            const { error: _wErr } = await supabaseClient.from('work_logs').upsert({
+                                id: l.id, date: l.date, type: l.type || 'daily',
+                                project_id: l.projectId || null, content: l.content || ''
+                            }, { onConflict: 'id' });
+                            if (_wErr) console.error('❌ 日志单独补写失败:', l.id, _wErr.message || _wErr);
+                            else console.log('✅ 日志单独补写成功:', l.id);
+                        }
+                        // 补写后重新校验，仍缺失的保留在待重试清单
+                        const { data: _recheck } = await supabaseClient
+                            .from('work_logs').select('id').in('id', _missing);
+                        const _reSet = new Set((_recheck || []).map(r => r.id));
+                        const _stillMissing = _missing.filter(id => !_reSet.has(id));
+                        appData._failedWorkLogIds = _pendingIds.filter(id => _stillMissing.includes(id));
+                        if (_stillMissing.length) {
+                            hasError = true;
+                            errors.push({ table: 'work_logs', error: new Error(_stillMissing.length + ' 条日志仍未能写入云端: ' + _stillMissing.slice(0, 5).join(', ')) });
+                        }
+                    } else {
+                        // 全部已入库 → 清空待重试清单
+                        appData._failedWorkLogIds = [];
+                        console.log('✅ 日志落库校验通过：' + _toCheck.length + ' 条均已在云端');
+                    }
+                }
+            } catch (e) {
+                console.warn('⚠️ 日志落库校验异常:', e);
+            }
+        }
 
         if (hasError) {
             console.error('❌ 同步过程中部分表失败，错误汇总:');
@@ -7789,8 +7939,10 @@ function addWorkLog() {
     const dateVal = dateInput && dateInput.value ? dateInput.value : fmtLocal();
     const projectId = window._selectedLogProjectId || null;
     if (!appData.workLogs) appData.workLogs = [];
+    // 【v21.58】记录这条日志的 id，用于上传后回查校验（原来只靠 syncToSupabase 的 resolve 判定成功）
+    const _newLogId = getNextId();
     appData.workLogs.push({
-        id: getNextId(),
+        id: _newLogId,
         date: dateVal,
         type: 'daily',
         projectId: projectId,
@@ -7804,6 +7956,9 @@ function addWorkLog() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
     updateBadges();
     _pendingUpload = true;
+    // 【v21.58】把新日志 id 记入"待校验清单"：syncToSupabase 结束前会逐条回查云端，
+    // 缺失的单条补写，确保"提示已同步"= 真的在云端表里。
+    appData._failedWorkLogIds = Array.from(new Set([...(appData._failedWorkLogIds || []), _newLogId]));
     // 保存后默认取消关联项目，避免下次填写仍关联上次的项目
     window._selectedLogProjectId = null;
     const sel = document.getElementById('logDate');
@@ -7811,14 +7966,42 @@ function addWorkLog() {
     renderLogs(document.getElementById('mainContent'));
     showToast('💾 日志已保存到本地，正在同步…');
     if (supabaseClient && getSupabaseConfig()) {
-        syncToSupabase(true).then(() => {
-            showToast('✅ 日志已保存并同步到云端');
+        syncToSupabase(true).then(async () => {
+            // 【v21.58】上传后回查云端，确认这条日志真的落库了。
+            // syncToSupabase 内部对 work_logs 有"整批失败→降级逐条"的容错，部分失败时整体仍 resolve，
+            // 于是界面会弹"已同步"而实际没写进云端 → 用户随后被旧快照覆盖 → 日志消失。
+            // 这里以"云端表里能查到这条 id"为成功判据，查不到就如实提示失败并保留待重试标记。
+            const _inCloud = await _verifyWorkLogInCloud(_newLogId);
+            if (_inCloud) {
+                showToast('✅ 日志已保存并同步到云端');
+            } else {
+                appData._failedWorkLogIds = Array.from(new Set([...(appData._failedWorkLogIds || []), _newLogId]));
+                _pendingUpload = true;
+                try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
+                console.error('❌ 日志未在云端确认（仍保留本地，将自动重试）:', _newLogId);
+                showToast('⚠️ 日志已存本地，云端未确认，将自动重试');
+            }
         }).catch(err => {
             console.error('❌ 日志同步失败（数据仍保留在本地，不会丢失）:', err);
             showToast('⚠️ 日志已存本地，同步失败：' + (err && err.message ? err.message.substring(0, 60) : '未知错误'));
         });
     } else {
         showToast('💾 日志已保存到本地（未配置云同步）');
+    }
+}
+
+// 【v21.58】回查云端 work_logs 表确认某条日志是否真的落库。
+// 失败/查不到一律返回 false（宁可提示"未确认"也不误报成功）。
+async function _verifyWorkLogInCloud(logId) {
+    try {
+        if (!supabaseClient || !logId) return false;
+        const { data, error } = await supabaseClient
+            .from('work_logs').select('id').eq('id', logId).limit(1);
+        if (error) { console.warn('⚠️ 日志云端回查失败:', error.message || error); return false; }
+        return !!(data && data.length);
+    } catch (e) {
+        console.warn('⚠️ 日志云端回查异常:', e);
+        return false;
     }
 }
 
