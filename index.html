@@ -1,6 +1,44 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.58-mobile-split  2026-10-20  ★ 当前最新稿
+     v21.59-mobile-split  2026-10-28  ★ 当前最新稿
+    修复「搁置的项目上传成功后跳回之前正常的状态；点击完成的任务又变回未完成状态」：
+      云端取证（projects 表 83 行 / tasks 表 12 行 / snapshots 表 68 份）确认是**同一个根因**：
+      ① projects 表 83 行的 updated_at **全部是同一毫秒**（2026-10-28T03:13:02.024+00:00）
+         → 证明每次上传都在**整表重写全部 83 行**（upsert onConflict:'id' 无条件覆盖每一行）。
+      ② tasks 表 12 行的 updated_at 全部停在 9 月（mapTask 不带该列）→ 任务完成态长期没写进过云端；
+         tasks.updated_at 与 projects.updated_at 都**不可信**，无法用于 last-writer-wins 判定。
+      ③ 快照表实证：id_213（永一纤维）的主表/搁置归属在同一分钟内**来回翻转 4 次**；
+         同时 tasks 数量在 10/11/12 之间抖动 → 有**多个浏览器实例**（电脑+手机+平板，
+         device 标识全是 'Mozilla/5.0 (Windows'）各自持有不同状态的 appData，
+         每 30 秒各自整表上传一次 → **最后写入者胜出**，互相把对方的"搁置""完成"覆盖回去。
+      ④ 症状对应：刚搁置的项目被另一实例用旧归属整表覆盖 → "跳回正常状态"；
+         刚勾选完成的任务被另一实例用 completed=false 整表覆盖 → "又变回未完成"。
+
+    修复（记录级增量上传 + 记录级裁决，共 8 处）：
+      改动1（新增 markModified / hasPendingMod / clearModMarks）：
+        任何本地修改（搁置/归档/终止/恢复/节点状态/任务完成/项目编辑）都给该记录打 _modAt 时间戳，
+        语义 = "本机改过、尚未被云端确认"。_modAt 只存 localStorage，不进云端表。
+      改动2（syncToSupabase 的 projects/tasks 构造）：改为**增量上传** ——
+        只上传带 _modAt 的行 + 云端尚不存在的新行。**未改动的行根本不发出去**，
+        从根上杜绝"陈旧副本整表覆盖云端新状态"。同时修正 projectIds 改用全量 id（否则
+        tasks/workLogs 会被误过滤出上传批次）。
+      改动3（mergeCloudStateBeforeUpload）：新增**归属裁决** ——
+        本地未改动的行若云端说它已归档/搁置/终止，则把本地归位到对应桶；
+        本地带 _modAt 的行则本地赢，不被云端旧归属覆盖。任务完成态同理。
+      改动4（新增 capturePendingMods / restorePendingMods）：拉取**前**捕获本机待上传的行，
+        拉取**后**回填 —— 云端重建 projects/tasks 时整体替换本地，会把本机刚做的改动冲掉，
+        这是"保存后跳回"的直接原因。回填保留归属桶与字段值。
+      改动5（applySnapshotPayload）：快照整体覆盖会抹掉 _modAt 标记与 _modAtPending，
+        从拉取前的本地缓存 _localCache 取回（与 v21.52/v21.58 的 workLogs/reportCommission 同构）。
+      改动6（createSnapshot）：快照剥离 _modAt / _modAtPending —— 它们是"本机待上传"标记，
+        不应让别的设备误以为自己有待上传改动。
+      改动7（上传成功后）：统一清除 _modAt 与 _modAtPending（与 clearDoneEdits 同一时机）。
+      改动8（头部注释 / app-version）：21.58 → 21.59。
+
+    验证：node --check 通过；抽取线上真实函数跑回归 **23/23 PASS**（覆盖搁置回填、
+    任务完成回填、归属裁决双向、未改动行以云端为准、TTL 过期、上传后清标记等）。
+
+     v21.58-mobile-split  2026-10-20
     修复「工作日志界面新增日志，显示上传成功后却消失；Ctrl+Shift+R 强制刷新后又出现」：
       云端取证（work_logs 表 44 条 / snapshots 表 61 份快照）确认四层叠加根因：
       ① 快照整体覆盖 workLogs：applySnapshotPayload 里 `Object.keys(payload).forEach(k => appData[k]=payload[k])`
@@ -613,7 +651,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.58">
+    <meta name="app-version" content="21.59">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1895,6 +1933,151 @@ function wbWorkdaySegments(a, b) {
     return segs;
 }
 
+// 【v21.59】记录级修改时间戳（_modAt）—— 根治「多实例互相覆盖」
+// ------------------------------------------------------------
+// 背景（2026-10-28 云端取证，确凿证据）：
+//   ① 云端 projects 表 83 行的 updated_at **全部是同一毫秒**（2026-10-28T03:13:02.024+00:00）
+//      → 说明每次上传都是**整表 83 行全量重写**（upsert 无条件覆盖），没有任何"只写我改过的行"的机制。
+//   ② 云端 tasks 表 12 行的 updated_at **全部停在 9 月**（2026-09-06 ~ 2026-09-16），
+//      而 id_2912 是 10-14 创建的 → tasks 表整批上传长期失败/被跳过，任务完成态几乎没写进过云端。
+//   ③ 快照表里 id_213（永一纤维）的主表/搁置归属在**同一分钟内来回翻转 4 次**：
+//      03:12:07 在主表 → 03:12:14 进搁置 → 03:12:25 回到主表 → 03:12:42 又进搁置。
+//      同时 tasks 数量在 10/11/12 之间抖动、id_2865 时有时无。
+//      → 有**多个浏览器实例**（电脑 + 手机 + 平板，同 device 字符串 'Mozilla/5.0 (Windows'）
+//        各自持有不同状态的 appData，每 30 秒各自整表上传一次，**互相覆盖**。
+//   ④ 症状对应：刚搁置的项目被另一个实例用旧状态（还在主表）整表覆盖 → "跳回之前正常的状态"；
+//      刚勾选完成的任务被另一个实例用 completed=false 整表覆盖 → "又变回未完成状态"。
+//
+// 方案：记录级"待上传标记"（_modAt）+ 增量上传
+//   · 任何本地修改（搁置/归档/终止/恢复/节点状态/任务完成/项目编辑）都给该记录打 _modAt 时间戳；
+//     _modAt 只存 localStorage 与快照，**不进云端表**（云端表结构不可改）。
+//   · 语义：_modAt 存在 = "本机改过、尚未被云端确认"。
+//   · 上传时：**只上传带 _modAt 的行**（以及云端尚不存在的新行）。
+//     → 任何"本机没改过"的行都不会被写回云端，从根上杜绝"陈旧副本整表覆盖云端新状态"。
+//   · 拉取时：带 _modAt 的行**不被云端覆盖**（本地改动优先，等上传确认后清除标记）。
+//   · 上传成功后统一清除 _modAt（与既有 clearDoneEdits/clearNodesEdits 同一时机）。
+//   · 无 _modAt 的行（旧数据）→ 行为与现在一致（云端为准），向后兼容。
+//
+// 关键区别（为什么不用云端 updated_at 做裁决）：
+//   云端 projects.updated_at 每次上传都被 mapProject 刷成"当前时间"（83 行同一毫秒），
+//   tasks.updated_at 则因 mapTask 不带该列而永远停在插入时间（实测停在 9 月）——
+//   两个时间戳都**不可信**，无法用于 last-writer-wins 判定。故改用本地标记 + 增量上传。
+const _MOD_TTL = 24 * 60 * 60 * 1000;   // 24 小时：上传失败时不至于永久锁死该行
+// 给记录打"本机已修改、待上传"标记
+function markModified(rec) {
+    if (!rec) return;
+    rec._modAt = Date.now();
+    // 【v21.59】任务额外快照一份"本机改后的完成态"，供拉取后回填
+    // （appData.tasks 会被云端整体替换，只靠 _modAt 时间戳无法还原 completed 值）。
+    if (rec.completed !== undefined && rec.id) {
+        if (!appData._modAtPending) appData._modAtPending = {};
+        appData._modAtPending[rec.id] = {
+            completed: !!rec.completed,
+            completedDate: rec.completedDate || null,
+            endDate: rec.endDate || null
+        };
+    }
+}
+// 该记录是否有"待上传的本机改动"
+function hasPendingMod(rec) {
+    if (!rec || !rec._modAt) return false;
+    return (Date.now() - rec._modAt) < _MOD_TTL;
+}
+// 清除所有待上传标记（上传成功后调用）
+function clearModMarks() {
+    const strip = (arr) => (arr || []).forEach(r => { if (r) delete r._modAt; });
+    strip(appData.projects);
+    (appData.archived || []).forEach(a => a && a.projectData && delete a.projectData._modAt);
+    (appData.shelved || []).forEach(s => s && s.projectData && delete s.projectData._modAt);
+    (appData.terminated || []).forEach(t => t && t.projectData && delete t.projectData._modAt);
+    strip(appData.tasks);
+}
+// 【v21.59】拉取后回填"本机待上传的改动" —— 核心保护
+// ------------------------------------------------------------
+// 云端重建 appData.projects/archived/shelved/terminated/tasks 时，会用云端行整体替换本地，
+// 于是本机刚做的"搁置""勾选完成"会被云端旧值覆盖回去 → 用户看到"保存后跳回"。
+//
+// 实现方式与既有的 capturePendingDoneEdits / restorePendingNodeEdits 模式一致：
+//   拉取**前** capturePendingMods() 把本机改过的行（连同归属桶与字段值）存下来；
+//   拉取**后** restorePendingMods(m) 再放回本地。
+// 不能依赖"重建后仍能找到带 _modAt 的行"——云端重建会把标记和归属一起冲掉。
+// 只处理本机改过的行 → 未改动的行仍以云端为准，多端同步行为不变。
+// 捕获本机待上传的改动（拉取前调用）
+function capturePendingMods() {
+    const m = { projects: {}, tasks: {} };
+    const put = (arr, bucket) => (arr || []).forEach(item => {
+        const rec = item && item.projectData;
+        if (!rec || !rec.id || !hasPendingMod(rec)) return;
+        m.projects[rec.id] = {
+            bucket,
+            // 归属桶的附加字段（reason / shelvedAt / archivedAt / terminatedAt）也要保留
+            meta: item && item.projectData ? {
+                reason: item.reason || '', shelvedAt: item.shelvedAt || null,
+                archivedAt: item.archivedAt || null, terminatedAt: item.terminatedAt || null
+            } : null,
+            rec: JSON.parse(JSON.stringify(rec))
+        };
+    });
+    put(appData.archived, 'archived');
+    put(appData.shelved, 'shelved');
+    put(appData.terminated, 'terminated');
+    (appData.projects || []).forEach(p => {
+        if (!p || !p.id || !hasPendingMod(p)) return;
+        m.projects[p.id] = { bucket: 'main', meta: null, rec: JSON.parse(JSON.stringify(p)) };
+    });
+    (appData.tasks || []).forEach(t => {
+        if (!t || !t.id || !hasPendingMod(t)) return;
+        m.tasks[t.id] = {
+            completed: !!t.completed,
+            completedDate: t.completedDate || null,
+            endDate: t.endDate || null
+        };
+    });
+    return m;
+}
+// 回填本机待上传的改动（拉取后调用）
+function restorePendingMods(m) {
+    if (!m) return { projects: 0, tasks: 0 };
+    // ---- 项目：按归属桶回填 ----
+    const pids = Object.keys(m.projects || {});
+    if (pids.length) {
+        const _idSet = new Set(pids);
+        // 先从所有桶里移除这些 id（云端重建后它们可能被放进了错误的桶）
+        appData.projects = (appData.projects || []).filter(p => !(p && _idSet.has(p.id)));
+        ['archived', 'shelved', 'terminated'].forEach(k => {
+            appData[k] = (appData[k] || []).filter(it => !(it && it.projectData && _idSet.has(it.projectData.id)));
+        });
+        // 再放回本机记录的桶（保留本机的字段值与 _modAt 标记）
+        pids.forEach(id => {
+            const e = m.projects[id];
+            const rec = e.rec || { id };
+            rec._modAt = Date.now();   // 标记保留（仍视为待上传）
+            if (e.bucket === 'main') appData.projects.push(rec);
+            else if (e.bucket === 'archived') appData.archived.push({ projectData: rec, archivedAt: (e.meta && e.meta.archivedAt) || null });
+            else if (e.bucket === 'shelved') appData.shelved.push({ projectData: rec, reason: (e.meta && e.meta.reason) || '', shelvedAt: (e.meta && e.meta.shelvedAt) || null });
+            else appData.terminated.push({ projectData: rec, reason: (e.meta && e.meta.reason) || '', terminatedAt: (e.meta && e.meta.terminatedAt) || null });
+        });
+    }
+    // ---- 任务：完成态回填 ----
+    // 本机改过完成态的任务（toggleTask / cycleNode / completeAllNodes），
+    // 拉取时 appData.tasks 被云端整体替换 → 本机的 completed 被冲掉，这里改回本机值。
+    const tids = Object.keys(m.tasks || {});
+    tids.forEach(id => {
+        const t = (appData.tasks || []).find(x => x && x.id === id);
+        if (!t) return;
+        const e = m.tasks[id];
+        t.completed = e.completed;
+        t.completedDate = e.completedDate;
+        t.endDate = e.endDate;
+        t._modAt = Date.now();
+    });
+    if (pids.length || tids.length) {
+        console.log('🛡️ 本机待上传改动保留：项目 ' + pids.length + ' 项 / 任务 ' + tids.length + ' 条（不被云端旧值覆盖）');
+    }
+    return { projects: pids.length, tasks: tids.length };
+}
+
+
 // 【v21.25】本地完成态改动标记 —— 让"网页端取消完成"也能生效
 // 背景：上传前的云端合并（mergeCloudStateBeforeUpload / _doneRes）只做"false→true"单调合并，
 // 导致网页把任务勾掉（false）后又被云端 true 顶回来，"取消完成永远无效"。
@@ -2108,9 +2291,29 @@ async function mergeCloudStateBeforeUpload() {
     if (!cloudProjects.length && !cloudTasks.length) return;
 
     const tById = new Map(cloudTasks.map(t => [t.id, t]));
+    const pById = new Map(cloudProjects.map(p => [p.id, p]));
 
     let taskMerged = 0;
 
+    // ===== 【v21.59】记录级 LWW 裁决：本地改过的行才允许覆盖云端 =====
+    // 背景（2026-10-28 云端取证）：
+    //   · 云端 projects 表 83 行的 updated_at **全部是同一毫秒** → 每次上传都在整表重写 83 行，
+    //     onConflict:'id' 的 upsert 会把**每一行**都覆盖成本地值。
+    //   · 于是：手机/平板/电脑浏览器（device 标识全是 'Mozilla/5.0 (Windows'，实际是不同实例）
+    //     各自持有不同状态的 appData，每 30 秒整表上传一次 → **最后写入者胜出**。
+    //   · 快照表实证：id_213（永一纤维）的主表/搁置归属在同一分钟内来回翻转 4 次。
+    //   · 症状：刚搁置的项目被另一实例用旧归属整表覆盖 → "跳回之前正常的状态"；
+    //           刚勾选完成的任务被另一实例用 completed=false 整表覆盖 → "又变回未完成"。
+    // 裁决规则（记录级）：
+    //   1) 本地行带 _modAt（本机改过、尚未被云端确认）→ 本地赢，允许覆盖云端；
+    //   2) 本地行无 _modAt（未改过，可能只是陈旧副本）→ **以云端为准**，
+    //      本地不得覆盖云端该行的 status/completed；
+    //   3) 拉取时同理：本地带 _modAt 的行不被云端旧值覆盖（见 capturePendingMods / restorePendingMods）。
+    // 这样多端各改各的互不干扰，同一行由本机最后一次修改胜出。
+    //
+    // 【v21.59】projects 的归属（主表/归档/搁置/终止）由 status 字段承载，
+    //  云端 archived/shelved/terminated 的行本地若不在对应桶里 → 用云端归属（跳过本地旧归属）。
+    // 反之本地有 _modAt → 本地归属赢。
     // ===== 任务：完成状态合并 =====
     // 【v21.25】本地有"刚改过完成态"的标记（_doneAt 且未过期）时尊重本地，
     // 否则以云端为权威做双向同步（云端 false 也能纠正本地陈旧的 true）。
@@ -2118,6 +2321,9 @@ async function mergeCloudStateBeforeUpload() {
         const ct = tById.get(localTask.id);
         if (!ct) return;
         if (hasFreshDoneEdit(localTask)) return;   // 本地改动优先，交由本次上传写回云端
+        // 【v21.59】记录级裁决：本地这行带 _modAt（本机改过、尚未被云端确认）→ 本地赢，
+        // 不被云端覆盖；没有 _modAt 的行 → 云端赢（避免陈旧副本把云端新状态覆盖回去）。
+        if (hasPendingMod(localTask)) return;
         const cloudDone = !!ct.completed;
         if (cloudDone === !!localTask.completed) return;
         localTask.completed = cloudDone;
@@ -2132,6 +2338,43 @@ async function mergeCloudStateBeforeUpload() {
         }
         taskMerged++;
     });
+
+    // 【v21.59】项目归属裁决：把"本地无新鲜改动的行"的状态改为以云端为准，
+    // 并把"云端已在搁置/归档/终止桶、本地还在主表"的行归位到对应桶。
+    // 目的是：上传时不会用本地陈旧归属覆盖云端的新归属（= "搁置后又跳回"的直接原因）。
+    let ownerFixed = 0;
+    const _localProjectRecs = [];
+    (appData.projects || []).forEach(p => _localProjectRecs.push({ rec: p, bucket: 'main' }));
+    (appData.archived || []).forEach(a => a && a.projectData && _localProjectRecs.push({ rec: a.projectData, bucket: 'archived' }));
+    (appData.shelved || []).forEach(s => s && s.projectData && _localProjectRecs.push({ rec: s.projectData, bucket: 'shelved' }));
+    (appData.terminated || []).forEach(t => t && t.projectData && _localProjectRecs.push({ rec: t.projectData, bucket: 'terminated' }));
+    const _bucketByStatus = { archived: 'archived', shelved: 'shelved', terminated: 'terminated' };
+    _localProjectRecs.forEach(({ rec, bucket }) => {
+        const cp = pById.get(rec.id);
+        if (!cp) return;                                  // 云端没有 → 本地新增，保留本地
+        if (hasPendingMod(rec)) return;   // 本机改过且未上传 → 本地赢
+        const cloudBucket = _bucketByStatus[cp.status];
+        if (!cloudBucket) return;                          // 云端在主表 → 与本地一致，无需处理
+        if (cloudBucket === bucket) return;                // 归属一致
+        // 归属不一致（云端是搁置/归档/终止，本地还在主表或别的桶）→ 以云端为准归位
+        const _move = (arr, pred) => { const i = arr.findIndex(pred); if (i >= 0) return arr.splice(i, 1)[0]; return null; };
+        if (bucket === 'main') {
+            appData.projects = appData.projects.filter(x => x.id !== rec.id);
+            if (cloudBucket === 'archived') appData.archived.push({ projectData: rec, archivedAt: cp.archived_at || null });
+            else if (cloudBucket === 'shelved') appData.shelved.push({ projectData: rec, reason: cp.reason || '', shelvedAt: cp.shelved_at || null });
+            else appData.terminated.push({ projectData: rec, reason: cp.reason || '', terminatedAt: cp.terminated_at || null });
+        } else {
+            const _arr = bucket === 'archived' ? appData.archived : bucket === 'shelved' ? appData.shelved : appData.terminated;
+            _move(_arr, x => x && x.projectData && x.projectData.id === rec.id);
+            const _target = cloudBucket === 'archived' ? appData.archived : cloudBucket === 'shelved' ? appData.shelved : appData.terminated;
+            _target.push({ projectData: rec, reason: cp.reason || '',
+                archivedAt: cp.archived_at || null, shelvedAt: cp.shelved_at || null, terminatedAt: cp.terminated_at || null });
+        }
+        ownerFixed++;
+    });
+    if (ownerFixed) {
+        console.log('🧭 项目归属裁决：' + ownerFixed + ' 行以云端归属为准（本地为陈旧副本，未在本机改过）');
+    }
 
     // 【v21.28】项目节点/状态合并逻辑已抽取为共享函数（与 syncToSupabase 的
     // "项目节点第二道防线"共用同一份实现，杜绝两处逻辑漂移）。
@@ -2439,6 +2682,9 @@ async function loadFromSupabase() {
     // 拉取分支里 appData.projects 会被云端行整体替换，若不回填，用户刚取消的节点完成态
     // 会被云端旧值覆盖回来 —— 表现为"取消完成无效"（桌面看板侧同理）。
     const _pendingNodeEdits = capturePendingNodeEdits();
+    // 【v21.59】捕获"本机待上传的改动"（搁置/归档/终止归属 + 任务完成态），
+    // 拉取后回填 —— 否则云端重建会把本机刚做的改动整体冲掉 → "保存后跳回"。
+    const _pendingMods = capturePendingMods();
     // 【v2修复】记录拉取前的本地项目全集 + 完整数据备份，用于同步后检测“项目被云端数据抹掉”的情况
     const _v2PrePullIds = collectAllProjectIds();
     let _v2BackupJson = null;
@@ -2992,6 +3238,8 @@ async function loadFromSupabase() {
         try { restorePendingDoneEdits(_pendingDoneEdits); } catch (e6) { console.warn('⚠️ 回填本地完成态改动失败:', e6); }
         // 【v21.27】回填本地节点改动（必须在 projects 合并/覆盖之后）
         try { restorePendingNodeEdits(_pendingNodeEdits); } catch (e7) { console.warn('⚠️ 回填本地节点改动失败:', e7); }
+        // 【v21.59】回填本机待上传的改动（必须在 projects/tasks 重建之后）
+        try { restorePendingMods(_pendingMods); } catch (e8) { console.warn('⚠️ 回填待上传改动失败:', e8); }
         _disableAutoUpload = false;
         _loadingFromCloud = false;   // 【v21.26】释放拉取锁
     }
@@ -3084,6 +3332,40 @@ async function loadFromSupabase() {
                 const a = _prevLocalMarks[k] || [], b = _snapMarks[k] || [];
                 appData[k] = Array.from(new Set([...a, ...b]));
             });
+            // 【v21.59】"本机待上传标记"保护：快照整体覆盖会把本机刚打的 _modAt 标记
+            // 连同 _modAtPending 一起抹掉 → 该行被当成"未改动"→ 下次上传不发出去，
+            // 而拉取时又被云端旧值覆盖 → 用户的"搁置/勾选完成"凭空消失。
+            // 标记只存本机 localStorage，不进快照（见 createSnapshot 的剥离逻辑），
+            // 故这里从「拉取前已落盘的本地缓存」_localCache 取回。
+            if (_localCache) {
+                // 1) 恢复 _modAtPending（任务完成态快照值）
+                if (_localCache._modAtPending && typeof _localCache._modAtPending === 'object') {
+                    appData._modAtPending = _localCache._modAtPending;
+                }
+                // 2) 把本机改过的行的 _modAt 标记贴回快照覆盖后的对应记录上
+                const _pendingMap = new Map();
+                const _scanLocal = (arr, bucket) => (arr || []).forEach(item => {
+                    const rec = item && item.projectData;
+                    const r = (bucket === 'main') ? item : rec;
+                    if (r && r.id && r._modAt) _pendingMap.set(r.id, { at: r._modAt, bucket });
+                });
+                _scanLocal(_localCache.projects, 'main');
+                _scanLocal(_localCache.archived, 'archived');
+                _scanLocal(_localCache.shelved, 'shelved');
+                _scanLocal(_localCache.terminated, 'terminated');
+                const _applyMod = (rec, bucket) => {
+                    const _pm = _pendingMap.get(rec.id);
+                    if (_pm && _pm.bucket === bucket) rec._modAt = _pm.at;
+                };
+                (appData.projects || []).forEach(p => _applyMod(p, 'main'));
+                ['archived', 'shelved', 'terminated'].forEach(k => {
+                    (appData[k] || []).forEach(it => it && it.projectData && _applyMod(it.projectData, k));
+                });
+                (appData.tasks || []).forEach(t => {
+                    const _lt = (_localCache.tasks || []).find(x => x && x.id === t.id);
+                    if (_lt && _lt._modAt) t._modAt = _lt._modAt;
+                });
+            }
             // 【v21.31】用合并后的墓碑过滤快照数据，防止已删除的项目/任务/日志被旧快照复活
             const _dPS_snap3 = new Set(appData._deletedProjectIds || []);
             if (_dPS_snap3.size) {
@@ -3530,6 +3812,16 @@ async function loadFromSupabase() {
             // 【v21.27】_nodesAt 同理（项目节点改动标记），必须一并剔除，否则其他设备从快照恢复后
             // 会误判"我有未上传的节点改动"→ 持续以本地陈旧 nodes 覆盖云端。
             if (Array.isArray(payload.projects)) payload.projects.forEach(p => { if (p) delete p._nodesAt; });
+            // 【v21.59】_modAt 同样是"本机待上传"标记，不进快照：
+            // 否则别的设备从快照恢复后会误判"我有未上传的改动"→ 把本机的陈旧值写回云端。
+            const _stripMod = (arr) => (arr || []).forEach(it => {
+                const rec = it && it.projectData ? it.projectData : it;
+                if (rec) delete rec._modAt;
+            });
+            if (Array.isArray(payload.projects)) payload.projects.forEach(p => { if (p) delete p._modAt; });
+            _stripMod(payload.archived); _stripMod(payload.shelved); _stripMod(payload.terminated);
+            if (Array.isArray(payload.tasks)) payload.tasks.forEach(t => { if (t) delete t._modAt; });
+            delete payload._modAtPending;
             const now = new Date();
             const version = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0') + '-' + String(now.getDate()).padStart(2,'0') + ' ' + String(now.getHours()).padStart(2,'0') + ':' + String(now.getMinutes()).padStart(2,'0') + ':' + String(now.getSeconds()).padStart(2,'0');
             const device = (navigator.userAgent || 'browser').split(' ').slice(0,2).join(' ');
@@ -3845,35 +4137,69 @@ async function syncToSupabase(createSnapshotFlag = false) {
         const companiesData = appData.companies.map(name => ({ name }));
         const templatesData = appData.templates.map(mapTemplate);
 
+        // 【v21.59】增量上传：只上传"本机改过的行"+"云端尚不存在的新行"。
+        // 根因（云端取证）：原实现每次上传都把 projects 全表 83 行、tasks 全表 12 行
+        // 整表 upsert（onConflict:'id'），实测云端 projects 83 行的 updated_at
+        // 全部是同一毫秒 —— 证明每次上传都在无条件重写全表。
+        // 于是任何一个"本机没改过、只是持有陈旧副本"的浏览器实例，
+        // 都能用旧值覆盖掉别人刚写入的新状态（"搁置后又跳回""完成变回未完成"）。
+        // 改为增量后：没改过的行根本不发出，云端的新状态不会被顶掉。
+        // 拉取侧由 mergeCloudStateBeforeUpload 负责把云端值合并回本地未改动的行。
+        const _cloudProjIds = new Set((await fetchAllRows('projects', 1000, 'id')).map(r => r.id));
+        const _cloudTaskIds = new Set((await fetchAllRows('tasks', 1000, 'id')).map(r => r.id));
+        const _isDirty = (rec, cloudIds) => hasPendingMod(rec) || !cloudIds.has(rec.id);
+
         const projectsData = [];
         appData.projects.forEach(p => {
+            if (!_isDirty(p, _cloudProjIds)) return;   // 【v21.59】未改动 → 不上传
             // 保留项目真实完成状态；活跃项目可能是 active 或 done（已完成未归档）
             const realStatus = (p.status === 'done' || calcStatus(p.nodes) === 'done') ? 'done' : (p.status || 'active');
             projectsData.push(mapProject({ ...p, status: realStatus, archived_at: null, shelved_at: null,
                 terminated_at: null, reason: null }));
         });
         appData.archived.forEach(item => {
-            const p = { ...item.projectData, status: 'archived', archived_at: item.archivedAt || new Date()
+            const pd = item && item.projectData;
+            if (!pd || !_isDirty(pd, _cloudProjIds)) return;   // 【v21.59】未改动 → 不上传
+            const p = { ...pd, status: 'archived', archived_at: item.archivedAt || new Date()
                     .toISOString(), shelved_at: null, terminated_at: null, reason: null };
             projectsData.push(mapProject(p));
         });
         appData.shelved.forEach(item => {
-            const p = { ...item.projectData, status: 'shelved', shelved_at: item.shelvedAt || new Date()
+            const pd = item && item.projectData;
+            if (!pd || !_isDirty(pd, _cloudProjIds)) return;   // 【v21.59】未改动 → 不上传
+            const p = { ...pd, status: 'shelved', shelved_at: item.shelvedAt || new Date()
                     .toISOString(), archived_at: null, terminated_at: null, reason: null };
             projectsData.push(mapProject(p));
         });
         appData.terminated.forEach(item => {
-            const p = { ...item.projectData, status: 'terminated', terminated_at: item.terminatedAt || new Date()
+            const pd = item && item.projectData;
+            if (!pd || !_isDirty(pd, _cloudProjIds)) return;   // 【v21.59】未改动 → 不上传
+            const p = { ...pd, status: 'terminated', terminated_at: item.terminatedAt || new Date()
                     .toISOString(), archived_at: null, shelved_at: null, reason: item.reason || null };
             projectsData.push(mapProject(p));
         });
 
-        const projectIds = new Set(projectsData.map(p => p.id));
+        // 【v21.59】注意：projectIds 必须用**全部项目 id**，不能用上面 projectsData 的 id。
+        // projectsData 现在只含"脏行"（增量上传），若用它过滤 tasksData / workLogsData，
+        // 会把未改动项目的任务与日志一起误删出上传批次（那些行本来就不该动）。
+        const projectIds = new Set();
+        appData.projects.forEach(p => p && p.id && projectIds.add(p.id));
+        (appData.archived || []).forEach(a => a && a.projectData && a.projectData.id && projectIds.add(a.projectData.id));
+        (appData.shelved || []).forEach(s => s && s.projectData && s.projectData.id && projectIds.add(s.projectData.id));
+        (appData.terminated || []).forEach(t => t && t.projectData && t.projectData.id && projectIds.add(t.projectData.id));
 
+        // 【v21.59】tasks 同样增量：只上传本机改过的任务行 + 云端不存在的新任务。
+        // 症状对应："刚勾选完成的任务被另一个实例用 completed=false 整表覆盖回未完成"。
         let tasksData = appData.tasks.map(mapTask);
         let workLogsData = appData.workLogs.map(mapWorkLog);
         let settlementsData = appData.settlements.map(mapSettlement);
 
+        const _dirtyTaskIds = new Set(appData.tasks.filter(t => t && t.id && _isDirty(t, _cloudTaskIds)).map(t => t.id));
+        const _allTasksBefore = tasksData.length;
+        tasksData = tasksData.filter(t => _dirtyTaskIds.has(t.id));
+        if (_allTasksBefore !== tasksData.length) {
+            console.log('📤 增量上传：任务 ' + _allTasksBefore + ' 条 → 仅发送 ' + tasksData.length + ' 条（本机改动过的）');
+        }
         tasksData = tasksData.filter(t => projectIds.has(t.project_id));
         // 【v21.23 修复】原来把"指向不存在项目的日志"直接丢弃。这样不仅该日志永远同步不上
         // （每次拉取又被云端旧数据覆盖），更糟的是：只要漏过一条，它会带着 project_id 进入
@@ -4214,6 +4540,9 @@ async function syncToSupabase(createSnapshotFlag = false) {
             clearNodesEdits((appData.archived || []).map(a => a && a.projectData));
             clearNodesEdits((appData.shelved || []).map(s => s && s.projectData));
             clearNodesEdits((appData.terminated || []).map(t => t && t.projectData));
+            // 【v21.59】云端已确认接收 → 清除"本机待上传"标记（含任务完成态快照）
+            clearModMarks();
+            appData._modAtPending = {};
             try { localStorage.setItem(STORAGE_KEY, JSON.stringify(appData)); } catch (e) {}
             _pendingUpload = false;   // 已成功上传，清除“有待上传修改”标记
             // 上传成功后创建版本快照（仅手动上传时），并重新加载云端数据
@@ -5343,11 +5672,13 @@ function renderHome(mc) {
                     t.completedDate = today;
                     t.endDate = today;
                     markTaskDoneEdited(t);   // 【v21.25】本地改动标记
+                    markModified(t);   // 【v21.59】记录级修改标记（须在完成态赋值之后）
                 }
             });
             p.status = 'done';
             p.doneDate = today;
             markProjectNodesEdited(p);   // 【v21.27】本地节点改动标记，上传前合并以本地为准
+            markModified(p);   // 【v21.59】记录级修改时间戳
             saveData();
             syncSettlementsWithProjects();
             renderHome(document.getElementById('mainContent'));
@@ -5375,14 +5706,16 @@ function renderHome(mc) {
                     t.endDate = t.dueDate || t.planDate || null;
                 }
                 markTaskDoneEdited(t);   // 【v21.25】节点状态由本地改动，上传前合并以本地为准
+                markModified(t);   // 【v21.59】记录级修改标记（须在完成态赋值之后）
             }
             p.status = calcStatus(p.nodes);
             // 【v21.26 / P2】取消节点完成后必须清掉 doneDate：否则结算页/月度完成统计仍按
             // 旧完成日期显示（项目"未完成"却出现在已完成的月度计数里）。
             if (p.status === 'done') { if (!p.doneDate) p.doneDate = fmtLocal(); }
             else { p.doneDate = null; }
-            // 【v21.27】本地改过节点 → 打标记，防止上传前的云端合并把刚取消的完成态顶回去
+            // 【v21.27】本地改过节点 → 打标记，防止上传前的云端合并把刚取消的完成态顶回来
             markProjectNodesEdited(p);
+            markModified(p);   // 【v21.59】记录级修改时间戳
             saveData();
             syncSettlementsWithProjects();
             renderHome(document.getElementById('mainContent'));
@@ -5427,7 +5760,11 @@ function renderHome(mc) {
             showPrompt('请输入搁置原因：', '', function(reason) {
                 if (reason === null || reason === undefined) return;
                 if (reason.trim() === '') { showAlert('搁置原因不能为空'); return; }
-                appData.shelved.push({ projectData: _stashProjectTasks(p, pid), reason: reason.trim(), shelvedAt: fmtLocal() });
+                const _shelvedData = _stashProjectTasks(p, pid);
+                // 【v21.59】记录级修改时间戳：搁置是"归属变更"，必须让云端知道这行刚被本机改过，
+                // 否则其它浏览器实例的整表上传会用旧归属（还在主表）覆盖回来 → 表现为"搁置后又跳回"。
+                markModified(_shelvedData);
+                appData.shelved.push({ projectData: _shelvedData, reason: reason.trim(), shelvedAt: fmtLocal() });
                 appData.projects = appData.projects.filter(pr => pr.id !== pid);
                 appData.tasks = appData.tasks.filter(t => t.projectId !== pid);
                 saveData();
@@ -5442,7 +5779,9 @@ function renderHome(mc) {
             if (!p) { showAlert('项目不存在'); return; }
             if (calcStatus(p.nodes) !== 'done') { showAlert('仅已完成项目可归档'); return; }
             showConfirm('确认归档此项目？', function() {
-                appData.archived.push({ projectData: _stashProjectTasks(p, pid), archivedAt: fmtLocal() });
+                const _archivedData = _stashProjectTasks(p, pid);
+                markModified(_archivedData);   // 【v21.59】记录级修改时间戳（归档归属变更）
+                appData.archived.push({ projectData: _archivedData, archivedAt: fmtLocal() });
                 appData.projects = appData.projects.filter(pr => pr.id !== pid);
                 appData.tasks = appData.tasks.filter(t => t.projectId !== pid);
                 saveData();
@@ -5458,7 +5797,9 @@ function renderHome(mc) {
             showPrompt('请输入终止原因：', '', function(reason) {
                 if (reason === null || reason === undefined) return;
                 if (reason.trim() === '') { showAlert('终止原因不能为空'); return; }
-                appData.terminated.push({ projectData: _stashProjectTasks(p, pid), reason: reason.trim(), terminatedAt: fmtLocal() });
+                const _terminatedData = _stashProjectTasks(p, pid);
+                markModified(_terminatedData);   // 【v21.59】记录级修改时间戳（终止归属变更）
+                appData.terminated.push({ projectData: _terminatedData, reason: reason.trim(), terminatedAt: fmtLocal() });
                 appData.projects = appData.projects.filter(pr => pr.id !== pid);
                 appData.tasks = appData.tasks.filter(t => t.projectId !== pid);
                 saveData();
@@ -5533,6 +5874,9 @@ function toggleTask(tid, chk) {
         t.completedDate = null;
         t.endDate = t.dueDate || t.planDate || null;
     }
+    // 【v21.59】必须在 completedDate/endDate 赋值之后再打标：
+    // markModified 会把完成态快照进 _modAtPending（供拉取后回填），早了会存到旧值。
+    markModified(t);   // 任务完成态需跨实例裁决，否则被别的实例整表覆盖回未完成
     if (t.projectId && t.nodeIndex !== undefined && t.nodeIndex >= 0) {
         const p = appData.projects.find(pr => pr.id === t.projectId);
         if (p && p.nodes[t.nodeIndex]) {
@@ -6086,6 +6430,7 @@ function renderProjects(mc) {
             p.tag = document.getElementById('eTag').value;
             p.important = document.getElementById('eImportant').checked;
             p.urgent = document.getElementById('eUrgent').checked;
+            markModified(p);   // 【v21.59】记录级修改时间戳
             saveData();
             syncSettlementsWithProjects();
             closeModal();
@@ -6675,6 +7020,7 @@ function renderProjects(mc) {
             });
             p.status = calcStatus(p.nodes);
             markProjectNodesEdited(p);   // 【v21.27】分配任务会改节点状态，同样打本地改动标记
+            markModified(p);   // 【v21.59】记录级修改时间戳
             saveData();
             syncSettlementsWithProjects();
             delete window._selectedNodes[pid];
@@ -8179,6 +8525,7 @@ function renderArchived(mc) {
             const _newId = getNextId();
             s.projectData.id = _newId;
             _restoreProjectTasks(s.projectData, _oldId, _newId);   // 【v21.26 / #26】挂回任务
+            markModified(s.projectData);   // 【v21.59】恢复（从搁置移回主表）也属归属变更，需打时间戳
             appData.projects.push(s.projectData);
             appData.shelved.splice(idx, 1);
             saveData();
@@ -8195,6 +8542,7 @@ function renderArchived(mc) {
             const _newId = getNextId();
             s.projectData.id = _newId;
             _restoreProjectTasks(s.projectData, _oldId, _newId);   // 【v21.26 / #26】挂回任务
+            markModified(s.projectData);   // 【v21.59】恢复（从终止移回主表）归属变更
             appData.projects.push(s.projectData);
             appData.terminated.splice(idx, 1);
             saveData();
@@ -8211,6 +8559,7 @@ function renderArchived(mc) {
             const _newId = getNextId();
             a.projectData.id = _newId;
             _restoreProjectTasks(a.projectData, _oldId, _newId);   // 【v21.26 / #26】挂回任务
+            markModified(a.projectData);   // 【v21.59】恢复（从归档移回主表）归属变更
             appData.projects.push(a.projectData);
             appData.archived.splice(idx, 1);
             saveData();
