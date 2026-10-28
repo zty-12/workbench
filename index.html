@@ -1,5 +1,20 @@
 <!DOCTYPE html>
 <!-- ============================================================
+     v21.61-node-task-sync  2026-10-28
+     修复「节点作为工作任务分配后，点击完成任务，对应的项目节点没有一并切到完成 /
+       过一会儿又变回未完成」：
+       根因：toggleTask 在完成关联任务时虽然把 node.status 改成 done（与 cycleNode 一致），
+       但其节点分支只调用 markProjectNodesEdited(p)（打时间受限的 _nodesAt，TTL 10 分钟），
+       漏掉 markModified(p)（打 _modAt）。mergeCloudStateBeforeUpload → mergeProjectNodes
+       的守卫顺序是 hasFreshNodesEdit（仅 10 分钟）再 hasPendingMod；超过 TTL 后的下一次
+       同步会走"云端为权威"分支，把本地刚置 done 的节点按云端陈旧值改回 progress/pending。
+       cycleNode 早已同时打两标记，此处对齐。
+       修复（1 处）：
+         ① toggleTask 节点分支补 markModified(p)（在完成态赋值之后），
+           使"任务完成→节点 done"带 _modAt，任何时刻的合并都以本地为准、不再回退。
+       说明：问题②"分配节点为任务时自动置进行中"此前已在 assignFromSelection 实现
+       （node.status='progress' + markModified(p)），本次一并纳入回归验证，确认其耐久。
+     ------------------------------------------------------------
      v21.60-mobile-split  2026-10-28
      修复「恢复（回退）到某个历史版本后，下一次同步又被云端最新版覆盖回去」：
        根因：applySnapshotPayload 只会从「拉取前本地缓存 _localCache」回填 _modAt，
@@ -667,7 +682,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.60">
+    <meta name="app-version" content="21.61">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -5948,6 +5963,11 @@ function toggleTask(tid, chk) {
             else { p.doneDate = null; }
             // 【v21.27】节点由本地改动 → 打标记，避免上传前合并把 done 顶回来（双端冲突）
             markProjectNodesEdited(p);
+            // 【v21.61】必须补 markModified(p)：否则项目只带时间受限的 _nodesAt（10 分钟），
+            // 超过 TTL 后的下一次同步会走 mergeProjectNodes 的"云端为权威"分支，把刚完成的
+            // 节点状态（done）按云端陈旧值改回 progress/pending —— 现象即"完成任务后项目节点
+            // 没一并切到完成 / 过一会儿又变回未完成"。cycleNode 已同时打两标记，此处对齐。
+            markModified(p);
             saveData(true);
             syncSettlementsWithProjects();
         }
