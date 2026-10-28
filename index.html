@@ -1,6 +1,22 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.59-mobile-split  2026-10-28  ★ 当前最新稿
+     v21.60-mobile-split  2026-10-28
+     修复「恢复（回退）到某个历史版本后，下一次同步又被云端最新版覆盖回去」：
+       根因：applySnapshotPayload 只会从「拉取前本地缓存 _localCache」回填 _modAt，
+       而旧快照绝大多数记录没有 _modAt（createSnapshot 创建时已剥离该标记）→ 恢复后
+       这些记录被当成"未改动"→ 下次 syncToSupabase → mergeCloudStateBeforeUpload 走
+       "本地无 _modAt → 以云端为准"分支，把刚恢复的旧版本整体覆盖回云端最新版；
+       且 mergeProjectNodes 只认 hasFreshNodesEdit、不认 hasPendingMod → 节点/项目状态
+       也被云端顶回最新 → 用户看到"恢复为之前某个版本后，下一次同步又把它覆盖成最新的"。
+       修复（共 3 处）：
+         ① 新增 markAllRestoredAsModified()：restoreSnapshotById / restoreLatestSnapshot
+            恢复旧版本后，给全部恢复出来的项目(全桶)/任务/日志打 _modAt + 置 _pendingUpload
+            + 立即 syncToSupabase(true) 推送并生成新快照，使恢复版本成为"最新"。
+         ② mergeProjectNodes 增加 hasPendingMod 守卫：本机刚恢复/改过的项目节点与整体状态
+            以本地为准，不再被云端最新版覆盖回去。
+         ③ 头部注释 / app-version：21.59 → 21.60。
+
+     v21.59-mobile-split  2026-10-28  ★ 上一稿
     修复「搁置的项目上传成功后跳回之前正常的状态；点击完成的任务又变回未完成状态」：
       云端取证（projects 表 83 行 / tasks 表 12 行 / snapshots 表 68 份）确认是**同一个根因**：
       ① projects 表 83 行的 updated_at **全部是同一毫秒**（2026-10-28T03:13:02.024+00:00）
@@ -651,7 +667,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.59">
+    <meta name="app-version" content="21.60">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1992,6 +2008,22 @@ function clearModMarks() {
     (appData.terminated || []).forEach(t => t && t.projectData && delete t.projectData._modAt);
     strip(appData.tasks);
 }
+// 【v21.60】恢复（回退）到某个历史版本后，给所有恢复出来的记录统一打"本机待上传"标记。
+// 根因：applySnapshotPayload 只会从「拉取前本地缓存」回填 _modAt，而旧快照里绝大多数记录
+//       没有 _modAt（快照存储时剥离了它）→ 恢复后这些记录被视为"未改动" → 下一次同步
+//       mergeCloudStateBeforeUpload 走"本地无 _modAt → 以云端为准"分支，把刚恢复的旧版本
+//       整体覆盖回云端最新版（用户现象："恢复为之前某个版本后，下一次同步又把它覆盖掉改成最新的"）。
+// 解决：恢复后显式给全部记录打 _modAt + 置 _pendingUpload + 立即 syncToSupabase(true) 推送并生成新快照，
+//       使恢复版本成为"最新"，且上传合并时本机赢、云端最新版不会顶回来。
+function markAllRestoredAsModified() {
+    const _touch = (rec) => { if (rec && rec.id) rec._modAt = Date.now(); };
+    (appData.projects || []).forEach(_touch);
+    (appData.archived || []).forEach(a => a && a.projectData && _touch(a.projectData));
+    (appData.shelved || []).forEach(s => s && s.projectData && _touch(s.projectData));
+    (appData.terminated || []).forEach(t => t && t.projectData && _touch(t.projectData));
+    (appData.tasks || []).forEach(_touch);
+    (appData.workLogs || []).forEach(_touch);
+}
 // 【v21.59】拉取后回填"本机待上传的改动" —— 核心保护
 // ------------------------------------------------------------
 // 云端重建 appData.projects/archived/shelved/terminated/tasks 时，会用云端行整体替换本地，
@@ -2210,6 +2242,9 @@ function mergeCloudProjectsIntoLocal(cloudProjects) {
         const cp = pById.get(localProject.id);
         if (!cp || !Array.isArray(cp.nodes)) return;
         if (hasFreshNodesEdit(localProject)) { projMerged++; return; }
+        // 【v21.60】本机刚恢复/修改过的项目（带 _modAt）：节点状态与整体状态均以本地为准，
+        // 不被云端最新版覆盖回去（否则"恢复旧版本"后节点/状态仍会被云端顶回最新）。
+        if (hasPendingMod(localProject)) { projMerged++; return; }
 
         if (cp.nodes.length === localProject.nodes.length) {
             localProject.nodes.forEach((ln, i) => {
@@ -2253,6 +2288,9 @@ function mergeCloudProjectsIntoLocal(cloudProjects) {
     // 合并后按本地 nodes 重算项目整体状态：云端权威合并已做完，
     // 此处只是把 status/doneDate 与 nodes 收敛到一致（取消完成必须能回退）。
     appData.projects.forEach(p => {
+        // 【v21.60】本机刚恢复/修改过的项目：状态与完成日期以本地为准，不做"按节点重算"覆盖
+        // （否则恢复旧版本后，原版本里存储的 status 会被按当前节点重新推导改写，仍属"被覆盖"）。
+        if (hasPendingMod(p)) { projMerged++; return; }
         const calc = calcStatus(p.nodes);
         if (p.status !== calc) { p.status = calc; projMerged++; }
         if (calc === 'done') {
@@ -3908,7 +3946,19 @@ async function loadFromSupabase() {
             if (error) throw error;
             if (!data || !data.payload) throw new Error('快照不存在或数据无效');
             applySnapshotPayload(data.payload);
+            // 【v21.60】恢复旧版本后必须打"本机待上传"标记并重新上传固化，否则下一次同步会被云端最新版覆盖回去。
+            markAllRestoredAsModified();
+            _pendingUpload = true;
+            try { saveData(); } catch (e) {}
             renderPage(currentPage);
+            updateSyncStatus('已恢复版本 ' + (data.version || '') + '，正在上传固化…', 'syncing');
+            try {
+                // 推送旧版本到云端 + 生成新快照（使其变为"最新版本"，其它设备恢复最新即得到此版本）
+                await syncToSupabase(true);
+            } catch (e) {
+                // 上传失败也保留本地恢复结果，等下次自动同步（本地已带 _modAt）继续重试推送
+                console.warn('⚠️ 恢复版本后上传固化失败，将在下次同步重试:', e);
+            }
             updateSyncStatus('已恢复版本 ' + (data.version || ''), 'success');
             console.log('✅ 已恢复指定版本:', data.version, data.created_at);
         }
@@ -3916,7 +3966,17 @@ async function loadFromSupabase() {
         async function restoreLatestSnapshot() {
             const ok = await loadLatestSnapshot();
             if (!ok) throw new Error('没有可用的版本快照');
+            // 【v21.60】显式恢复"最新版本"同样打标固化，确保本机改动优先、不被其它实例顶回
+            markAllRestoredAsModified();
+            _pendingUpload = true;
+            try { saveData(); } catch (e) {}
             renderPage(currentPage);
+            updateSyncStatus('已恢复最新版本，正在上传固化…', 'syncing');
+            try {
+                await syncToSupabase(true);
+            } catch (e) {
+                console.warn('⚠️ 恢复最新版本后上传固化失败，将在下次同步重试:', e);
+            }
             updateSyncStatus('已恢复最新版本', 'success');
         }
 
