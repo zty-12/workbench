@@ -1,5 +1,22 @@
 <!DOCTYPE html>
 <!-- ============================================================
+     v21.62-mobile-split  2026-10-30
+     修复「第二天打开工作台，数据是之前的旧数据，强制刷新(Ctrl+Shift+R)后才对」：
+       根因：Service Worker 的 fetch 处理器对所有 GET 请求都拦截，包括**跨域的 Supabase REST API
+       请求**。旧版 sw.js 的“其它静态资源”分支会 `caches.match(req)` 命中即返回、并 `cache.put` 把
+       响应写入 Cache API —— 于是 Supabase 的查询结果（projects/tasks/work_logs 等）被 SW 缓存。
+       普通打开走 SW，Supabase 查询直接命中 SW 缓存里的**旧数据**喂给页面 → 显示旧数据；
+       而 Ctrl+Shift+R 会**绕过 SW** 直连网络 + no-store → 拿到真最新数据。这与 v21.55 的
+       “必须强刷才见最新版”是同一类表象，但 v21.55 只修了 index.html 导航的 no-store，漏掉了
+       跨域数据请求也会被 SW 缓存这一层。
+       修复（仅 sw.js，1 处）：
+         ① fetch 处理器对**跨域请求**（url.origin !== 页面 origin，即 supabase.co）一律
+            `fetch(req,{cache:'no-store'})` 直连网络、**绝不缓存**，从根上杜绝旧数据被 SW 回放。
+            同域导航请求仍走 no-store 网络优先（保留离线 fallback 到 .）；同域静态资源保持缓存优先。
+         ② CACHE_NAME 升 v47，旧缓存(v46 及以前，含过期 Supabase 响应)在 activate 时清空。
+       说明：index.html 仅升 app-version(21.61→21.62) 触发版本探测自动刷新，使旧页面打开即重载新 SW。
+       纯 SW 缓存策略改动，不动任何业务/同步逻辑。
+     ------------------------------------------------------------
      v21.61-node-task-sync  2026-10-28
      修复「节点作为工作任务分配后，点击完成任务，对应的项目节点没有一并切到完成 /
        过一会儿又变回未完成」：
@@ -682,7 +699,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.61">
+    <meta name="app-version" content="21.62">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
