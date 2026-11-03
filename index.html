@@ -1,12 +1,16 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.64-district-typo  2026-11-03
-     修正辖区错别字：「敦头镇」→「墩头镇」。
-       1) 默认辖区列表（3 处字面量：头部注释 / appData.districts / ensureColors 迁移兜底）全部改为「墩头镇」。
-       2) ensureColors() 内新增错别字自动修正：已落盘 localStorage / 云端快照里的
-          districts 数组元素与 companyDistricts 键值中的「敦头镇」一律替换为「墩头镇」，
-          兼容迁移后旧数据自动纠正（纯展示层修正，下次 saveData 落盘为正确值）。
-       3) 版本戳 21.63 → 21.64 触发版本探测自动刷新。
+     v21.65-project-filter-district-count  2026-11-03
+     项目总表：辖区列筛选 + 项目数量统计（筛选后自动更新）。
+       1) 辖区列筛选：PC 表头「辖区」列与移动端卡片 header 各新增筛选下拉
+          （全部辖区 / 各辖区 / 未设辖区），选择后只显示该辖区的公司行/卡片；
+          与「类型」列筛选（点表头）为 AND 组合，可叠加使用。
+       2) 新增 window._districtFilter 状态（'all' / 辖区名 / '__none__'=未设辖区）；
+          辅助函数 districtFilterOptionsHtml / districtMatchesFilter / toggleDistrictFilter。
+       3) 「清除筛选」按钮条件扩展：类型或辖区任一筛选激活即显示，点击同时重置两者。
+       4) 项目数量统计：总表左上角（标题旁）徽章「📊 项目 N · 公司 M」，按当前
+          类型+辖区+折叠 筛选后的可见公司/项目实时统计，随筛选自动更新（renderProjects 内计算）。
+       5) 版本戳 21.64 → 21.65 触发版本探测自动刷新。
        纯增量改动，未触碰同步/合并逻辑。
      ------------------------------------------------------------
      v21.62-mobile-split  2026-10-30
@@ -708,7 +712,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.64">
+    <meta name="app-version" content="21.65">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -2542,6 +2546,27 @@ async function mergeCloudStateBeforeUpload() {
             const ds = Array.isArray(appData.districts) ? appData.districts : [];
             const opts = ds.map(d => `<option value="${escAttr(d)}" ${d === selected ? 'selected' : ''}>${esc(d)}</option>`).join('');
             return opts + `<option value="__ADD__">➕ 新增辖区…</option>`;
+        }
+        // 【v21.65】辖区列筛选下拉选项（表头用，不含「新增辖区」）
+        function districtFilterOptionsHtml(selected) {
+            const ds = Array.isArray(appData.districts) ? appData.districts : [];
+            let opts = '<option value="all"' + (selected === 'all' ? ' selected' : '') + '>全部辖区</option>';
+            ds.forEach(d => { opts += `<option value="${escAttr(d)}" ${d === selected ? 'selected' : ''}>${esc(d)}</option>`; });
+            opts += '<option value="__none__"' + (selected === '__none__' ? ' selected' : '') + '>未设辖区</option>';
+            return opts;
+        }
+        // 【v21.65】辖区列筛选匹配：comp 的公司辖区是否满足当前辖区筛选
+        function districtMatchesFilter(comp) {
+            const f = window._districtFilter || 'all';
+            if (f === 'all') return true;
+            const d = (appData.companyDistricts && appData.companyDistricts[comp]) || '';
+            if (f === '__none__') return d === '';
+            return d === f;
+        }
+        // 【v21.65】辖区列筛选切换（表头下拉 / 移动端下拉）
+        function toggleDistrictFilter(v) {
+            window._districtFilter = v || 'all';
+            renderProjects(document.getElementById('mainContent'));
         }
         // 项目总表公司行用的辖区下拉
         function districtSelectHtml(comp) {
@@ -6318,7 +6343,7 @@ function renderProjects(mc) {
         // ===== 【v21.1】移动端卡片式项目总表 =====
         if (_isMobile) {
             let cards = '<div class="card" id="projectsCard" style="flex:1;">';
-            cards += '<div class="card-header"><h3>📁 项目总表</h3>';
+            cards += '<div class="card-header"><h3>📁 项目总表 <span id="projStatBadge" style="font-size:12px;font-weight:600;color:#2a5f8f;background:#e8f1fa;border:1px solid #cfe0f5;border-radius:30px;padding:2px 10px;margin-left:8px;vertical-align:middle;white-space:nowrap;">📊 项目 0 · 公司 0</span></h3>';
             // 【v21.15】移动端：按钮与"全部类型"下拉框合并到同一行
             cards += '<div class="m-proj-header-actions">';
             cards += '<button class="btn btn-primary btn-sm" onclick="openAddCompanyModal()" title="新增公司">+</button>';
@@ -6331,20 +6356,28 @@ function renderProjects(mc) {
                 cards += '<option value="'+t.id+'"'+(filterTemplateId===t.id?' selected':'')+'>'+esc(t.name)+'</option>';
             });
             cards += '</select>';
-            if (filterTemplateId !== 'all') cards += '<button class="btn btn-sm btn-ghost" onclick="clearProjectFilter()">清除</button>';
+            // 【v21.65】移动端辖区列筛选下拉
+            cards += '<select class="m-filter-select" onchange="toggleDistrictFilter(this.value)" style="max-width:110px;">' + districtFilterOptionsHtml(window._districtFilter || 'all') + '</select>';
+            if (filterTemplateId !== 'all' || (window._districtFilter || 'all') !== 'all') cards += '<button class="btn btn-sm btn-ghost" onclick="clearProjectFilter()">清除</button>';
             cards += '</div></div>';
 
             // 公司卡片列表
             cards += '<div class="m-proj-cards">';
+            let visibleCompCount = 0, visibleProjectCount = 0;
             appData.companies.forEach((comp, ci) => {
                 let hasMatching = true;
                 if (filterTemplateId !== 'all') {
                     hasMatching = allProjects.some(p => p.company === comp && p.templateId === filterTemplateId);
                 }
                 if (!hasMatching) return;
+                // 【v21.65】辖区列筛选：公司辖区不匹配则隐藏该卡片
+                if (!districtMatchesFilter(comp)) return;
 
                 const compProjects = allProjects.filter(p => p.company === comp);
                 if (hideDoneProjects && compProjects.length > 0 && compProjects.every(isProjectDone)) return;
+                // 【v21.65】统计可见公司数 + 项目数（筛选后自动更新；类型筛选激活时只数匹配类型项目）
+                visibleCompCount++;
+                visibleProjectCount += compProjects.filter(p => (filterTemplateId === 'all' || p.templateId === filterTemplateId)).length;
                 const activeProjects = compProjects.filter(p => p._status === 'active');
                 const inactiveProjects = compProjects.filter(p => p._status !== 'active');
                 const progPct = companyProgress[comp];
@@ -6403,6 +6436,9 @@ function renderProjects(mc) {
             cards += '</div>'; // m-proj-cards
             cards += '</div>'; // card
             mc.innerHTML = cards;
+            // 【v21.65】统计徽章：筛选后自动更新
+            const _mBadge = document.getElementById('projStatBadge');
+            if (_mBadge) _mBadge.textContent = '📊 项目 ' + visibleProjectCount + ' · 公司 ' + visibleCompCount;
             return; // 移动端渲染完毕，不再执行 PC 表格逻辑
         }
 
@@ -6411,7 +6447,7 @@ function renderProjects(mc) {
         let html = `
             <div class="card ${freezeState ? 'freeze-enabled' : ''}" id="projectsCard" style="flex:1;">
               <div class="card-header">
-                <h3>📁 项目总表</h3>
+                <h3>📁 项目总表 <span id="projStatBadge" style="font-size:12px;font-weight:600;color:#2a5f8f;background:#e8f1fa;border:1px solid #cfe0f5;border-radius:30px;padding:2px 10px;margin-left:8px;vertical-align:middle;white-space:nowrap;">📊 项目 0 · 公司 0</span></h3>
                 <div>
                   <button class="btn btn-primary btn-sm" onclick="openAddCompanyModal()">+ 新增公司</button>
                   <button class="btn btn-sm" onclick="openBatchImport()">📋 批量导入</button>
@@ -6419,7 +6455,7 @@ function renderProjects(mc) {
                   <!-- 新增冻结列按钮 -->
                   <button class="btn btn-sm" onclick="toggleFreeze('projects')">📌 ${freezeState ? '取消冻结' : '冻结列'}</button>
                   <button class="btn btn-sm" onclick="toggleHideDoneProjects()" title="折叠已完成项目">${window._hideDoneProjects ? '显示已完成' : '折叠已完成'}</button>
-                  ${filterTemplateId !== 'all' ? `<button class="btn btn-sm btn-ghost" onclick="clearProjectFilter()">清除筛选</button>` : ''}
+                  ${(filterTemplateId !== 'all' || (window._districtFilter || 'all') !== 'all') ? `<button class="btn btn-sm btn-ghost" onclick="clearProjectFilter()">清除筛选</button>` : ''}
                   <span style="font-size:11px;color:#6c7a94;margin-left:6px;">💡 拖动 ☰ 调整公司顺序</span>
                 </div>
               </div>
@@ -6430,7 +6466,9 @@ function renderProjects(mc) {
                       <th style="cursor:default;width:30px;">☰</th>
                       <!-- 公司列添加 sticky-col -->
                       <th class="sticky-col" style="cursor:default;">公司</th>
-                      <th style="cursor:default;min-width:110px;">辖区</th>`;
+                      <th style="cursor:default;min-width:120px;">辖区
+                        <select class="district-filter-select" onchange="toggleDistrictFilter(this.value)" style="display:block;width:100px;margin:4px auto 0;padding:3px 4px;border-radius:8px;border:1px solid #e2e8f0;font-size:11px;background:#fff;">${districtFilterOptionsHtml(window._districtFilter || 'all')}</select>
+                      </th>`;
         appData.templates.forEach(t => {
             const isActive = filterTemplateId === t.id;
             html +=
@@ -6439,15 +6477,21 @@ function renderProjects(mc) {
         html += `<th style="cursor:default;">总进度</th><th style="cursor:default;">操作</th></tr></thead>
                 <tbody id="projectTableBody">`;
 
+        let visibleCompCount = 0, visibleProjectCount = 0;
         appData.companies.forEach((comp, ci) => {
             let hasMatching = true;
             if (filterTemplateId !== 'all') {
                 hasMatching = allProjects.some(p => p.company === comp && p.templateId === filterTemplateId);
             }
             if (!hasMatching) return;
+            // 【v21.65】辖区列筛选：公司辖区不匹配则隐藏该行
+            if (!districtMatchesFilter(comp)) return;
 
             const allInactive = isAllInactive(comp);
             if (hideDoneProjects && allProjects.filter(p => p.company === comp).every(isProjectDone)) return;
+            // 【v21.65】统计可见公司数 + 项目数（筛选后自动更新；类型筛选激活时只数匹配类型项目）
+            visibleCompCount++;
+            visibleProjectCount += allProjects.filter(p => p.company === comp && (filterTemplateId === 'all' || p.templateId === filterTemplateId)).length;
             let rowBg = '';
             if (allInactive) {
                 const statuses = ['terminated', 'shelved', 'archived'];
@@ -6485,6 +6529,9 @@ function renderProjects(mc) {
         });
         html += `</tbody></table></div></div>`;
         mc.innerHTML = html;
+        // 【v21.65】统计徽章：筛选后自动更新
+        const _pBadge = document.getElementById('projStatBadge');
+        if (_pBadge) _pBadge.textContent = '📊 项目 ' + visibleProjectCount + ' · 公司 ' + visibleCompCount;
 
         // 初始化行拖拽排序
         const tbody = document.getElementById('projectTableBody');
@@ -6541,6 +6588,7 @@ function renderProjects(mc) {
         }
 
         function clearProjectFilter() { window._projectFilter = 'all';
+            window._districtFilter = 'all';
             renderProjects(document.getElementById('mainContent')); }
 
         // ============================================================
