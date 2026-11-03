@@ -1,16 +1,12 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.63-district-column  2026-11-03
-     新增「辖区（乡镇/园区）」功能 + 折叠已完成状态记忆：
-       1) 项目总表：在公司列后新增「辖区」列，做成下拉选择；选项含
-          开发区/高新区/白甸镇/大公镇/敦头镇/角斜镇/李堡镇/南莫镇/曲塘镇/雅周镇/滨海新区/常安纺织园，
-          并支持在任意下拉里“➕ 新增辖区…”随时追加新辖区（持久化、全端共享）。
-       2) 新增项目弹窗、新增公司弹窗均加入「辖区」下拉，创建时直接写入 公司→辖区 映射；
-          新增项目弹窗切换公司时辖区下拉同步为该公司的已设辖区。
-       3) 数据模型：appData.districts（辖区列表）+ appData.companyDistricts（公司→辖区映射）；
-          ensureColors() 内做兼容迁移，旧数据/旧快照自动补默认辖区列表。
-       4) 「折叠已完成项目」的折叠状态记忆：toggleHideDoneProjects 切换时写入
-          localStorage('hide_done_projects')，loadData 启动时读取，每次打开自动沿用上次状态。
+     v21.64-district-typo  2026-11-03
+     修正辖区错别字：「敦头镇」→「墩头镇」。
+       1) 默认辖区列表（3 处字面量：头部注释 / appData.districts / ensureColors 迁移兜底）全部改为「墩头镇」。
+       2) ensureColors() 内新增错别字自动修正：已落盘 localStorage / 云端快照里的
+          districts 数组元素与 companyDistricts 键值中的「敦头镇」一律替换为「墩头镇」，
+          兼容迁移后旧数据自动纠正（纯展示层修正，下次 saveData 落盘为正确值）。
+       3) 版本戳 21.63 → 21.64 触发版本探测自动刷新。
        纯增量改动，未触碰同步/合并逻辑。
      ------------------------------------------------------------
      v21.62-mobile-split  2026-10-30
@@ -712,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.63">
+    <meta name="app-version" content="21.64">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -2526,7 +2522,7 @@ async function mergeCloudStateBeforeUpload() {
             _deletedWorkLogIds: [],
             _deletedCompanyNames: [],  // 【v21.32】已删除公司的墓碑：上传时从云端精确删除
             // 【v21.63】辖区（乡镇/园区）数据：下拉可选项 + 公司与辖区的映射
-            districts: ['开发区', '高新区', '白甸镇', '大公镇', '敦头镇', '角斜镇', '李堡镇', '南莫镇', '曲塘镇', '雅周镇', '滨海新区', '常安纺织园'],
+            districts: ['开发区', '高新区', '白甸镇', '大公镇', '墩头镇', '角斜镇', '李堡镇', '南莫镇', '曲塘镇', '雅周镇', '滨海新区', '常安纺织园'],
             companyDistricts: {},       // { 公司名: 辖区名 }，未设置的项为 ''
         };
 
@@ -4952,10 +4948,23 @@ async function syncToSupabase(createSnapshotFlag = false) {
         function ensureColors() {
             // 【v21.63】辖区字段兼容迁移：旧数据/旧快照里可能没有，补默认值，保证渲染不报错
             if (!Array.isArray(appData.districts) || appData.districts.length === 0) {
-                appData.districts = ['开发区', '高新区', '白甸镇', '大公镇', '敦头镇', '角斜镇', '李堡镇', '南莫镇', '曲塘镇', '雅周镇', '滨海新区', '常安纺织园'];
+                appData.districts = ['开发区', '高新区', '白甸镇', '大公镇', '墩头镇', '角斜镇', '李堡镇', '南莫镇', '曲塘镇', '雅周镇', '滨海新区', '常安纺织园'];
             }
             if (!appData.companyDistricts || typeof appData.companyDistricts !== 'object') {
                 appData.companyDistricts = {};
+            }
+            // 【v21.64】辖区错别字自动修正：「敦头镇」→「墩头镇」（覆盖已落盘 localStorage / 云端快照数据）
+            if (Array.isArray(appData.districts)) {
+                appData.districts = appData.districts.map(d => (d === '敦头镇' ? '墩头镇' : d));
+            }
+            if (appData.companyDistricts && typeof appData.companyDistricts === 'object') {
+                const _fixedDistricts = {};
+                Object.keys(appData.companyDistricts).forEach(_k => {
+                    const _nk = (_k === '敦头镇' ? '墩头镇' : _k);
+                    const _v = appData.companyDistricts[_k];
+                    _fixedDistricts[_nk] = (_v === '敦头镇' ? '墩头镇' : _v);
+                });
+                appData.companyDistricts = _fixedDistricts;
             }
             if (!appData.settlementStatusColors) {
                 appData.settlementStatusColors = {
