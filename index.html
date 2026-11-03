@@ -1,17 +1,16 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.65-project-filter-district-count  2026-11-03
-     项目总表：辖区列筛选 + 项目数量统计（筛选后自动更新）。
-       1) 辖区列筛选：PC 表头「辖区」列与移动端卡片 header 各新增筛选下拉
-          （全部辖区 / 各辖区 / 未设辖区），选择后只显示该辖区的公司行/卡片；
-          与「类型」列筛选（点表头）为 AND 组合，可叠加使用。
-       2) 新增 window._districtFilter 状态（'all' / 辖区名 / '__none__'=未设辖区）；
-          辅助函数 districtFilterOptionsHtml / districtMatchesFilter / toggleDistrictFilter。
-       3) 「清除筛选」按钮条件扩展：类型或辖区任一筛选激活即显示，点击同时重置两者。
-       4) 项目数量统计：总表左上角（标题旁）徽章「📊 项目 N · 公司 M」，按当前
-          类型+辖区+折叠 筛选后的可见公司/项目实时统计，随筛选自动更新（renderProjects 内计算）。
-       5) 版本戳 21.64 → 21.65 触发版本探测自动刷新。
-       纯增量改动，未触碰同步/合并逻辑。
+     v21.66-district-filter-popup-syncfix  2026-11-03
+     辖区筛选改为「点击表头弹出」+ 修复「开发区筛选为 0 但实际有」。
+       1) 辖区筛选 UI：去掉常驻下拉，改为点击表头「辖区 ▾」弹出菜单
+          （全部辖区/各辖区/未设辖区）；选中后表头自动变成筛选项名（如「开发区 ✕」），
+          再次点击表头即取消筛选。PC 表头与移动端 header 一致。
+       2) 修复「开发区筛选为 0」：根因是 applySnapshotPayload 的
+          Object.keys(payload).forEach 整体覆盖会把本机刚设的辖区抹掉——用户设辖区
+          只调 saveData() 不打 _modAt，拉取旧快照时被覆盖。新增 districts（本地∪快照）
+          与 companyDistricts（同 key 本地优先、快照独有 key 保留）的本地优先合并。
+       3) 版本戳 21.65 → 21.66 触发版本探测自动刷新。
+       纯增量改动，未触碰同步/合并主流程（仅快照拉取处加合并保护）。
      ------------------------------------------------------------
      v21.62-mobile-split  2026-10-30
      修复「第二天打开工作台，数据是之前的旧数据，强制刷新(Ctrl+Shift+R)后才对」：
@@ -712,7 +711,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.65">
+    <meta name="app-version" content="21.66">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -2568,6 +2567,34 @@ async function mergeCloudStateBeforeUpload() {
             window._districtFilter = v || 'all';
             renderProjects(document.getElementById('mainContent'));
         }
+        // 【v21.66】辖区列筛选：点击表头弹出菜单（不筛选时表头不显示筛选框）
+        // 弹出菜单项
+        function districtFilterPopItems(selected) {
+            const ds = Array.isArray(appData.districts) ? appData.districts : [];
+            const _item = (val, label) => {
+                const _sel = (selected === val);
+                return '<div class="df-item" onclick="selectDistrictFilter(\'' + val + '\');event.stopPropagation();" style="padding:7px 12px;font-size:12px;cursor:pointer;' + (_sel ? 'background:#e8f1fa;color:#2a5f8f;font-weight:600;' : 'color:#334155;') + '">' + label + '</div>';
+            };
+            let html = _item('all', '全部辖区');
+            ds.forEach(d => { html += _item(escAttr(d), esc(d)); });
+            html += _item('__none__', '未设辖区');
+            return html;
+        }
+        // 点击表头：未筛选 → 弹出菜单；已筛选 → 取消筛选
+        function toggleDistrictFilterHead(ev) {
+            if (ev && ev.stopPropagation) ev.stopPropagation();
+            const f = window._districtFilter || 'all';
+            if (f !== 'all') { selectDistrictFilter('all'); return; }
+            const pop = document.getElementById('districtFilterPop');
+            if (pop) pop.style.display = (pop.style.display === 'none' ? 'block' : 'none');
+        }
+        // 选择筛选项
+        function selectDistrictFilter(v) {
+            window._districtFilter = v || 'all';
+            const pop = document.getElementById('districtFilterPop');
+            if (pop) pop.style.display = 'none';
+            renderProjects(document.getElementById('mainContent'));
+        }
         // 项目总表公司行用的辖区下拉
         function districtSelectHtml(comp) {
             const sel = (appData.companyDistricts && appData.companyDistricts[comp]) || '';
@@ -3590,6 +3617,19 @@ async function loadFromSupabase() {
                     appData.workLogs = (appData.workLogs || []).concat(_keepWL);
                     console.log('🧩 快照工作日志合并：保留本地独有 ' + _keepWL.length + ' 条（本地有而快照没有）');
                 }
+            }
+            // 【v21.66】辖区数据本地优先合并：快照整体覆盖（上面 Object.keys(payload).forEach 整体赋值）
+            // 会抹掉本机刚设的辖区（如"开发区"）。用户设辖区只调 saveData() 不打 _modAt，
+            // 拉取旧快照时被整体覆盖 → 表现为"开发区筛选为 0 但实际有开发区的公司"。
+            // districts 取 本地∪快照 并集；companyDistricts 同 key 本地优先、快照独有 key 保留
+            // （多端各自新增的公司辖区都不丢）。
+            if (_localCache) {
+                const _locD = Array.isArray(_localCache.districts) ? _localCache.districts : [];
+                const _snapD = Array.isArray(payload.districts) ? payload.districts : [];
+                appData.districts = Array.from(new Set([..._locD, ..._snapD]));
+                const _locCD = (_localCache.companyDistricts && typeof _localCache.companyDistricts === 'object') ? _localCache.companyDistricts : {};
+                const _snapCD = (payload.companyDistricts && typeof payload.companyDistricts === 'object') ? payload.companyDistricts : {};
+                appData.companyDistricts = Object.assign({}, _snapCD, _locCD);
             }
             ensureColors();
             syncSettlementsWithProjects();
@@ -6315,6 +6355,9 @@ function renderProjects(mc) {
 
         const filterTemplateId = window._projectFilter || 'all';
         const hideDoneProjects = window._hideDoneProjects;
+        // 【v21.66】辖区筛选状态（点击表头弹出）：_df 当前筛选项，_dfName 显示名
+        const _df = window._districtFilter || 'all';
+        const _dfName = (_df === '__none__' ? '未设辖区' : (_df === 'all' ? '' : _df));
 
         const companyProgress = {};
         appData.companies.forEach(comp => {
@@ -6357,7 +6400,11 @@ function renderProjects(mc) {
             });
             cards += '</select>';
             // 【v21.65】移动端辖区列筛选下拉
-            cards += '<select class="m-filter-select" onchange="toggleDistrictFilter(this.value)" style="max-width:110px;">' + districtFilterOptionsHtml(window._districtFilter || 'all') + '</select>';
+            // 【v21.66】移动端辖区列筛选：点击弹出菜单（不筛选时只显示「辖区 ▾」按钮）
+            cards += '<div style="position:relative;flex-shrink:0;" onclick="event.stopPropagation();toggleDistrictFilterHead(event)">';
+            cards += '<span style="display:inline-flex;align-items:center;justify-content:center;height:32px;padding:0 10px;border-radius:8px;border:1px solid var(--m-border);font-size:12px;cursor:pointer;' + (_df !== 'all' ? 'background:var(--m-primary);color:#fff;border-color:var(--m-primary);' : 'background:#fff;color:var(--m-text);') + '">' + (_df !== 'all' ? esc(_dfName) + ' ✕' : '辖区 ▾') + '</span>';
+            cards += '<div id="districtFilterPop" style="display:none;position:absolute;top:100%;right:0;z-index:60;background:#fff;border:1px solid var(--m-border);border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,0.18);min-width:130px;max-height:260px;overflow:auto;">' + districtFilterPopItems(_df) + '</div>';
+            cards += '</div>';
             if (filterTemplateId !== 'all' || (window._districtFilter || 'all') !== 'all') cards += '<button class="btn btn-sm btn-ghost" onclick="clearProjectFilter()">清除</button>';
             cards += '</div></div>';
 
@@ -6466,8 +6513,9 @@ function renderProjects(mc) {
                       <th style="cursor:default;width:30px;">☰</th>
                       <!-- 公司列添加 sticky-col -->
                       <th class="sticky-col" style="cursor:default;">公司</th>
-                      <th style="cursor:default;min-width:120px;">辖区
-                        <select class="district-filter-select" onchange="toggleDistrictFilter(this.value)" style="display:block;width:100px;margin:4px auto 0;padding:3px 4px;border-radius:8px;border:1px solid #e2e8f0;font-size:11px;background:#fff;">${districtFilterOptionsHtml(window._districtFilter || 'all')}</select>
+                      <th style="cursor:pointer;min-width:120px;position:relative;text-align:center;" onclick="toggleDistrictFilterHead(event)" title="${_df !== 'all' ? '点击取消辖区筛选' : '点击筛选辖区'}">
+                        <span style="display:inline-block;padding:3px 10px;border-radius:8px;font-size:12px;${_df !== 'all' ? 'background:#2a5f8f;color:#fff;' : 'background:#f1f5f9;color:#475569;'}">${_df !== 'all' ? esc(_dfName) + ' ✕' : '辖区 ▾'}</span>
+                        <div id="districtFilterPop" style="display:none;position:absolute;top:100%;left:0;z-index:60;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,0.18);min-width:130px;max-height:260px;overflow:auto;text-align:left;">${districtFilterPopItems(_df)}</div>
                       </th>`;
         appData.templates.forEach(t => {
             const isActive = filterTemplateId === t.id;
