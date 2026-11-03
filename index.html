@@ -1,16 +1,16 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.66-district-filter-popup-syncfix  2026-11-03
-     辖区筛选改为「点击表头弹出」+ 修复「开发区筛选为 0 但实际有」。
-       1) 辖区筛选 UI：去掉常驻下拉，改为点击表头「辖区 ▾」弹出菜单
-          （全部辖区/各辖区/未设辖区）；选中后表头自动变成筛选项名（如「开发区 ✕」），
-          再次点击表头即取消筛选。PC 表头与移动端 header 一致。
-       2) 修复「开发区筛选为 0」：根因是 applySnapshotPayload 的
-          Object.keys(payload).forEach 整体覆盖会把本机刚设的辖区抹掉——用户设辖区
-          只调 saveData() 不打 _modAt，拉取旧快照时被覆盖。新增 districts（本地∪快照）
-          与 companyDistricts（同 key 本地优先、快照独有 key 保留）的本地优先合并。
-       3) 版本戳 21.65 → 21.66 触发版本探测自动刷新。
-       纯增量改动，未触碰同步/合并主流程（仅快照拉取处加合并保护）。
+     v21.67-district-placeholder-sticky-sync  2026-11-03
+     辖区下拉「未设辖区」占位 + 辖区列冻结(sticky) + 辖区修改强制上传快照。
+       1) 【占位】未设置辖区的公司，其下拉不再默认显示第一个选项（历史上是「开发区」，
+          导致用户误以为该公司是开发区、筛选却为 0）。改为显示「未设辖区」占位项。
+       2) 【冻结】辖区列头随公司列一起冻结（sticky），横向滚动不再跟着滚走。
+          th/td 加 district-header/district-col，left 用 --district-left（JS 按公司列宽写入）。
+       3) 【同步】changeCompanyDistrict/changeModalDistrict/saveNewProject/saveAddCompany
+          改 saveData(true) 强制生成并上传快照——companyDistricts 只存在于快照 payload、
+          无独立表，旧代码 saveData() 只做增量分表上传，导致辖区永远传不到云端、
+          其他设备/重载后丢失。
+       4) 版本戳 21.66 → 21.67 触发版本探测自动刷新。
      ------------------------------------------------------------
      v21.62-mobile-split  2026-10-30
      修复「第二天打开工作台，数据是之前的旧数据，强制刷新(Ctrl+Shift+R)后才对」：
@@ -711,7 +711,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.66">
+    <meta name="app-version" content="21.67">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1699,6 +1699,28 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 #dataReportCard.freeze-enabled tr .sticky-col {
     background-color: inherit !important;
 }
+/* ===== 【v21.67】辖区列也随公司列一起冻结（sticky），横向滚动时不跟着滚走 =====
+   辖区列贴在公司列右侧，left 用 --district-left（JS 按公司列实际宽度写入）。
+   th 单独处理：未冻结时 position:relative（供弹出菜单锚定），冻结时 sticky。 */
+#projectsCard th.district-header {
+    position: relative;
+    z-index: 1;
+}
+#projectsCard td.district-col {
+    background-color: inherit;
+}
+#projectsCard.freeze-enabled th.district-header {
+    position: sticky;
+    left: var(--district-left, 130px);
+    z-index: 2;
+    background-color: #e9f0f9 !important;
+}
+#projectsCard.freeze-enabled td.district-col {
+    position: sticky;
+    left: var(--district-left, 130px);
+    z-index: 1;
+    background-color: inherit !important;
+}
     </style>
 </head>
 <body data-page-node-id="seFuZukgk6EvwcKKYn0fTs">
@@ -2541,9 +2563,12 @@ async function mergeCloudStateBeforeUpload() {
         }
 
         // 【v21.63】辖区（乡镇/园区）下拉：返回 <option> 列表，含"新增辖区"项
+        // 【v21.67】未设置辖区时显示「未设辖区」占位（不再默认显示第一个选项，避免把"未设置"误当成"开发区"）
         function districtOptionsHtml(selected) {
             const ds = Array.isArray(appData.districts) ? appData.districts : [];
-            const opts = ds.map(d => `<option value="${escAttr(d)}" ${d === selected ? 'selected' : ''}>${esc(d)}</option>`).join('');
+            const _sel = (selected == null || selected === '') ? '' : selected;
+            let opts = '<option value="" ' + (_sel === '' ? 'selected' : '') + '>未设辖区</option>';
+            opts += ds.map(d => `<option value="${escAttr(d)}" ${d === _sel ? 'selected' : ''}>${esc(d)}</option>`).join('');
             return opts + `<option value="__ADD__">➕ 新增辖区…</option>`;
         }
         // 【v21.65】辖区列筛选下拉选项（表头用，不含「新增辖区」）
@@ -2611,7 +2636,7 @@ async function mergeCloudStateBeforeUpload() {
                     if (!appData.districts.includes(nm)) appData.districts.push(nm);
                     if (!appData.companyDistricts) appData.companyDistricts = {};
                     appData.companyDistricts[comp] = nm;
-                    saveData();
+                    saveData(true);
                     // 重新渲染总表，使所有下拉都出现新辖区
                     const mc = document.getElementById('mainContent');
                     if (mc) renderProjects(mc);
@@ -2623,7 +2648,7 @@ async function mergeCloudStateBeforeUpload() {
             }
             if (!appData.companyDistricts) appData.companyDistricts = {};
             appData.companyDistricts[comp] = v;
-            saveData();
+            saveData(true);
         }
         // 弹窗（新增项目/新增公司）里的辖区下拉：comp 取自对应公司选择框
         function changeModalDistrict(sel, compElId) {
@@ -2638,7 +2663,7 @@ async function mergeCloudStateBeforeUpload() {
                     if (!appData.districts.includes(nm)) appData.districts.push(nm);
                     if (!appData.companyDistricts) appData.companyDistricts = {};
                     appData.companyDistricts[comp] = nm;
-                    saveData();
+                    saveData(true);
                     sel.innerHTML = districtOptionsHtml(nm);
                     sel.value = nm;
                     showToast('✅ 已添加辖区：' + nm);
@@ -2649,7 +2674,7 @@ async function mergeCloudStateBeforeUpload() {
             }
             if (!appData.companyDistricts) appData.companyDistricts = {};
             appData.companyDistricts[comp] = v;
-            saveData();
+            saveData(true);
         }
         // 新增公司弹窗里的辖区下拉（公司尚未创建，新增辖区只扩展列表）
         function changeAddCompanyDistrict(sel) {
@@ -5532,6 +5557,8 @@ async function manualSync() {
                 document.getElementById('sidebar').classList.remove('open');
                 document.body.classList.remove('drawer-open');
             }
+            // 【v21.67】辖区冻结列跟随公司列宽度
+            try { syncStickyDistrictLeft(); } catch (e) {}
         });
 
         let currentPage = 'home';
@@ -6336,6 +6363,14 @@ function toggleTaskComplete(tid, el) {
         // ============================================================
         // 项目总表（完整）
         // ============================================================
+        // 【v21.67】辖区冻结列 left 偏移 = 公司列实际宽度（写入 CSS 变量 --district-left）
+        function syncStickyDistrictLeft() {
+            const th = document.querySelector('#projectsCard thead th.company-col');
+            if (th && th.offsetWidth > 0) {
+                document.documentElement.style.setProperty('--district-left', th.offsetWidth + 'px');
+            }
+        }
+
 function renderProjects(mc) {
     const _mt = mc ? mc.scrollTop : 0;
     requestAnimationFrame(() => { if (mc) { const _mx = Math.max(0, mc.scrollHeight - mc.clientHeight); mc.scrollTop = Math.min(_mt, _mx); } });
@@ -6512,8 +6547,8 @@ function renderProjects(mc) {
                     <tr>
                       <th style="cursor:default;width:30px;">☰</th>
                       <!-- 公司列添加 sticky-col -->
-                      <th class="sticky-col" style="cursor:default;">公司</th>
-                      <th style="cursor:pointer;min-width:120px;position:relative;text-align:center;" onclick="toggleDistrictFilterHead(event)" title="${_df !== 'all' ? '点击取消辖区筛选' : '点击筛选辖区'}">
+                      <th class="sticky-col company-col" style="cursor:default;">公司</th>
+                      <th class="district-header" style="cursor:pointer;min-width:120px;text-align:center;" onclick="toggleDistrictFilterHead(event)" title="${_df !== 'all' ? '点击取消辖区筛选' : '点击筛选辖区'}">
                         <span style="display:inline-block;padding:3px 10px;border-radius:8px;font-size:12px;${_df !== 'all' ? 'background:#2a5f8f;color:#fff;' : 'background:#f1f5f9;color:#475569;'}">${_df !== 'all' ? esc(_dfName) + ' ✕' : '辖区 ▾'}</span>
                         <div id="districtFilterPop" style="display:none;position:absolute;top:100%;left:0;z-index:60;background:#fff;border:1px solid #e2e8f0;border-radius:8px;box-shadow:0 6px 16px rgba(0,0,0,0.18);min-width:130px;max-height:260px;overflow:auto;text-align:left;">${districtFilterPopItems(_df)}</div>
                       </th>`;
@@ -6554,9 +6589,9 @@ function renderProjects(mc) {
             // 拖拽手柄列
             html += `<td class="drag-handle" style="cursor:grab;text-align:center;font-size:16px;touch-action:none;">☰</td>`;
             // 公司列添加 sticky-col
-            html += `<td class="sticky-col"><strong>${esc(comp)}</strong></td>`;
+            html += `<td class="sticky-col company-col"><strong>${esc(comp)}</strong></td>`;
             // 【v21.63】辖区列：下拉选择，支持新增
-            html += `<td>${districtSelectHtml(comp)}</td>`;
+            html += `<td class="district-col">${districtSelectHtml(comp)}</td>`;
 
             appData.templates.forEach(t => {
                 const proj = allProjects.find(p => p.company === comp && p.templateId === t.id);
@@ -6580,6 +6615,8 @@ function renderProjects(mc) {
         // 【v21.65】统计徽章：筛选后自动更新
         const _pBadge = document.getElementById('projStatBadge');
         if (_pBadge) _pBadge.textContent = '📊 项目 ' + visibleProjectCount + ' · 公司 ' + visibleCompCount;
+        // 【v21.67】辖区冻结列偏移跟随公司列宽度
+        try { syncStickyDistrictLeft(); } catch (e) {}
 
         // 初始化行拖拽排序
         const tbody = document.getElementById('projectTableBody');
@@ -6711,7 +6748,7 @@ function renderProjects(mc) {
                 nodes: t.nodes.map(n => ({ name: n.name, status: 'pending' })),
                 doneDate: null
             });
-            saveData();
+            saveData(true);
             syncSettlementsWithProjects();
             closeModal();
             renderHome(document.getElementById('mainContent'));
@@ -10657,7 +10694,7 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                     if (!appData.companyDistricts) appData.companyDistricts = {};
                     appData.companyDistricts[name] = _cd.value;
                 }
-                saveData();
+                saveData(true);
                 closeModal();
                 renderProjects(document.getElementById('mainContent'));
                 showToast('✅ 公司已添加');
