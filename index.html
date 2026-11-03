@@ -1,5 +1,18 @@
 <!DOCTYPE html>
 <!-- ============================================================
+     v21.63-district-column  2026-11-03
+     新增「辖区（乡镇/园区）」功能 + 折叠已完成状态记忆：
+       1) 项目总表：在公司列后新增「辖区」列，做成下拉选择；选项含
+          开发区/高新区/白甸镇/大公镇/敦头镇/角斜镇/李堡镇/南莫镇/曲塘镇/雅周镇/滨海新区/常安纺织园，
+          并支持在任意下拉里“➕ 新增辖区…”随时追加新辖区（持久化、全端共享）。
+       2) 新增项目弹窗、新增公司弹窗均加入「辖区」下拉，创建时直接写入 公司→辖区 映射；
+          新增项目弹窗切换公司时辖区下拉同步为该公司的已设辖区。
+       3) 数据模型：appData.districts（辖区列表）+ appData.companyDistricts（公司→辖区映射）；
+          ensureColors() 内做兼容迁移，旧数据/旧快照自动补默认辖区列表。
+       4) 「折叠已完成项目」的折叠状态记忆：toggleHideDoneProjects 切换时写入
+          localStorage('hide_done_projects')，loadData 启动时读取，每次打开自动沿用上次状态。
+       纯增量改动，未触碰同步/合并逻辑。
+     ------------------------------------------------------------
      v21.62-mobile-split  2026-10-30
      修复「第二天打开工作台，数据是之前的旧数据，强制刷新(Ctrl+Shift+R)后才对」：
        根因：Service Worker 的 fetch 处理器对所有 GET 请求都拦截，包括**跨域的 Supabase REST API
@@ -699,7 +712,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.62">
+    <meta name="app-version" content="21.63">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -2512,6 +2525,9 @@ async function mergeCloudStateBeforeUpload() {
             _deletedTaskIds: [],
             _deletedWorkLogIds: [],
             _deletedCompanyNames: [],  // 【v21.32】已删除公司的墓碑：上传时从云端精确删除
+            // 【v21.63】辖区（乡镇/园区）数据：下拉可选项 + 公司与辖区的映射
+            districts: ['开发区', '高新区', '白甸镇', '大公镇', '敦头镇', '角斜镇', '李堡镇', '南莫镇', '曲塘镇', '雅周镇', '滨海新区', '常安纺织园'],
+            companyDistricts: {},       // { 公司名: 辖区名 }，未设置的项为 ''
         };
 
         // ---------- 辅助函数 ----------
@@ -2523,6 +2539,96 @@ async function mergeCloudStateBeforeUpload() {
         // 含 ' 的值写进内联事件则截断 JS 字符串（点击报错）。读取时浏览器会自动还原实体。
         function escAttr(s) {
             return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+        }
+
+        // 【v21.63】辖区（乡镇/园区）下拉：返回 <option> 列表，含"新增辖区"项
+        function districtOptionsHtml(selected) {
+            const ds = Array.isArray(appData.districts) ? appData.districts : [];
+            const opts = ds.map(d => `<option value="${escAttr(d)}" ${d === selected ? 'selected' : ''}>${esc(d)}</option>`).join('');
+            return opts + `<option value="__ADD__">➕ 新增辖区…</option>`;
+        }
+        // 项目总表公司行用的辖区下拉
+        function districtSelectHtml(comp) {
+            const sel = (appData.companyDistricts && appData.companyDistricts[comp]) || '';
+            return `<select class="district-select" onchange="event.stopPropagation();changeCompanyDistrict(this,'${escAttr(comp)}')" style="width:96px;padding:3px 4px;border-radius:8px;border:1px solid #e2e8f0;font-size:12px;background:#fff;">${districtOptionsHtml(sel)}</select>`;
+        }
+        // 项目总表：切换/新增辖区（comp 为公司名）
+        function changeCompanyDistrict(sel, comp) {
+            const v = sel.value;
+            if (v === '__ADD__') {
+                let name = '';
+                try { name = window.prompt ? prompt('输入新辖区名称：') : ''; } catch (e) { name = ''; }
+                if (name && name.trim()) {
+                    const nm = name.trim();
+                    if (!appData.districts.includes(nm)) appData.districts.push(nm);
+                    if (!appData.companyDistricts) appData.companyDistricts = {};
+                    appData.companyDistricts[comp] = nm;
+                    saveData();
+                    // 重新渲染总表，使所有下拉都出现新辖区
+                    const mc = document.getElementById('mainContent');
+                    if (mc) renderProjects(mc);
+                    showToast('✅ 已添加辖区：' + nm);
+                } else {
+                    sel.value = (appData.companyDistricts && appData.companyDistricts[comp]) || '';
+                }
+                return;
+            }
+            if (!appData.companyDistricts) appData.companyDistricts = {};
+            appData.companyDistricts[comp] = v;
+            saveData();
+        }
+        // 弹窗（新增项目/新增公司）里的辖区下拉：comp 取自对应公司选择框
+        function changeModalDistrict(sel, compElId) {
+            const compEl = document.getElementById(compElId);
+            const comp = compEl ? compEl.value : '';
+            const v = sel.value;
+            if (v === '__ADD__') {
+                let name = '';
+                try { name = window.prompt ? prompt('输入新辖区名称：') : ''; } catch (e) { name = ''; }
+                if (name && name.trim()) {
+                    const nm = name.trim();
+                    if (!appData.districts.includes(nm)) appData.districts.push(nm);
+                    if (!appData.companyDistricts) appData.companyDistricts = {};
+                    appData.companyDistricts[comp] = nm;
+                    saveData();
+                    sel.innerHTML = districtOptionsHtml(nm);
+                    sel.value = nm;
+                    showToast('✅ 已添加辖区：' + nm);
+                } else {
+                    sel.value = (appData.companyDistricts && appData.companyDistricts[comp]) || '';
+                }
+                return;
+            }
+            if (!appData.companyDistricts) appData.companyDistricts = {};
+            appData.companyDistricts[comp] = v;
+            saveData();
+        }
+        // 新增公司弹窗里的辖区下拉（公司尚未创建，新增辖区只扩展列表）
+        function changeAddCompanyDistrict(sel) {
+            const v = sel.value;
+            if (v === '__ADD__') {
+                let name = '';
+                try { name = window.prompt ? prompt('输入新辖区名称：') : ''; } catch (e) { name = ''; }
+                if (name && name.trim()) {
+                    const nm = name.trim();
+                    if (!appData.districts.includes(nm)) appData.districts.push(nm);
+                    saveData();
+                    sel.innerHTML = districtOptionsHtml(nm);
+                    sel.value = nm;
+                    showToast('✅ 已添加辖区：' + nm);
+                } else {
+                    sel.value = '';
+                }
+                return;
+            }
+        }
+        // 新增项目弹窗：切换公司时，辖区下拉同步为该公司的已设辖区
+        function syncDistrictWithCompany() {
+            const compEl = document.getElementById('pComp');
+            const dsel = document.getElementById('pDist');
+            if (!compEl || !dsel) return;
+            const comp = compEl.value;
+            dsel.innerHTML = districtOptionsHtml((appData.companyDistricts && appData.companyDistricts[comp]) || '');
         }
 
         function getTplName(id) { const t = appData.templates.find(tp => tp.id === id); return t ? t.name : '未知'; }
@@ -4722,6 +4828,9 @@ async function syncToSupabase(createSnapshotFlag = false) {
             try { autoSyncEnabled = _syncMode !== null ? !!JSON.parse(_syncMode) : false; } catch (e) { autoSyncEnabled = false; }
             updateAutoToggleUI();
 
+            // 【v21.63】恢复"折叠已完成项目"状态：上次打开时的折叠选择自动沿用
+            try { const _hd = localStorage.getItem('hide_done_projects'); window._hideDoneProjects = (_hd === 'true'); } catch (e) {}
+
             if (autoSyncEnabled) {
                 startAutoSync();
             }
@@ -4841,6 +4950,13 @@ async function syncToSupabase(createSnapshotFlag = false) {
 
         // ---------- 工具函数 ----------
         function ensureColors() {
+            // 【v21.63】辖区字段兼容迁移：旧数据/旧快照里可能没有，补默认值，保证渲染不报错
+            if (!Array.isArray(appData.districts) || appData.districts.length === 0) {
+                appData.districts = ['开发区', '高新区', '白甸镇', '大公镇', '敦头镇', '角斜镇', '李堡镇', '南莫镇', '曲塘镇', '雅周镇', '滨海新区', '常安纺织园'];
+            }
+            if (!appData.companyDistricts || typeof appData.companyDistricts !== 'object') {
+                appData.companyDistricts = {};
+            }
             if (!appData.settlementStatusColors) {
                 appData.settlementStatusColors = {
                     incomplete: { color: '#e9ecef', alpha: 0.4 },
@@ -6244,6 +6360,9 @@ function renderProjects(mc) {
                 cards += '<div class="m-proj-card-pct">' + progPct + '%</div>';
                 cards += '</div></div>';
                 cards += '<div class="m-proj-card-count">' + activeProjects.length + ' 个项目进行中 · ' + compProjects.length + ' 个总计</div>';
+                // 【v21.63】移动端卡片：辖区下拉
+                const _dsel = (appData.companyDistricts && appData.companyDistricts[comp]) || '';
+                cards += '<div class="m-proj-card-district" style="margin-top:6px;font-size:12px;color:var(--m-text-muted);">辖区：<select class="district-select" onchange="event.stopPropagation();changeCompanyDistrict(this,\'' + escAttr(comp) + '\')" style="display:inline-block;width:auto;padding:2px 6px;border-radius:8px;border:1px solid var(--m-border);font-size:12px;background:#fff;">' + districtOptionsHtml(_dsel) + '</select></div>';
                 cards += '<div class="m-proj-card-expand" onclick="event.stopPropagation();toggleMobileProjCardByCard(this)">👆 点击查看/编辑项目类型</div>';
 
                 // 展开详情：项目类型竖向排列
@@ -6301,7 +6420,8 @@ function renderProjects(mc) {
                     <tr>
                       <th style="cursor:default;width:30px;">☰</th>
                       <!-- 公司列添加 sticky-col -->
-                      <th class="sticky-col" style="cursor:default;">公司</th>`;
+                      <th class="sticky-col" style="cursor:default;">公司</th>
+                      <th style="cursor:default;min-width:110px;">辖区</th>`;
         appData.templates.forEach(t => {
             const isActive = filterTemplateId === t.id;
             html +=
@@ -6334,6 +6454,8 @@ function renderProjects(mc) {
             html += `<td class="drag-handle" style="cursor:grab;text-align:center;font-size:16px;touch-action:none;">☰</td>`;
             // 公司列添加 sticky-col
             html += `<td class="sticky-col"><strong>${esc(comp)}</strong></td>`;
+            // 【v21.63】辖区列：下拉选择，支持新增
+            html += `<td>${districtSelectHtml(comp)}</td>`;
 
             appData.templates.forEach(t => {
                 const proj = allProjects.find(p => p.company === comp && p.templateId === t.id);
@@ -6399,6 +6521,8 @@ function renderProjects(mc) {
 }
         function toggleHideDoneProjects() {
             window._hideDoneProjects = !window._hideDoneProjects;
+            // 【v21.63】记忆折叠状态，下次打开自动沿用
+            try { localStorage.setItem('hide_done_projects', window._hideDoneProjects ? 'true' : 'false'); } catch (e) {}
             renderProjects(document.getElementById('mainContent'));
         }
         function toggleProjectFilter(templateId) {
@@ -6420,7 +6544,8 @@ function renderProjects(mc) {
                   <h3>新建项目</h3>
                   <div class="form-row">
                     <div class="form-group"><label>模板</label><select id="pTpl" style="width:100%;">${appData.templates.map(t => `<option value="${t.id}" ${t.id===tid?'selected':''}>${esc(t.name)}</option>`).join('')}</select></div>
-                    <div class="form-group"><label>公司</label><select id="pComp" style="width:100%;">${appData.companies.map(c => `<option>${esc(c)}</option>`).join('')}</select></div>
+                    <div class="form-group"><label>公司</label><select id="pComp" style="width:100%;" onchange="syncDistrictWithCompany()">${appData.companies.map(c => `<option>${esc(c)}</option>`).join('')}</select></div>
+                    <div class="form-group"><label>辖区</label><select id="pDist" style="width:100%;" onchange="changeModalDistrict(this,'pComp')">${districtOptionsHtml((appData.companyDistricts && appData.companyDistricts[appData.companies[0]]) || '')}</select></div>
                   </div>
                   <div class="form-row">
                     <div class="form-group"><label>标签</label><select id="pTag" style="width:100%;"></select></div>
@@ -6464,6 +6589,12 @@ function renderProjects(mc) {
                 closeModal();
                 renderHome(document.getElementById('mainContent'));
                 return; }
+            // 【v21.63】新建项目时把所选辖区写入公司→辖区映射
+            const _pdist = document.getElementById('pDist');
+            if (_pdist && _pdist.value && _pdist.value !== '__ADD__') {
+                if (!appData.companyDistricts) appData.companyDistricts = {};
+                appData.companyDistricts[comp] = _pdist.value;
+            }
             appData.projects.push({
                 id: getNextId(),
                 templateId: tid,
@@ -10397,6 +10528,10 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                     <label>公司名称</label>
                     <input id="newCompanyName" placeholder="输入公司名称" style="width:100%;">
                   </div>
+                  <div class="form-group">
+                    <label>辖区</label>
+                    <select id="newCompanyDistrict" style="width:100%;" onchange="changeAddCompanyDistrict(this)">${districtOptionsHtml('')}</select>
+                  </div>
                   <div class="confirm-actions">
                     <button class="btn btn-primary" onclick="addCompanyFromModal()">确认</button>
                     <button class="btn btn-ghost" onclick="closeModal()">取消</button>
@@ -10411,6 +10546,12 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             if (!name) { showAlert('请输入公司名称'); return; }
             if (!appData.companies.includes(name)) {
                 appData.companies.push(name);
+                // 【v21.63】新增公司时记录所选辖区
+                const _cd = document.getElementById('newCompanyDistrict');
+                if (_cd && _cd.value && _cd.value !== '__ADD__') {
+                    if (!appData.companyDistricts) appData.companyDistricts = {};
+                    appData.companyDistricts[name] = _cd.value;
+                }
                 saveData();
                 closeModal();
                 renderProjects(document.getElementById('mainContent'));
