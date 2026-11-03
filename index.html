@@ -1,16 +1,13 @@
 <!DOCTYPE html>
 <!-- ============================================================
-     v21.67-district-placeholder-sticky-sync  2026-11-03
-     辖区下拉「未设辖区」占位 + 辖区列冻结(sticky) + 辖区修改强制上传快照。
-       1) 【占位】未设置辖区的公司，其下拉不再默认显示第一个选项（历史上是「开发区」，
-          导致用户误以为该公司是开发区、筛选却为 0）。改为显示「未设辖区」占位项。
-       2) 【冻结】辖区列头随公司列一起冻结（sticky），横向滚动不再跟着滚走。
-          th/td 加 district-header/district-col，left 用 --district-left（JS 按公司列宽写入）。
-       3) 【同步】changeCompanyDistrict/changeModalDistrict/saveNewProject/saveAddCompany
-          改 saveData(true) 强制生成并上传快照——companyDistricts 只存在于快照 payload、
-          无独立表，旧代码 saveData() 只做增量分表上传，导致辖区永远传不到云端、
-          其他设备/重载后丢失。
-       4) 版本戳 21.66 → 21.67 触发版本探测自动刷新。
+     v21.68-district-header-sticky-top  2026-11-03
+     修复辖区表头垂直滚动时跟着滚走（v21.67 引入的回归）。
+       · 根因：v21.67 的 #projectsCard th.district-header 规则（position:relative /
+         position:sticky 但无 top）覆盖了 .table-wrap th 的 position:sticky; top:0，
+         导致辖区表头失去垂直粘性，纵向滚动时滚走，而其它表头（预审/环评…）仍固定。
+       · 修法：district-header 未冻结=position:sticky;top:0（与其它表头一致，水平不固定）；
+         冻结=position:sticky;top:0;left:var(--district-left)（横纵都固定）。
+       · 版本戳 21.67 → 21.68 触发版本探测自动刷新。
      ------------------------------------------------------------
      v21.62-mobile-split  2026-10-30
      修复「第二天打开工作台，数据是之前的旧数据，强制刷新(Ctrl+Shift+R)后才对」：
@@ -711,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.67">
+    <meta name="app-version" content="21.68">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1700,17 +1697,23 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
     background-color: inherit !important;
 }
 /* ===== 【v21.67】辖区列也随公司列一起冻结（sticky），横向滚动时不跟着滚走 =====
+   【v21.68】补 top:0：辖区表头须保持垂直粘性（与 .table-wrap th 一致），
+   否则纵向滚动时辖区表头滚走、其它表头固定（用户反馈的回归）。
    辖区列贴在公司列右侧，left 用 --district-left（JS 按公司列实际宽度写入）。
-   th 单独处理：未冻结时 position:relative（供弹出菜单锚定），冻结时 sticky。 */
+   th 单独处理：未冻结=sticky;top:0（水平不固定），冻结=sticky;top:0;left:var(--district-left)。 */
 #projectsCard th.district-header {
-    position: relative;
-    z-index: 1;
+    /* 垂直滚动时表头固定在顶部（与 .table-wrap th 的 top:0 保持一致），
+       未冻结时不做水平固定；position:sticky 也作为弹出菜单的锚定包含块。 */
+    position: sticky;
+    top: 0;
+    z-index: 2;
 }
 #projectsCard td.district-col {
     background-color: inherit;
 }
 #projectsCard.freeze-enabled th.district-header {
     position: sticky;
+    top: 0;
     left: var(--district-left, 130px);
     z-index: 2;
     background-color: #e9f0f9 !important;
