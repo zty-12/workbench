@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.0">
+    <meta name="app-version" content="22.1">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -813,6 +813,27 @@ body { background:var(--bg); display:flex; height:100vh; overflow:hidden; color:
 .card:hover { box-shadow:var(--shadow-md); }
 .card-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:14px; flex-wrap:wrap; gap:10px; flex-shrink:0; }
 .card-header h3 { font-size:16px; font-weight:700; color:var(--primary); }
+/* ===== v22.1 表单与页面头统一风格（原 .form-input/.page-header 被引用却无 CSS 定义 → 硬框根因） ===== */
+.page-header { display:flex; align-items:center; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
+.page-header h2 { font-size:18px; font-weight:700; color:var(--primary); margin:0; }
+.form-input { padding:8px 12px; border-radius:var(--radius-sm); border:1px solid #e2e8f0; font-size:13px; background:#fafbfc; color:var(--text); transition:border .2s, box-shadow .2s; }
+.form-input:focus { border-color:var(--primary); outline:none; box-shadow:0 0 0 3px rgba(26,58,92,.08); }
+.ui22-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:14px 18px; }
+.ui22-field { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.ui22-field > label { font-size:12px; font-weight:600; color:var(--text-secondary); }
+.ui22-range { display:flex; align-items:center; gap:6px; }
+.ui22-range .form-input { width:90px; text-align:center; }
+.ui22-range span { color:var(--text-tertiary); font-size:12px; }
+.ui22-subhead { font-size:13px; font-weight:700; color:var(--primary); margin:18px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border); }
+.ui22-subhead:first-child { margin-top:0; }
+.ui22-addrow { display:flex; gap:10px; }
+.ui22-addrow .form-input { flex:1; }
+.ui22-inbox-list { display:flex; flex-direction:column; gap:8px; }
+.ui22-inbox-item { display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:var(--radius-sm); background:#f8fafc; border:1px solid var(--border); transition:all .2s; }
+.ui22-inbox-item:hover { background:#f1f5f9; border-color:#cbd5e1; }
+.ui22-inbox-title { flex:1; font-size:13px; color:var(--text); }
+.ui22-inbox-time { color:var(--text-tertiary); font-size:12px; }
+
 
 .btn { padding:6px 16px; border-radius:30px; border:1px solid #dde2e8; background:#fff; cursor:pointer; font-size:12px; font-weight:500; transition:all 0.3s; white-space:nowrap; display:inline-flex; align-items:center; gap:5px; color:#334155; }
 .btn:hover { transform:translateY(-1px); box-shadow:0 4px 12px rgba(0,0,0,0.08); border-color:#cbd5e1; }
@@ -1053,8 +1074,6 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .fc-calendar-container .fc-day-top { text-align:center !important; }
 .fc-calendar-container .fc-day-number { font-size:16px !important; padding:4px 6px; }
 /* 【v22 3.3】项目卡点/体检标记 */
-.v22-stale-tag { font-size:11px; color:#dc2626; background:#fef2f2; padding:2px 6px; border-radius:4px; margin:3px 0; display:inline-block; }
-.v22-blocker-tag { font-size:10px; color:#b45309; background:#fffbeb; padding:1px 4px; border-radius:3px; margin-left:5px; }
 /* 【v22 2.5】休息日/补班日高亮（只改背景色，不动 table 布局） */
 .fc-calendar-container .fc-day.wb-rest-day { background:rgba(148,163,184,0.14) !important; }
 .fc-calendar-container .fc-day.wb-rest-day .fc-day-number { color:#94a3b8 !important; }
@@ -5974,14 +5993,12 @@ function renderHome(mc) {
             const pct = getProgressPercent(p.nodes),
                 cls = progressClass(pct);
             const priorityHtml = getPriorityBadgeHtml(p);
-            const stale = isProjectStale(p);
-            return `<div class="kanban-card" ${stale ? 'style="border-left:3px solid #dc2626;"' : ''}>
+            return `<div class="kanban-card">
                 <div class="card-title">${esc(getTplName(p.templateId))} <span style="font-size:11px;color:#64748b;">${esc(p.company)}</span> ${priorityHtml}</div>
-                ${stale ? '<div class="v22-stale-tag">⚠️ 超7天未更新 · 需体检</div>' : ''}
                 <span class="tag">${esc(p.tag||'')}</span>
                 <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${pct}%;"></div></div>
                 <div style="font-size:11px;color:var(--text-secondary);">完成 ${pct}%</div>
-                ${(p.nodes||[]).map((n,i)=>`<div class="node-row"><span>${esc(n.name)}${n.blocker ? `<span class="v22-blocker-tag" title="${esc(n.blocker)}">📌${esc(n.blocker.slice(0,8))}</span>` : ''}</span><button class="btn btn-xs btn-ghost" style="padding:0 4px;" onclick="openNodeInfo('${p.id}',${i})" title="卡点/下一步">✎</button><button class="node-status-btn status-${n.status||'pending'}" onclick="cycleNode('${p.id}',${i})">${n.status==='done'?'✅':n.status==='progress'?'🔄':'⏳'}</button></div>`).join('')}
+                ${(p.nodes||[]).map((n,i)=>`<div class="node-row"><span>${esc(n.name)}</span><button class="node-status-btn status-${n.status||'pending'}" onclick="cycleNode('${p.id}',${i})">${n.status==='done'?'✅':n.status==='progress'?'🔄':'⏳'}</button></div>`).join('')}
                 <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">
                   <button class="btn btn-xs btn-success" onclick="completeAllNodes('${p.id}')">✅ 完成</button>
                   <button class="btn btn-xs btn-ghost" onclick="terminateProject('${p.id}')">终止</button>
@@ -6016,49 +6033,6 @@ function renderHome(mc) {
             saveData();
             syncSettlementsWithProjects();
             renderHome(document.getElementById('mainContent'));
-        }
-
-        // 【v22 3.3】项目卡点/下一步 + 体检
-        function isProjectStale(p) {
-            const raw = p.updatedAt || p.updated_at || p.lastModified;
-            if (!raw) return false;
-            const d = new Date(raw);
-            if (isNaN(d.getTime())) return false;
-            return (Date.now() - d.getTime()) > 7 * 24 * 3600 * 1000;
-        }
-        function openNodeInfo(pid, i) {
-            const p = appData.projects.find(pr => pr.id === pid);
-            if (!p || !p.nodes || !p.nodes[i]) return;
-            const n = p.nodes[i];
-            const html = `<div class="modal-overlay"><div class="modal" style="max-width:420px;">
-              <div class="modal-header"><h3>节点信息：${esc(n.name)}</h3><button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button></div>
-              <div class="modal-body">
-                <div style="margin-bottom:10px;"><label>📌 卡在哪</label>
-                  <textarea id="nodeBlocker" class="form-input" rows="2" style="width:100%;">${esc(n.blocker||'')}</textarea></div>
-                <div style="margin-bottom:10px;"><label>👉 下一步</label>
-                  <textarea id="nodeNext" class="form-input" rows="2" style="width:100%;">${esc(n.next||'')}</textarea></div>
-              </div>
-              <div class="modal-footer"><button class="btn btn-primary" onclick="saveNodeInfo('${pid}',${i})">保存</button></div>
-            </div></div>`;
-            const ov = document.createElement('div'); ov.innerHTML = html;
-            document.body.appendChild(ov.firstElementChild);
-        }
-        function saveNodeInfo(pid, i) {
-            const p = appData.projects.find(pr => pr.id === pid);
-            if (!p || !p.nodes || !p.nodes[i]) return;
-            // 【铁律】读-改-写：先读全量 nodes，只改目标节点，整数组写回；不碰 status
-            const nodes = JSON.parse(JSON.stringify(p.nodes));
-            nodes[i].blocker = (document.getElementById('nodeBlocker')?.value || '').trim();
-            nodes[i].next = (document.getElementById('nodeNext')?.value || '').trim();
-            nodes[i].updatedAt = new Date().toISOString();
-            p.nodes = nodes;
-            p.updatedAt = new Date().toISOString();
-            // status 不动：卡点/下一步是内容更新，不改变项目状态
-            markProjectNodesEdited(p);
-            saveData(true);
-            document.querySelectorAll('.modal-overlay').forEach(el => el.remove());
-            renderPage(currentPage);
-            showToast('✅ 节点信息已保存');
         }
 
         function cycleNode(pid, i) {
@@ -8359,23 +8333,42 @@ function renderSettlement(mc) {
             c.innerHTML = `
                 <div class="page-header"><h2>📥 收件箱</h2>
                   <span style="color:var(--text-secondary);font-size:13px;">碎片任务先收进来，转出后进入今日安排（桌面端可见）</span></div>
-                <div class="card" style="padding:16px;margin-bottom:14px;">
-                  <div style="display:flex;gap:8px;">
-                    <input id="inboxInput" class="form-input" placeholder="记下一个碎片任务…" style="flex:1;"
+                <div class="card">
+                  <div class="card-header"><h3>✍️ 记一笔</h3></div>
+                  <div class="ui22-addrow">
+                    <input id="inboxInput" class="form-input" placeholder="记下一个碎片任务…"
                       onkeydown="if(event.key==='Enter')addInboxItem()">
                     <button class="btn btn-primary" onclick="addInboxItem()">＋ 收入</button>
                   </div>
                 </div>
-                <div class="card" style="padding:16px;">
-                  ${arr.length ? arr.map(x => `
-                    <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
-                      <span style="flex:1;">${esc(x.title)}</span>
-                      <span style="color:var(--text-tertiary);font-size:12px;">${esc(x.createdAt || '')}</span>
-                      <button class="btn btn-sm" onclick="inboxToPlan('${x.id}')">转入安排</button>
-                      <button class="btn btn-sm" onclick="deleteInboxItem('${x.id}')">删除</button>
-                    </div>`).join('') : '<div class="empty-state">收件箱是空的，先记几个碎片任务吧</div>'}
+                <div class="card" id="weeklyDraftHost">
+                  <div class="card-header"><h3>📅 本周周报 · 五段式草稿</h3>
+                    <div style="display:flex;gap:8px;">
+                      <button class="btn btn-sm" onclick="generateFivePartWeekly()">生成草稿</button>
+                      <button class="btn btn-sm btn-primary" onclick="exportWeeklyDraft()">导出文本</button>
+                    </div></div>
+                  <div id="weeklyDraftBody" style="color:var(--text-secondary);font-size:13px;white-space:pre-wrap;line-height:1.8;">点击「生成草稿」汇总本周完成情况</div>
+                </div>
+                <div class="card" id="reasonStatsHost">
+                  <div class="card-header"><h3>📊 未完成原因分布（近14天）</h3></div>
+                  <div id="reasonStatsBody" style="color:var(--text-secondary);font-size:13px;">加载中…</div>
+                </div>
+                <div class="card">
+                  <div class="card-header"><h3>📋 待转入任务</h3><span class="tag">${arr.length} 条</span></div>
+                  ${arr.length ? '<div class="ui22-inbox-list">' + arr.map(x => `
+                    <div class="ui22-inbox-item">
+                      <span class="ui22-inbox-title">${esc(x.title)}</span>
+                      <span class="ui22-inbox-time">${esc(x.createdAt || '')}</span>
+                      <button class="btn btn-sm btn-primary" onclick="inboxToPlan('${x.id}')">转入安排</button>
+                      <button class="btn btn-xs btn-ghost" onclick="deleteInboxItem('${x.id}')">删除</button>
+                    </div>`).join('') + '</div>' : '<div class="empty-state">收件箱是空的，先记几个碎片任务吧</div>'}
                 </div>`;
             updateInboxBadge();
+            if (window._weeklyDraft) {
+                const wb = document.getElementById('weeklyDraftBody');
+                if (wb) wb.textContent = window._weeklyDraft;
+            }
+            renderReasonStats();
         }
 
         // ============================================================
@@ -9142,27 +9135,7 @@ function renderDataReport(mc) {
     requestAnimationFrame(() => { if (mc) { const _mx = Math.max(0, mc.scrollHeight - mc.clientHeight); mc.scrollTop = Math.min(_mt, _mx); } });
     mc.innerHTML = buildDataReportHtml();
     window._ry = window._ry || new Date().getFullYear();
-    // 【v22 3.4】在最前面插入「未完成原因分布」卡片（异步填数据，不影响主表渲染）
-    const host = document.createElement('div');
-    host.id = 'reasonStatsHost';
-    host.innerHTML = '<div class="card" style="padding:16px;margin-bottom:14px;"><div style="font-size:14px;font-weight:600;">📊 未完成原因分布（近14天）</div><div id="reasonStatsBody" style="margin-top:10px;color:var(--text-secondary);font-size:13px;">加载中…</div></div>';
-    mc.insertBefore(host, mc.firstChild);
-    // 【v22 3.5】五段式周报卡片
-    const wh = document.createElement('div');
-    wh.id = 'weeklyDraftHost';
-    wh.innerHTML = `<div class="card" style="padding:16px;margin-bottom:14px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <div style="font-size:14px;font-weight:600;">📅 本周周报 · 五段式草稿</div>
-        <div style="display:flex;gap:6px;">
-          <button class="btn btn-sm" onclick="generateFivePartWeekly()">生成草稿</button>
-          <button class="btn btn-sm btn-primary" onclick="exportWeeklyDraft()">导出文本</button>
-        </div></div>
-      <div id="weeklyDraftBody" style="margin-top:10px;color:var(--text-secondary);font-size:13px;white-space:pre-wrap;line-height:1.8;">点击「生成草稿」汇总本周完成情况</div></div>`;
-    mc.insertBefore(wh, host);
-    if (window._weeklyDraft) {
-        const wb = document.getElementById('weeklyDraftBody');
-        if (wb) wb.textContent = window._weeklyDraft;
-    }
+    // 【v22.1】周报草稿与原因分布两块已移至收件箱页（见 renderInbox），此处保留数据填报主表
 }
 
 // 【v22 3.5】五段式周报：本周完成 / 关键进展 / 未完成与原因 / 下周三件事 / 卡点与求助
@@ -10591,26 +10564,35 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                 const slots = cfg.slots || {};
                 const rv = cfg.review || {};
                 const sr = cfg.summer_range || {};
+                const opt = (arr, cur, labels) => arr.map(function(x){
+                    return '<option value="' + x + '" ' + (cur===x?'selected':'') + '>' + (labels[x]||x) + '</option>';
+                }).join('');
                 body.innerHTML = `
-                  <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;max-width:600px;">
-                    <div><label>时段模式</label><select id="psProfile" class="form-input" style="width:100%;padding:6px;">
-                      ${['auto','summer','standard'].map(x=>`<option value="${x}" ${cfg.profile===x?'selected':''}>${x}</option>`).join('')}
-                    </select></div>
-                    <div><label>复盘模式</label><select id="psReviewMode" class="form-input" style="width:100%;padding:6px;">
-                      ${['popup','remind','off'].map(x=>`<option value="${x}" ${rv.mode===x?'selected':''}>${x}</option>`).join('')}
-                    </select></div>
-                    <div><label>复盘时间</label><input id="psReviewTime" class="form-input" value="${esc(rv.time||'18:00')}" style="width:100%;padding:6px;"></div>
-                    <div><label>夏令时区间</label><div style="display:flex;gap:4px;">
-                      <input id="psSummerFrom" class="form-input" value="${esc(sr.from||'04-01')}" style="width:50%;padding:6px;">
-                      <input id="psSummerTo" class="form-input" value="${esc(sr.to||'10-31')}" style="width:50%;padding:6px;"></div></div>
-                    ${['summer','standard'].map(p=>['am','pm'].map(s=>{
-                      const rng=(slots[p]||{})[s]||['09:00','12:00'];
-                      return `<div><label>${p} ${s.toUpperCase()}</label><div style="display:flex;gap:4px;">
-                        <input id="ps_${p}_${s}_a" class="form-input" value="${esc(rng[0])}" style="width:50%;padding:6px;">
-                        <input id="ps_${p}_${s}_b" class="form-input" value="${esc(rng[1])}" style="width:50%;padding:6px;"></div></div>`;
-                    }).join('')).join('')}
+                  <div class="ui22-subhead">工作时段</div>
+                  <div class="ui22-grid">
+                    <div class="ui22-field"><label>时段模式</label>
+                      <select id="psProfile" class="form-input">${opt(['auto','summer','standard'],cfg.profile,{auto:'自动（按夏令时区间）',summer:'夏令时',standard:'标准时间'})}</select></div>
+                    <div class="ui22-field"><label>夏令时区间</label>
+                      <div class="ui22-range"><input id="psSummerFrom" class="form-input" value="${esc(sr.from||'04-01')}"><span>至</span><input id="psSummerTo" class="form-input" value="${esc(sr.to||'10-31')}"></div></div>
+                    ${['summer','standard'].map(function(p){
+                      const pn = (p==='summer'?'夏令时':'标准时间');
+                      return ['am','pm'].map(function(s){
+                        const rng = (slots[p]||{})[s] || ['09:00','12:00'];
+                        return `<div class="ui22-field"><label>${pn} ${s==='am'?'上午':'下午'}</label>
+                          <div class="ui22-range"><input id="ps_${p}_${s}_a" class="form-input" value="${esc(rng[0])}"><span>至</span><input id="ps_${p}_${s}_b" class="form-input" value="${esc(rng[1])}"></div></div>`;
+                      }).join('');
+                    }).join('')}
                   </div>
-                  <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="savePlanConfigFromUI()">保存并同步桌面</button>`;
+                  <div class="ui22-subhead">收工复盘</div>
+                  <div class="ui22-grid">
+                    <div class="ui22-field"><label>复盘模式</label>
+                      <select id="psReviewMode" class="form-input">${opt(['popup','remind','off'],rv.mode,{popup:'自动弹窗',remind:'悬浮球提醒',off:'关闭'})}</select></div>
+                    <div class="ui22-field"><label>复盘时间</label>
+                      <input id="psReviewTime" class="form-input" value="${esc(rv.time||'18:00')}"></div>
+                  </div>
+                  <div style="margin-top:16px;display:flex;justify-content:flex-end;">
+                    <button class="btn btn-primary" onclick="savePlanConfigFromUI()">保存并同步桌面</button>
+                  </div>`;
                 window._planCfgLoaded = cfg;
             });
         }
