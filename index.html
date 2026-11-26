@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="21.68">
+    <meta name="app-version" content="22.0">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1052,6 +1052,15 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .fc-calendar-container .fc-day-grid .fc-row { min-height:50px; }
 .fc-calendar-container .fc-day-top { text-align:center !important; }
 .fc-calendar-container .fc-day-number { font-size:16px !important; padding:4px 6px; }
+/* 【v22 3.3】项目卡点/体检标记 */
+.v22-stale-tag { font-size:11px; color:#dc2626; background:#fef2f2; padding:2px 6px; border-radius:4px; margin:3px 0; display:inline-block; }
+.v22-blocker-tag { font-size:10px; color:#b45309; background:#fffbeb; padding:1px 4px; border-radius:3px; margin-left:5px; }
+/* 【v22 2.5】休息日/补班日高亮（只改背景色，不动 table 布局） */
+.fc-calendar-container .fc-day.wb-rest-day { background:rgba(148,163,184,0.14) !important; }
+.fc-calendar-container .fc-day.wb-rest-day .fc-day-number { color:#94a3b8 !important; }
+.fc-calendar-container .fc-day.wb-makeup-day { background:rgba(16,185,129,0.12) !important; }
+.fc-calendar-container .fc-day.wb-makeup-day .fc-day-number { color:#059669 !important; font-weight:600 !important; }
+
 .fc-calendar-container .fc-day-grid-event { font-size:13px !important; padding:4px 6px !important; margin:2px 3px !important; border-radius:6px; line-height:1.4; }
 .fc-calendar-container .fc-day-grid-event .fc-title { font-size:12px !important; }
 .fc-calendar-container .fc-day-header { font-size:14px !important; padding:8px 0 !important; text-align:center !important; }
@@ -1771,6 +1780,7 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
             <a data-page="projects" data-page-node-id="U2E6Pzshq9yKaR0QStONT2">📁 项目总表</a>
             <a data-page="data-report" data-page-node-id="cO429kOC1eo1vQBXEphZly">📊 数据填报</a>
             <a data-page="tasks" data-page-node-id="J2BwfHCWeBDu3mpKtwTlV3">📋 任务分配</a>
+            <a data-page="inbox" data-page-node-id="v22InboxNav01">📥 收件箱 <span class="badge" id="inboxBadge">0</span></a>
             <a data-page="calendar" data-page-node-id="zGeP8HsaxdllzES9tbYLtn">📅 日历视图</a>
             <div class="nav-label" data-page-node-id="sBVHrMWVaXeeGngeFLhdJH">管理</div>
             <a data-page="logs" data-page-node-id="Hwz4Giek8axOrNVgAFLek0">📝 工作日志</a>
@@ -1781,7 +1791,7 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
             <div class="nav-label" data-page-node-id="WTEnaDhlsplHYM29NVMXbA">工具</div>
 
             <a data-page="templates" data-page-node-id="9zUAg2aPltyAuwpAt6C9Fu">📐 模板中心</a>
-            <a data-page="report-template" data-page-node-id="cO429kOC1eo1vQBXEphZly">📄 报告模板</a>
+            <a data-page="report-template" data-page-node-id="v22ReportTplNav01">📄 报告模板</a>
             <a data-page="knowledge" data-page-node-id="nRexmtOikwlk4OlR9B4H2s">🧠 知识库</a>
             <a data-page="cloudsync" data-page-node-id="Si7NBznoERJWSTbdbaz5xR">☁️ 云同步</a>
         </nav>
@@ -2833,16 +2843,16 @@ async function mergeCloudStateBeforeUpload() {
         function scheduleAutoUpload() {
             const syncOn = autoUploadEnabled || autoSyncEnabled;
             if (!syncOn || _disableAutoUpload || !supabaseClient || !getSupabaseConfig()) {
-                if (!syncOn) updateSyncStatus('本地缓存', '');
+                if (!syncOn) setSync('LOCAL_CACHE', '');
                 return;
             }
-            updateSyncStatus('待上传...', 'syncing');
+            setSync('PENDING_UPLOAD', 'syncing');
             clearTimeout(autoUploadTimer);
             autoUploadTimer = setTimeout(function() {
                 autoUploadTimer = null;
                 syncToSupabase(true).catch(function(err) {
                     console.error('自动上传失败', err);
-                    updateSyncStatus('上传失败', 'error');
+                    setSync('UPLOAD_FAIL', 'error');
                 });
             }, 2000);
         }
@@ -2864,14 +2874,14 @@ async function mergeCloudStateBeforeUpload() {
                 // 强制保存（手动上传/关键操作）立即上传，不走防抖，并生成版本快照
                 syncToSupabase(true).catch(err => {
                     console.error('自动上传失败', err);
-                    updateSyncStatus('上传失败', 'error');
+                    setSync('UPLOAD_FAIL', 'error');
                 });
             } else {
             // 频繁操作走防抖，最后一次操作后 2 秒才上传一次
             scheduleAutoUpload();
         }
     } else if (!autoUploadEnabled) {
-        updateSyncStatus('本地缓存', '');
+        setSync('LOCAL_CACHE', '');
     }
 }
         // ---------- Supabase 配置 ----------
@@ -2896,7 +2906,7 @@ async function mergeCloudStateBeforeUpload() {
             const config = getSupabaseConfig();
             if (!config || !config.url || !config.anonKey) {
                 supabaseClient = null;
-                updateSyncStatus('未配置', '');
+                setSync('NOT_CONFIG', '');
                 return false;
             }
             try {
@@ -2906,12 +2916,12 @@ async function mergeCloudStateBeforeUpload() {
                 supabaseClient = window.supabase.createClient(config.url, config.anonKey, {
                     global: { fetch: _noCacheFetch }
                 });
-                updateSyncStatus('已配置', '');
+                setSync('CONFIGURED', '');
                 return true;
             } catch (e) {
                 console.error('Supabase 初始化失败', e);
                 supabaseClient = null;
-                updateSyncStatus('配置错误', 'error');
+                setSync('CONFIG_ERR', 'error');
                 return false;
             }
         }
@@ -4204,13 +4214,13 @@ async function loadFromSupabase() {
             } catch (e) {
                 console.warn('⚠️ 恢复最新版本后上传固化失败，将在下次同步重试:', e);
             }
-            updateSyncStatus('已恢复最新版本', 'success');
+            setSync('RESTORED_LATEST', 'success');
         }
 
         // ---------- 同步到 Supabase ----------
 async function syncToSupabase(createSnapshotFlag = false) {
     if (!supabaseClient) {
-        updateSyncStatus('未连接', 'error');
+        setSync('NOT_CONNECTED', 'error');
         throw new Error('Supabase 未初始化');
     }
     if (_uploading) {
@@ -4252,10 +4262,10 @@ async function syncToSupabase(createSnapshotFlag = false) {
             const { error } = await supabaseClient.from('companies').select('count', { count: 'exact', head: true });
             if (error) throw error;
         } catch (e) {
-            updateSyncStatus('连接失败', 'error');
+            setSync('CONNECT_FAIL', 'error');
             throw new Error('无法连接到 Supabase: ' + e.message);
         }
-        updateSyncStatus('同步中...', 'syncing');
+        setSync('SYNCING', 'syncing');
         console.log('🔵 开始同步数据到 Supabase...');
 
         // ===== 【v21 新增】上传前先与云端做"时间戳合并" =====
@@ -4812,7 +4822,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
             errors.forEach(({ table, error }) => {
                 console.error(`  - ${table}:`, error.message || error);
             });
-            updateSyncStatus('同步失败', 'error');
+            setSync('SYNC_FAIL', 'error');
             // 【v2修复】上传不完整时明确抛错：手动上传会弹出真实失败原因（不再显示“上传成功”），
             // 自动同步会保留 _pendingUpload 待下次重试，且不会执行后续拉取覆盖本地
             throw new Error('部分数据上传失败: ' + errors.map(e => e.table).join(', ') + '（云端数据未完整更新，本地修改已保留，将自动重试）');
@@ -4857,7 +4867,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
             console.log('✅ 所有数据同步完成（上传成功，未覆盖本地修改）');
         }
     } catch (err) {
-        updateSyncStatus('上传失败', 'error');
+        setSync('UPLOAD_FAIL', 'error');
         throw err;
     } finally {
         _uploading = false;
@@ -4939,7 +4949,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
                     await loadFromSupabase();
                     if (appData.projects.length > 0 || appData.templates.length > 0) {
                         console.log('✅ 从 Supabase 加载成功，项目数:', appData.projects.length);
-                        updateSyncStatus('已同步', 'success');
+                        setSync('SYNCED', 'success');
                         return true;
                     } else {
                         console.log('⚠️ Supabase 数据为空，检查本地缓存...');
@@ -4955,9 +4965,9 @@ async function syncToSupabase(createSnapshotFlag = false) {
                                     if (autoUploadEnabled) {
                                         await syncToSupabase();
                                         console.log('✅ 本地数据已上传到 Supabase');
-                                        updateSyncStatus('已同步', 'success');
+                                        setSync('SYNCED', 'success');
                                     } else {
-                                        updateSyncStatus('本地缓存', '');
+                                        setSync('LOCAL_CACHE', '');
                                     }
                                     return true;
                                 }
@@ -4968,20 +4978,20 @@ async function syncToSupabase(createSnapshotFlag = false) {
                         if (configured && supabaseClient && autoUploadEnabled) {
                             try {
                                 await syncToSupabase();
-                                updateSyncStatus('已同步', 'success');
+                                setSync('SYNCED', 'success');
                                 console.log('✅ 示例数据已上传到 Supabase');
                             } catch (e) {
-                                updateSyncStatus('本地仅缓存', 'error');
+                                setSync('LOCAL_ONLY', 'error');
                                 console.error('❌ 上传示例数据失败:', e);
                             }
                         } else {
-                            updateSyncStatus('本地仅缓存', '');
+                            setSync('LOCAL_ONLY', '');
                         }
                         return true;
                     }
                 } catch (e) {
                     console.error('❌ 从 Supabase 加载失败:', e);
-                    updateSyncStatus('同步失败', 'error');
+                    setSync('SYNC_FAIL', 'error');
                     console.log('🔵 尝试从本地缓存恢复...');
                 }
                 }
@@ -4995,11 +5005,11 @@ async function syncToSupabase(createSnapshotFlag = false) {
                     ensureColors();
                     syncSettlementsWithProjects();
                     console.log('✅ 从本地缓存恢复成功，项目数:', appData.projects.length);
-                    updateSyncStatus(configured ? '本地缓存' : '未配置', '');
+                    setSync(configured ? 'LOCAL_CACHE' : 'NOT_CONFIG', '');
                     if (configured && supabaseClient && autoUploadEnabled) {
                         try {
                             await syncToSupabase();
-                            updateSyncStatus('已同步', 'success');
+                            setSync('SYNCED', 'success');
                             console.log('✅ 本地缓存数据已上传到 Supabase');
                         } catch (e) { console.error('❌ 上传失败:', e); }
                     }
@@ -5025,14 +5035,14 @@ async function syncToSupabase(createSnapshotFlag = false) {
             if (configured && supabaseClient && autoUploadEnabled) {
                 try {
                     await syncToSupabase();
-                    updateSyncStatus('已同步', 'success');
+                    setSync('SYNCED', 'success');
                     console.log('✅ 示例数据已上传到 Supabase');
                 } catch (e) {
-                    updateSyncStatus('本地仅缓存', 'error');
+                    setSync('LOCAL_ONLY', 'error');
                     console.error('❌ 上传示例数据失败:', e);
                 }
             } else {
-                updateSyncStatus('本地仅缓存', '');
+                setSync('LOCAL_ONLY', '');
             }
             return true;
         }
@@ -5368,12 +5378,21 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
             }
         }
 
+        // 【v22 4.5】同步状态文案集中管理：所有固定文案在此定义，杜绝散落硬编码
+        const SYNC_MSG = {
+            LOCAL_CACHE: '本地缓存', LOCAL_ONLY: '本地仅缓存', PENDING_UPLOAD: '待上传...',
+            UPLOAD_FAIL: '上传失败', NOT_CONFIG: '未配置', CONFIGURED: '已配置',
+            CONFIG_ERR: '配置错误', NOT_CONNECTED: '未连接', CONNECT_FAIL: '连接失败',
+            SYNCING: '同步中...', SYNC_FAIL: '同步失败', SYNCED: '已同步',
+            SNAP_FALLBACK: '同步成功（快照失败）', RESTORED_LATEST: '已恢复最新版本'
+        };
+        function setSync(key, type) { return updateSyncStatus(SYNC_MSG[key] || key, type); }
         function updateSyncStatus(text, type) {
             const dot = document.getElementById('syncDot'),
                 txt = document.getElementById('syncText');
             if (txt) txt.textContent = text;
             if (dot) { dot.className = 'dot'; if (type) dot.classList.add(type); }
-            if (text === '已同步' && !supabaseClient) { if (txt) txt.textContent = '本地缓存'; if (dot) { dot.className =
+            if (text === SYNC_MSG.SYNCED && !supabaseClient) { if (txt) txt.textContent = SYNC_MSG.LOCAL_CACHE; if (dot) { dot.className =
                         'dot'; } }
         }
 
@@ -5387,7 +5406,7 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                 if (supabaseClient && getSupabaseConfig()) {
                     syncToSupabase().catch(err => {
                         console.error('自动上传失败', err);
-                        updateSyncStatus('上传失败', 'error');
+                        setSync('UPLOAD_FAIL', 'error');
                     });
                 }
             }
@@ -5457,7 +5476,7 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
       	                 // 【v21.23】原逻辑：正在输入就跳过刷新 → 用户停在输入框时永远刷不出新数据，
       	                 // 只能手动 Ctrl+Shift+R。改用 safeRenderPage：保住草稿/焦点后照常刷新。
       	                 safeRenderPage(currentPage);
-     	                 updateSyncStatus('已同步', 'success');
+     	                 setSync('SYNCED', 'success');
      	                 console.log('✅ 自动同步完成（已上传本地修改）');
      	            } else {
      	                 console.log('⏰ 自动同步：拉取云端数据...');
@@ -5473,7 +5492,7 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                           console.log('🖊 正在输入（' + ae.tagName + '），仍执行刷新（草稿与焦点已保护）');
                       }
                       safeRenderPage(currentPage);
-                      updateSyncStatus('已同步', 'success');
+                      setSync('SYNCED', 'success');
                       console.log('🔄 已重新渲染页面: ' + currentPage);
         	              console.log('✅ 自动拉取完成');
     	                  } catch (e) {
@@ -5530,7 +5549,7 @@ async function manualSync() {
             _pendingUpload = false;   // 已从云端拉取，本地与云端一致，清除待上传标记
             renderPage(currentPage);
             showToast('✅ 已从云端同步最新数据');
-            updateSyncStatus('已同步', 'success');
+            setSync('SYNCED', 'success');
         } catch (e) {
             showAlert('同步失败: ' + e.message);
         }
@@ -5615,6 +5634,7 @@ async function manualSync() {
                 home: renderHome,
                 projects: renderProjects,
                 tasks: renderTasks,
+                inbox: renderInbox,
                 calendar: renderCalendar,
                 logs: renderLogs,
                 settlement: renderSettlement,
@@ -5954,12 +5974,14 @@ function renderHome(mc) {
             const pct = getProgressPercent(p.nodes),
                 cls = progressClass(pct);
             const priorityHtml = getPriorityBadgeHtml(p);
-            return `<div class="kanban-card">
+            const stale = isProjectStale(p);
+            return `<div class="kanban-card" ${stale ? 'style="border-left:3px solid #dc2626;"' : ''}>
                 <div class="card-title">${esc(getTplName(p.templateId))} <span style="font-size:11px;color:#64748b;">${esc(p.company)}</span> ${priorityHtml}</div>
+                ${stale ? '<div class="v22-stale-tag">⚠️ 超7天未更新 · 需体检</div>' : ''}
                 <span class="tag">${esc(p.tag||'')}</span>
                 <div class="progress-bar"><div class="progress-fill ${cls}" style="width:${pct}%;"></div></div>
                 <div style="font-size:11px;color:var(--text-secondary);">完成 ${pct}%</div>
-                ${(p.nodes||[]).map((n,i)=>`<div class="node-row"><span>${esc(n.name)}</span><button class="node-status-btn status-${n.status||'pending'}" onclick="cycleNode('${p.id}',${i})">${n.status==='done'?'✅':n.status==='progress'?'🔄':'⏳'}</button></div>`).join('')}
+                ${(p.nodes||[]).map((n,i)=>`<div class="node-row"><span>${esc(n.name)}${n.blocker ? `<span class="v22-blocker-tag" title="${esc(n.blocker)}">📌${esc(n.blocker.slice(0,8))}</span>` : ''}</span><button class="btn btn-xs btn-ghost" style="padding:0 4px;" onclick="openNodeInfo('${p.id}',${i})" title="卡点/下一步">✎</button><button class="node-status-btn status-${n.status||'pending'}" onclick="cycleNode('${p.id}',${i})">${n.status==='done'?'✅':n.status==='progress'?'🔄':'⏳'}</button></div>`).join('')}
                 <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;">
                   <button class="btn btn-xs btn-success" onclick="completeAllNodes('${p.id}')">✅ 完成</button>
                   <button class="btn btn-xs btn-ghost" onclick="terminateProject('${p.id}')">终止</button>
@@ -5996,11 +6018,56 @@ function renderHome(mc) {
             renderHome(document.getElementById('mainContent'));
         }
 
+        // 【v22 3.3】项目卡点/下一步 + 体检
+        function isProjectStale(p) {
+            const raw = p.updatedAt || p.updated_at || p.lastModified;
+            if (!raw) return false;
+            const d = new Date(raw);
+            if (isNaN(d.getTime())) return false;
+            return (Date.now() - d.getTime()) > 7 * 24 * 3600 * 1000;
+        }
+        function openNodeInfo(pid, i) {
+            const p = appData.projects.find(pr => pr.id === pid);
+            if (!p || !p.nodes || !p.nodes[i]) return;
+            const n = p.nodes[i];
+            const html = `<div class="modal-overlay"><div class="modal" style="max-width:420px;">
+              <div class="modal-header"><h3>节点信息：${esc(n.name)}</h3><button class="close-btn" onclick="this.closest('.modal-overlay').remove()">×</button></div>
+              <div class="modal-body">
+                <div style="margin-bottom:10px;"><label>📌 卡在哪</label>
+                  <textarea id="nodeBlocker" class="form-input" rows="2" style="width:100%;">${esc(n.blocker||'')}</textarea></div>
+                <div style="margin-bottom:10px;"><label>👉 下一步</label>
+                  <textarea id="nodeNext" class="form-input" rows="2" style="width:100%;">${esc(n.next||'')}</textarea></div>
+              </div>
+              <div class="modal-footer"><button class="btn btn-primary" onclick="saveNodeInfo('${pid}',${i})">保存</button></div>
+            </div></div>`;
+            const ov = document.createElement('div'); ov.innerHTML = html;
+            document.body.appendChild(ov.firstElementChild);
+        }
+        function saveNodeInfo(pid, i) {
+            const p = appData.projects.find(pr => pr.id === pid);
+            if (!p || !p.nodes || !p.nodes[i]) return;
+            // 【铁律】读-改-写：先读全量 nodes，只改目标节点，整数组写回；不碰 status
+            const nodes = JSON.parse(JSON.stringify(p.nodes));
+            nodes[i].blocker = (document.getElementById('nodeBlocker')?.value || '').trim();
+            nodes[i].next = (document.getElementById('nodeNext')?.value || '').trim();
+            nodes[i].updatedAt = new Date().toISOString();
+            p.nodes = nodes;
+            p.updatedAt = new Date().toISOString();
+            // status 不动：卡点/下一步是内容更新，不改变项目状态
+            markProjectNodesEdited(p);
+            saveData(true);
+            document.querySelectorAll('.modal-overlay').forEach(el => el.remove());
+            renderPage(currentPage);
+            showToast('✅ 节点信息已保存');
+        }
+
         function cycleNode(pid, i) {
             const p = appData.projects.find(pr => pr.id === pid);
             if (!p) return;
             const n = p.nodes[i];
-            n.status = n.status === 'pending' ? 'progress' : n.status === 'progress' ? 'done' : 'pending';
+            // 【v22 2.3】取消完成语义统一：done 取消 → progress（与 toggleTask 取消完成一致）
+            // 循环：pending→progress→done→progress（done 可再点回 done 之外状态，不卡死）
+            n.status = n.status === 'pending' ? 'progress' : n.status === 'progress' ? 'done' : 'progress';
             // 【v21.54】记录节点完成日期，用于周报/月报「本周/本月工作内容」统计
             const today = fmtLocal();
             if (n.status === 'done') { if (!n.completedDate) n.completedDate = today; }
@@ -6245,12 +6312,12 @@ function toggleTaskComplete(tid, el) {
             if (!inp || !inp.value.trim()) return;
             const pid = document.getElementById('todoProj')?.value || null;
             const content = inp.value.trim();
-            appData.workLogs.push({ id: getNextId(), date: fmtLocal(), type: 'daily',
-                projectId: pid, content: content });
-            saveData();
             inp.value = '';
-            renderHome(document.getElementById('mainContent'));
-            showToast('✅ 日志已记录');
+            // 【v22 2.1】统一走 commitWorkLog（写入即同步），与日志页/复盘行为一致
+            commitWorkLog(pid, content, fmtLocal(), 'daily', function() {
+                renderHome(document.getElementById('mainContent'));
+                showToast('✅ 日志已记录并同步');
+            });
         }
 
         function deleteLog(id) {
@@ -8220,6 +8287,98 @@ function renderSettlement(mc) {
         }
 
         // ============================================================
+        // 【v22 3.2】收件箱：碎片任务入口，一键转入插单队列（接桌面 sameTask 防重）
+        // 存独立 localStorage，不进 appData 主同步链路，避免碰 id 合并/墓碑铁律。
+        // ============================================================
+        const INBOX_KEY = 'wb_inbox_v1';
+        function loadInbox() {
+            try { return JSON.parse(localStorage.getItem(INBOX_KEY) || '[]') || []; }
+            catch (e) { return []; }
+        }
+        function saveInbox(arr) {
+            localStorage.setItem(INBOX_KEY, JSON.stringify(arr));
+            updateInboxBadge();
+        }
+        function updateInboxBadge() {
+            const b = document.getElementById('inboxBadge');
+            if (b) b.textContent = String(loadInbox().length);
+        }
+        function addInboxItem() {
+            const inp = document.getElementById('inboxInput');
+            if (!inp || !inp.value.trim()) return;
+            const arr = loadInbox();
+            const title = inp.value.trim();
+            if (arr.some(x => (x.title || '').trim() === title)) {
+                showToast('⚠️ 收件箱已有同名任务'); return;   // sameTask 防重
+            }
+            arr.push({ id: 'inbox_' + Date.now(), title: title, createdAt: fmtLocal() });
+            saveInbox(arr);
+            inp.value = '';
+            renderInbox(document.getElementById('mainContent'));
+            showToast('✅ 已收入收件箱');
+        }
+        function deleteInboxItem(id) {
+            saveInbox(loadInbox().filter(x => x.id !== id));
+            renderInbox(document.getElementById('mainContent'));
+        }
+        // 转入插单队列：写 task_plans（与桌面记插单同一张表），供桌面端排程读取
+        function inboxToPlan(id) {
+            const item = loadInbox().find(x => x.id === id);
+            if (!item) return;
+            commitInboxToPlans([{ title: item.title, score: 5, est_min: 60,
+                                  task_id: null, source: 'inbox' }]).then(function(ok) {
+                if (ok) {
+                    saveInbox(loadInbox().filter(x => x.id !== id));
+                    renderInbox(document.getElementById('mainContent'));
+                    showToast('✅ 已转入今日安排（桌面端可见）');
+                } else {
+                    showToast('⚠️ 云端未配置，转入仅本地');
+                }
+            });
+        }
+        function commitInboxToPlans(items) {
+            if (!supabaseClient || !getSupabaseConfig()) return Promise.resolve(false);
+            const rows = items.map(function(it, i) {
+                return {
+                    id: 'plan_' + Date.now() + '_' + i,
+                    task_id: it.task_id || null, title: it.title, score: it.score || 5,
+                    est_min: it.est_min || 60, recorded_min: 0, plan_date: fmtLocal(),
+                    slot: 'am', seq: i, status: 'planned', note: '来自收件箱',
+                    source: it.source || 'inbox',
+                    created_at: new Date().toISOString(), updated_at: new Date().toISOString()
+                };
+            });
+            return supabaseClient.from('task_plans').insert(rows).then(function(res) {
+                if (res.error) { console.error('[v22] inbox→plans 失败:', res.error); return false; }
+                return true;
+            }).catch(function(e) { console.error('[v22] inbox→plans 异常:', e); return false; });
+        }
+        function renderInbox(mc) {
+            const arr = loadInbox();
+            const c = mc || document.getElementById('mainContent');
+            c.innerHTML = `
+                <div class="page-header"><h2>📥 收件箱</h2>
+                  <span style="color:var(--text-secondary);font-size:13px;">碎片任务先收进来，转出后进入今日安排（桌面端可见）</span></div>
+                <div class="card" style="padding:16px;margin-bottom:14px;">
+                  <div style="display:flex;gap:8px;">
+                    <input id="inboxInput" class="form-input" placeholder="记下一个碎片任务…" style="flex:1;"
+                      onkeydown="if(event.key==='Enter')addInboxItem()">
+                    <button class="btn btn-primary" onclick="addInboxItem()">＋ 收入</button>
+                  </div>
+                </div>
+                <div class="card" style="padding:16px;">
+                  ${arr.length ? arr.map(x => `
+                    <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-bottom:1px solid var(--border);">
+                      <span style="flex:1;">${esc(x.title)}</span>
+                      <span style="color:var(--text-tertiary);font-size:12px;">${esc(x.createdAt || '')}</span>
+                      <button class="btn btn-sm" onclick="inboxToPlan('${x.id}')">转入安排</button>
+                      <button class="btn btn-sm" onclick="deleteInboxItem('${x.id}')">删除</button>
+                    </div>`).join('') : '<div class="empty-state">收件箱是空的，先记几个碎片任务吧</div>'}
+                </div>`;
+            updateInboxBadge();
+        }
+
+        // ============================================================
         // 日历视图（FullCalendar）
         // ============================================================
         function renderCalendar(mc) {
@@ -8373,6 +8532,16 @@ function renderSettlement(mc) {
                 },
                 eventRender: function(event, element) {
                     if (event.className) element.addClass(event.className);
+                },
+                // 【v22 2.5】休息日高亮：法定节假日/周末标灰，调休补班标绿
+                dayRender: function(date, cell) {
+                    if (typeof wbIsWorkday === 'function') {
+                        if (!wbIsWorkday(date.toDate ? date.toDate() : date)) {
+                            cell.addClass('wb-rest-day');
+                        } else if (date.day && (date.day() === 0 || date.day() === 6)) {
+                            cell.addClass('wb-makeup-day');
+                        }
+                    }
                 },
                 viewRender: function(view, element) {
                     const label = document.getElementById('calMonthLabel');
@@ -8648,6 +8817,30 @@ function renderLogs(mc) {
         `;
         document.head.appendChild(style);
     }
+}
+
+// 【v22 2.1】统一日志写入入口：quickLog / addWorkLog / 桌面日志球共用同一套「写入即同步」逻辑。
+// type 默认 daily（保持原行为），复盘传 review。
+function commitWorkLog(pid, content, dateVal, type, successCb) {
+    if (!content || !content.trim()) return;
+    if (!appData.workLogs) appData.workLogs = [];
+    appData.workLogs.push({
+        id: getNextId(), date: dateVal || fmtLocal(), type: type || 'daily',
+        projectId: pid || null, content: content.trim()
+    });
+    ensureColors();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+    updateBadges();
+    _pendingUpload = true;
+    if (typeof successCb === 'function') successCb();
+    if (supabaseClient && getSupabaseConfig()) {
+        return syncToSupabase(true).then(function() {
+            console.log('[v22] work log synced:', type || 'daily');
+        }).catch(function(err) {
+            console.error('❌ 日志同步失败（数据仍保留在本地）:', err);
+        });
+    }
+    return Promise.resolve();
 }
 
 function addWorkLog() {
@@ -8949,6 +9142,104 @@ function renderDataReport(mc) {
     requestAnimationFrame(() => { if (mc) { const _mx = Math.max(0, mc.scrollHeight - mc.clientHeight); mc.scrollTop = Math.min(_mt, _mx); } });
     mc.innerHTML = buildDataReportHtml();
     window._ry = window._ry || new Date().getFullYear();
+    // 【v22 3.4】在最前面插入「未完成原因分布」卡片（异步填数据，不影响主表渲染）
+    const host = document.createElement('div');
+    host.id = 'reasonStatsHost';
+    host.innerHTML = '<div class="card" style="padding:16px;margin-bottom:14px;"><div style="font-size:14px;font-weight:600;">📊 未完成原因分布（近14天）</div><div id="reasonStatsBody" style="margin-top:10px;color:var(--text-secondary);font-size:13px;">加载中…</div></div>';
+    mc.insertBefore(host, mc.firstChild);
+    // 【v22 3.5】五段式周报卡片
+    const wh = document.createElement('div');
+    wh.id = 'weeklyDraftHost';
+    wh.innerHTML = `<div class="card" style="padding:16px;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div style="font-size:14px;font-weight:600;">📅 本周周报 · 五段式草稿</div>
+        <div style="display:flex;gap:6px;">
+          <button class="btn btn-sm" onclick="generateFivePartWeekly()">生成草稿</button>
+          <button class="btn btn-sm btn-primary" onclick="exportWeeklyDraft()">导出文本</button>
+        </div></div>
+      <div id="weeklyDraftBody" style="margin-top:10px;color:var(--text-secondary);font-size:13px;white-space:pre-wrap;line-height:1.8;">点击「生成草稿」汇总本周完成情况</div></div>`;
+    mc.insertBefore(wh, host);
+    if (window._weeklyDraft) {
+        const wb = document.getElementById('weeklyDraftBody');
+        if (wb) wb.textContent = window._weeklyDraft;
+    }
+}
+
+// 【v22 3.5】五段式周报：本周完成 / 关键进展 / 未完成与原因 / 下周三件事 / 卡点与求助
+function generateFivePartWeekly() {
+    const now = new Date();
+    const weekStart = new Date(now); weekStart.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    const ws = fmtLocal(weekStart);
+    const doneTasks = appData.tasks.filter(t => t.completed && t.completedDate && t.completedDate >= ws);
+    const pending = appData.tasks.filter(t => !t.completed);
+    const carriedPlans = (window._allPlansForWeek || []).filter(p => p.status === 'carried');
+    const blockers = [];
+    appData.projects.forEach(p => (p.nodes || []).forEach(n => {
+        if (n.blocker) blockers.push(p.company + ' - ' + n.name + '：' + n.blocker);
+    }));
+    const draft = [
+        '1. 本周完成：' + (doneTasks.length ? doneTasks.map(t => t.title).join('、') : '暂无'),
+        '2. 关键进展：' + (doneTasks.length ? doneTasks.slice(0, 3).map(t => '「' + t.title + '」完成').join('；') : '暂无'),
+        '3. 未完成与原因：' + (pending.length ? pending.slice(0, 5).map(t => t.title + (t.reason ? '（' + t.reason + '）' : '')).join('、') : '暂无'),
+        '4. 下周三件事：' + (pending.slice(0, 3).map(t => t.title).join('、') || '待定'),
+        '5. 卡点与求助：' + (blockers.length ? blockers.join('；') : (carriedPlans.length ? carriedPlans.map(p => p.title + '（' + (p.reason || '结转') + '）').join('；') : '暂无'))
+    ].join('\n');
+    window._weeklyDraft = draft;
+    const body = document.getElementById('weeklyDraftBody');
+    if (body) body.textContent = draft;
+    showToast('✅ 周报草稿已生成');
+    return draft;
+}
+function exportWeeklyDraft() {
+    const text = window._weeklyDraft || generateFivePartWeekly();
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = '周报_' + fmtLocal() + '.txt';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    showToast('✅ 周报已导出');
+}
+
+// 【v22 3.4】基于 task_plans.reason 统计近14天分布，可点原因下钻
+const REASON_COLORS = { '等待确认':'#dc2626', '临时突发':'#ea580c', '卡住':'#0891b2', '沟通偏差':'#7c3aed', '其他':'#64748b' };
+function renderReasonStats() {
+    const body = document.getElementById('reasonStatsBody');
+    if (!body) return;
+    if (!supabaseClient || !getSupabaseConfig()) {
+        body.innerHTML = '未配置云同步，暂无统计数据'; return;
+    }
+    const since = new Date(); since.setDate(since.getDate() - 14);
+    const sinceStr = fmtLocal(since);
+    supabaseClient.from('task_plans').select('reason,plan_date,title,carry_from')
+      .gte('plan_date', sinceStr).then(function(res) {
+        if (res.error) { body.textContent = '统计加载失败：' + (res.error.message||''); return; }
+        const counts = {};
+        const details = {};
+        (res.data || []).forEach(function(r) {
+            if (!r.reason) return;
+            counts[r.reason] = (counts[r.reason] || 0) + 1;
+            (details[r.reason] = details[r.reason] || []).push(r.title || '（无标题）');
+        });
+        const keys = Object.keys(counts).sort((a,b)=>counts[b]-counts[a]);
+        if (!keys.length) { body.innerHTML = '<span style="color:var(--text-tertiary);">近14天暂无未完成记录</span>'; return; }
+        const max = Math.max.apply(null, keys.map(k=>counts[k]));
+        body.innerHTML = keys.map(function(k) {
+            const pct = Math.round(counts[k]/max*100);
+            return `<div style="margin-bottom:8px;cursor:pointer;" onclick="showReasonDetail('${esc(k)}')">
+              <div style="display:flex;justify-content:space-between;font-size:12px;">
+                <span>${esc(k)}</span><span>${counts[k]} 次</span></div>
+              <div style="height:6px;background:var(--bg-tertiary,#eef2f7);border-radius:3px;margin-top:2px;">
+                <div style="width:${pct}%;height:6px;background:${REASON_COLORS[k]||'#64748b'};border-radius:3px;"></div></div></div>`;
+        }).join('') + '<div style="font-size:11px;color:var(--text-tertiary);margin-top:6px;">点击原因查看明细</div>';
+        window._reasonDetails = details;
+      }).catch(function(e){ body.textContent = '统计异常：' + (e && e.message ? e.message : ''); });
+}
+function showReasonDetail(reason) {
+    const list = (window._reasonDetails || {})[reason] || [];
+    createModal(`<h3>原因：${esc(reason)}</h3>
+      <div style="line-height:1.9;font-size:13px;">${list.length ? list.map(x=>'· '+esc(x)).join('<br>') : '无明细'}</div>
+      <div style="margin-top:14px;text-align:right;"><button class="btn" onclick="document.querySelector('.modal-overlay')?.remove()">关闭</button></div>`);
 }
 
         // ============================================================
@@ -10282,6 +10573,79 @@ grant insert, select, delete on public.snapshots to anon;</pre>
                 </div>
               `;
             renderGateManage();
+            renderPlanSettingsPanel(mc);
+        }
+
+        // 【v22 3.6】完整设置面板：时段起止/夏令时区间模式/复盘时间模式/积分配额
+        // 改动写云端 plan_settings(key='plan_config')，桌面端下次同步读到 → 同步到 plan_settings.json
+        function renderPlanSettingsPanel(mc) {
+            const host = document.createElement('div');
+            host.id = 'planSettingsHost';
+            host.innerHTML = `<div class="card" style="padding:16px;margin-bottom:14px;">
+              <h3 style="color:var(--primary);">⚙️ 今日安排设置（v22）</h3>
+              <div id="planSettingsBody" style="font-size:13px;color:var(--text-secondary);">⏳ 读取配置…</div></div>`;
+            mc.insertBefore(host, mc.firstChild);
+            loadPlanConfigFromCloud().then(function(cfg) {
+                const body = document.getElementById('planSettingsBody');
+                if (!body) return;
+                const slots = cfg.slots || {};
+                const rv = cfg.review || {};
+                const sr = cfg.summer_range || {};
+                body.innerHTML = `
+                  <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;max-width:600px;">
+                    <div><label>时段模式</label><select id="psProfile" class="form-input" style="width:100%;padding:6px;">
+                      ${['auto','summer','standard'].map(x=>`<option value="${x}" ${cfg.profile===x?'selected':''}>${x}</option>`).join('')}
+                    </select></div>
+                    <div><label>复盘模式</label><select id="psReviewMode" class="form-input" style="width:100%;padding:6px;">
+                      ${['popup','remind','off'].map(x=>`<option value="${x}" ${rv.mode===x?'selected':''}>${x}</option>`).join('')}
+                    </select></div>
+                    <div><label>复盘时间</label><input id="psReviewTime" class="form-input" value="${esc(rv.time||'18:00')}" style="width:100%;padding:6px;"></div>
+                    <div><label>夏令时区间</label><div style="display:flex;gap:4px;">
+                      <input id="psSummerFrom" class="form-input" value="${esc(sr.from||'04-01')}" style="width:50%;padding:6px;">
+                      <input id="psSummerTo" class="form-input" value="${esc(sr.to||'10-31')}" style="width:50%;padding:6px;"></div></div>
+                    ${['summer','standard'].map(p=>['am','pm'].map(s=>{
+                      const rng=(slots[p]||{})[s]||['09:00','12:00'];
+                      return `<div><label>${p} ${s.toUpperCase()}</label><div style="display:flex;gap:4px;">
+                        <input id="ps_${p}_${s}_a" class="form-input" value="${esc(rng[0])}" style="width:50%;padding:6px;">
+                        <input id="ps_${p}_${s}_b" class="form-input" value="${esc(rng[1])}" style="width:50%;padding:6px;"></div></div>`;
+                    }).join('')).join('')}
+                  </div>
+                  <button class="btn btn-primary btn-sm" style="margin-top:12px;" onclick="savePlanConfigFromUI()">保存并同步桌面</button>`;
+                window._planCfgLoaded = cfg;
+            });
+        }
+        function loadPlanConfigFromCloud() {
+            const fallback = JSON.parse(JSON.stringify({
+                slots:{summer:{am:['08:30','12:00'],pm:['13:30','18:00']},standard:{am:['09:00','12:00'],pm:['13:00','17:30']}},
+                profile:'auto',summer_range:{from:'04-01',to:'10-31'},review:{enabled:true,time:'18:00',mode:'popup'}
+            }));
+            if (!supabaseClient || !getSupabaseConfig()) return Promise.resolve(fallback);
+            return supabaseClient.from('plan_settings').select('value').eq('key','plan_config').then(function(res) {
+                if (res.error || !res.data || !res.data.length) return fallback;
+                return Object.assign(fallback, res.data[0].value || {});
+            }).catch(function(){ return fallback; });
+        }
+        function savePlanConfigFromUI() {
+            const g = id => (document.getElementById(id)?.value || '').trim();
+            const cfg = window._planCfgLoaded || {};
+            cfg.profile = g('psProfile');
+            cfg.review = cfg.review || {};
+            cfg.review.mode = g('psReviewMode');
+            cfg.review.time = g('psReviewTime');
+            cfg.review.enabled = cfg.review.mode !== 'off';
+            cfg.summer_range = { from: g('psSummerFrom'), to: g('psSummerTo') };
+            cfg.slots = cfg.slots || {};
+            ['summer','standard'].forEach(p=>['am','pm'].forEach(s=>{
+                cfg.slots[p] = cfg.slots[p] || {};
+                cfg.slots[p][s] = [g('ps_'+p+'_'+s+'_a'), g('ps_'+p+'_'+s+'_b')];
+            }));
+            if (!supabaseClient || !getSupabaseConfig()) { showToast('⚠️ 未配置云同步，无法保存'); return; }
+            supabaseClient.from('plan_settings').upsert({ key:'plan_config', value:cfg,
+                updated_at:new Date().toISOString() }).then(function(res){
+                if (res.error) { console.error('[v22] plan_settings 保存失败:',res.error); showToast('⚠️ 保存失败'); return; }
+                window._planCfgLoaded = cfg;
+                showToast('✅ 设置已保存，桌面端下次同步生效');
+            });
         }
 
         // 版本历史折叠面板：默认收起，首次展开才拉取数据（省一次云端请求）
@@ -10360,7 +10724,7 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             const ok = initSupabase();
             if (ok) {
                 showToast('✅ 配置已保存，Supabase 已连接。点击「上传」推送数据，点击「同步」拉取数据。');
-                updateSyncStatus('已配置', '');
+                setSync('CONFIGURED', '');
             } else {
                 showAlert('❌ 配置无效，请检查 URL 和 Key');
             }
@@ -10371,7 +10735,7 @@ grant insert, select, delete on public.snapshots to anon;</pre>
             showConfirm('确认清除 Supabase 配置？本地数据不会丢失。', function() {
                 localStorage.removeItem('supabase_config');
                 supabaseClient = null;
-                updateSyncStatus('未配置', '');
+                setSync('NOT_CONFIG', '');
                 renderCloudSync(document.getElementById('mainContent'));
                 showToast('已清除配置');
             }, function() {});
