@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.2">
+    <meta name="app-version" content="22.3">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1092,6 +1092,45 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 /* 月视图格子小：徽标更紧凑，两时并排一行 */
 .fc-calendar-container .fc-month-view .wb-day-slots { flex-direction:row; flex-wrap:wrap; gap:2px; margin:1px 2px 0; }
 .fc-calendar-container .fc-month-view .wb-slot-chip { font-size:10px; padding:0 4px; flex:1 1 auto; min-width:0; }
+/* ===== 【v22.3】时段视图：左侧上午/下午行头 + 7 个日期列 = 8 列 × 2 行 ===== */
+.slot-grid-wrap { flex:1; min-height:0; overflow:auto; padding:4px 2px 8px; display:flex; flex-direction:column; }
+.slot-grid-wrap .slot-grid { flex:1 1 auto; min-height:0; }
+.slot-grid { width:100%; height:100%; border-collapse:separate; border-spacing:6px; table-layout:fixed; }
+.slot-grid th, .slot-grid td { padding:0; vertical-align:top; }
+.slot-rowhead { width:74px; min-width:74px; background:linear-gradient(180deg,#f1f5f9,#e8eef6); border-radius:10px;
+  padding:8px 6px !important; text-align:center; color:var(--primary); font-size:13px; font-weight:700; line-height:1.35; }
+.slot-rowhead .slot-range { display:block; font-size:10px; font-weight:500; color:var(--text-secondary,#64748b); margin-top:3px; letter-spacing:-0.2px; }
+.slot-rowhead .slot-cap { display:block; font-size:10px; font-weight:600; color:var(--text-tertiary,#94a3b8); margin-top:2px; }
+.slot-dayhead { background:transparent; text-align:center !important; padding:4px 2px 6px !important; }
+.slot-dayhead .slot-dow { display:block; font-size:12px; color:var(--text-secondary,#64748b); font-weight:600; }
+.slot-dayhead .slot-dnum { display:block; font-size:15px; color:var(--text-primary,#1e293b); font-weight:700; margin-top:1px; }
+.slot-dayhead.slot-today .slot-dnum { color:var(--primary); }
+.slot-dayhead.slot-today .slot-dow { color:var(--primary); }
+.slot-dayhead.slot-rest .slot-dnum { color:#94a3b8; }
+.slot-cell { background:#f8fafc; border:1px solid #eef2f7; border-radius:10px; padding:6px 7px !important; height:100%; vertical-align:top !important;
+  transition:background .18s, border-color .18s; }
+.slot-cell.slot-rest { background:rgba(148,163,184,0.10); }
+.slot-cell.slot-today { border-color:rgba(21,101,192,0.28); background:rgba(21,101,192,0.045); }
+.slot-cell:hover { background:#fff; border-color:rgba(21,101,192,0.25); }
+.slot-cell.slot-empty::after { content:'—'; color:#cbd5e1; font-size:12px; }
+.slot-task { display:flex; align-items:center; gap:5px; padding:4px 6px; border-radius:7px; background:#fff;
+  border:1px solid #e8edf3; margin-bottom:4px; font-size:12px; line-height:1.3; cursor:default; }
+.slot-task .st-dot { width:6px; height:6px; border-radius:50%; background:#3b6df0; flex-shrink:0; }
+.slot-task .st-title { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-primary,#1e293b); }
+.slot-task .st-meta { font-size:10px; color:var(--text-secondary,#64748b); flex-shrink:0; font-variant-numeric:tabular-nums; }
+.slot-task.st-done { background:rgba(16,185,129,0.09); border-color:rgba(16,185,129,0.22); }
+.slot-task.st-done .st-dot { background:#10b981; }
+.slot-task.st-done .st-title { color:#047857; text-decoration:line-through; text-decoration-color:rgba(16,185,129,0.5); }
+.slot-task.st-part { background:rgba(245,158,11,0.10); border-color:rgba(245,158,11,0.24); }
+.slot-task.st-part .st-dot { background:#f59e0b; }
+.slot-task.st-carry { background:rgba(239,68,68,0.08); border-color:rgba(239,68,68,0.20); }
+.slot-task.st-carry .st-dot { background:#ef4444; }
+.slot-task.st-more { justify-content:center; color:var(--text-secondary,#64748b); background:transparent; border-style:dashed; font-size:11px; }
+.slot-empty-hint { padding:10px 14px; border-radius:10px; background:rgba(21,101,192,0.05); border:1px dashed rgba(21,101,192,0.22);
+  color:var(--text-secondary,#64748b); font-size:12.5px; line-height:1.6; }
+.slot-empty-hint b { color:var(--primary); }
+.slot-detail-row { display:flex; align-items:center; gap:6px; padding:4px 0; border-top:1px dashed var(--border,#eef2f7); font-size:12px; }
+.slot-detail-row .st-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
 .wb-slot-detail { position:fixed; z-index:9999; max-width:280px; background:#fff; border:1px solid var(--border,#e2e8f0); border-radius:10px;
   box-shadow:0 8px 28px rgba(15,23,42,0.18); padding:10px 12px; font-size:12px; color:var(--text-primary,#1e293b); }
 .wb-slot-detail h4 { margin:0 0 6px; font-size:13px; color:var(--primary); }
@@ -2552,7 +2591,7 @@ async function mergeCloudStateBeforeUpload() {
 	let _tasksHasCompletedDate = null;
 	// 【v21.26】数据版本号：每次 saveData 递增，用于让 getProjectName 等处的一次性索引缓存失效
 	let _dataVersion = 0;
-        let calViewMode = 'month';
+        let calViewMode = 'slots';
         let calFilterProject = 'all';
         let calFilterStatus = 'all';
         let calFilterCompany = '';
@@ -2560,6 +2599,10 @@ async function mergeCloudStateBeforeUpload() {
         // 【v22.2 日历时段】按日缓存 task_plans：{ 'YYYY-MM-DD': { am:[...], pm:[...] } }
         let _wbPlanDayMap = {};
         let _wbPlanDayMapLoaded = false;
+        // 【v22.3 时段视图】当前显示周的起始日（周日）+ 视图锚点
+        let _wbSlotsAnchor = null;
+        let _wbSlotsPlanMap = {};
+        let _wbSlotsCfg = null;
 
         // ============================================================
         // 数据层
@@ -8408,12 +8451,13 @@ function renderSettlement(mc) {
                     <button class="${calViewMode === 'month' ? 'active' : ''}" onclick="setCalView('month')">月</button>
                     <button class="${calViewMode === 'week' ? 'active' : ''}" onclick="setCalView('week')">周</button>
                     <button class="${calViewMode === 'day' ? 'active' : ''}" onclick="setCalView('day')">日</button>
+                    <button class="${calViewMode === 'slots' ? 'active' : ''}" onclick="setCalView('slots')">时段</button>
                   </div>
                   <div class="nav-group">
-                    <button onclick="calNavigate(-1)">◀</button>
+                    <button onclick="calNav(-1)">◀</button>
                     <span class="month-label" id="calMonthLabel">加载中...</span>
-                    <button onclick="calNavigate(1)">▶</button>
-                    <button onclick="calToday()" style="font-size:11px;">今天</button>
+                    <button onclick="calNav(1)">▶</button>
+                    <button onclick="calNavToday()" style="font-size:11px;">今天</button>
                   </div>
                   <div class="filter-group">
                     <select id="calProjectFilter" onchange="calFilterChange()">
@@ -8430,8 +8474,9 @@ function renderSettlement(mc) {
                 </div>
               `;
 
-            const containerHtml =
-                `<div class="fc-calendar-container" id="fcContainer"><div id="fcCalendar"></div></div>`;
+            const containerHtml = (calViewMode === 'slots')
+                ? `<div class="slot-grid-wrap" id="slotGridHost"></div>`
+                : `<div class="fc-calendar-container" id="fcContainer"><div id="fcCalendar"></div></div>`;
             const statsHtml =
                 `<div style="font-size:11px;color:var(--text-secondary);padding:8px 0 0;flex-shrink:0;display:flex;gap:12px;flex-wrap:wrap;" id="calStats"><span>📌 加载中...</span></div>`;
 
@@ -8442,7 +8487,14 @@ function renderSettlement(mc) {
                   ${statsHtml}
                 </div>
               `;
-            fetchPlanDayMap(function(){ initFullCalendar(); });
+            if (calViewMode === 'slots') {
+                loadPlanConfigFromCloud().then(function(cfg) {
+                    _wbSlotsCfg = cfg;
+                    _slotsRender();
+                });
+            } else {
+                fetchPlanDayMap(function(){ initFullCalendar(); });
+            }
         }
 
         // 【v22.2】拉取 task_plans，按日期+上午/下午分组缓存（云端失败静默降级，不影响日历主体）
@@ -8544,6 +8596,161 @@ function renderSettlement(mc) {
                     if (!box.contains(e.target) && !el.contains(e.target)) { box.remove(); document.removeEventListener('click', close); }
                 });
             }, 0);
+        }
+
+        // ===== 【v22.3】时段视图 =====
+        // 布局：左侧 1 个行头列（上午/下午）+ 7 个日期列 = 8 列；行 = 上午、下午 2 行。
+        // 数据源：task_plans（plan_date + slot），由桌面端「记插单」排程后上传，
+        // 长任务会按估时自动填满上下午，新任务插入后自动顺延显示。
+        function _slotsStartOfWeek(d) {
+            const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+            x.setDate(x.getDate() - x.getDay()); // 周日为一周起点（与日历 firstDay=0 一致）
+            return x;
+        }
+        function _slotsProfileForDate(cfg, dateStr) {
+            const prof = (cfg && cfg.profile) || 'auto';
+            if (prof === 'summer' || prof === 'standard') return prof;
+            const sr = (cfg && cfg.summer_range) || {};
+            const md = dateStr.slice(5); // MM-DD
+            const from = sr.from || '04-01', to = sr.to || '10-31';
+            return (md >= from && md <= to) ? 'summer' : 'standard';
+        }
+        function _slotsRangeOf(cfg, dateStr, slot) {
+            const prof = _slotsProfileForDate(cfg, dateStr);
+            const slots = (cfg && cfg.slots) || {};
+            const v = (slots[prof] || {})[slot] || (slot === 'am' ? ['09:00', '12:00'] : ['13:00', '17:30']);
+            return v;
+        }
+        function _slotsMinutes(rng) {
+            if (!rng || rng.length < 2) return 0;
+            const a = String(rng[0]).split(':'), b = String(rng[1]).split(':');
+            if (a.length < 2 || b.length < 2) return 0;
+            return Math.max(0, (parseInt(b[0], 10) * 60 + parseInt(b[1], 10)) - (parseInt(a[0], 10) * 60 + parseInt(a[1], 10)));
+        }
+        // 拉取指定日期范围的 task_plans
+        function _slotsLoadPlans(startStr, endStr, cb) {
+            if (!supabaseClient || !getSupabaseConfig()) { _wbSlotsPlanMap = {}; if (cb) cb(); return; }
+            supabaseClient.from('task_plans')
+              .select('plan_date,slot,status,title,score,est_min,seq,reason')
+              .gte('plan_date', startStr).lte('plan_date', endStr)
+              .then(function(res) {
+                const map = {};
+                if (!res.error && res.data) {
+                    res.data.forEach(function(p) {
+                        const d = (p.plan_date || '').slice(0, 10);
+                        if (!d) return;
+                        const sl = (p.slot === 'pm') ? 'pm' : 'am';
+                        (map[d] = map[d] || { am: [], pm: [] })[sl].push(p);
+                    });
+                    Object.keys(map).forEach(function(d) {
+                        map[d].am.sort(function(a, b) { return (a.seq || 0) - (b.seq || 0); });
+                        map[d].pm.sort(function(a, b) { return (a.seq || 0) - (b.seq || 0); });
+                    });
+                }
+                _wbSlotsPlanMap = map;
+                if (cb) cb();
+            }).catch(function(e) {
+                console.error('[v22.3] 时段计划拉取失败:', e);
+                _wbSlotsPlanMap = {};
+                if (cb) cb();
+            });
+        }
+        function _slotsRender() {
+            const host = document.getElementById('slotGridHost');
+            if (!host) return;
+            const anchor = _wbSlotsAnchor || _slotsStartOfWeek(new Date());
+            _wbSlotsAnchor = anchor;
+            const days = [];
+            for (let i = 0; i < 7; i++) {
+                const d = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + i);
+                days.push(d);
+            }
+            const startStr = fmtLocal(days[0]);
+            const endStr = fmtLocal(days[6]);
+            const label = document.getElementById('calMonthLabel');
+            if (label) {
+                label.textContent = fmtLocal(days[0]).replace(/-/g, '/') + ' — ' + fmtLocal(days[6]).replace(/-/g, '/');
+            }
+            _slotsLoadPlans(startStr, endStr, function() { _slotsPaint(host, days); });
+        }
+        function _slotsPaint(host, days) {
+            const cfg = _wbSlotsCfg || { slots: { summer: { am: ['08:30', '12:00'], pm: ['13:30', '18:00'] }, standard: { am: ['09:00', '12:00'], pm: ['13:00', '17:30'] } }, profile: 'auto', summer_range: { from: '04-01', to: '10-31' } };
+            const todayStr = fmtLocal(new Date());
+            const dow = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+            let anyPlan = false;
+            let html = '<table class="slot-grid"><thead><tr><th class="slot-rowhead"></th>';
+            days.forEach(function(d, i) {
+                const ds = fmtLocal(d);
+                const isToday = ds === todayStr;
+                const rest = (typeof wbIsWorkday === 'function') ? !wbIsWorkday(d) : (d.getDay() === 0 || d.getDay() === 6);
+                html += '<th class="slot-dayhead' + (isToday ? ' slot-today' : '') + (rest ? ' slot-rest' : '') + '">'
+                    + '<span class="slot-dow">' + dow[i] + '</span>'
+                    + '<span class="slot-dnum">' + (d.getMonth() + 1) + '/' + d.getDate() + '</span></th>';
+            });
+            html += '</tr></thead><tbody>';
+            [['am', '上午'], ['pm', '下午']].forEach(function(pair) {
+                const slot = pair[0], label = pair[1];
+                // 行头：用「今天」的时段配置作为代表
+                const rng = _slotsRangeOf(cfg, todayStr, slot);
+                const cap = _slotsMinutes(rng);
+                html += '<tr><th class="slot-rowhead">' + label
+                    + '<span class="slot-range">' + (rng[0] || '') + '–' + (rng[1] || '') + '</span>'
+                    + '<span class="slot-cap">' + cap + ' 分钟</span></th>';
+                days.forEach(function(d) {
+                    const ds = fmtLocal(d);
+                    const rest = (typeof wbIsWorkday === 'function') ? !wbIsWorkday(d) : (d.getDay() === 0 || d.getDay() === 6);
+                    const arr = ((_wbSlotsPlanMap[ds] || {})[slot]) || [];
+                    if (arr.length) anyPlan = true;
+                    const cls = 'slot-cell' + (rest ? ' slot-rest' : '') + (ds === todayStr ? ' slot-today' : '') + (arr.length ? '' : ' slot-empty');
+                    html += '<td class="' + cls + '" data-ds="' + ds + '" data-slot="' + slot + '">';
+                    const shown = arr.slice(0, 4);
+                    shown.forEach(function(p) {
+                        const st = p.status || 'planned';
+                        const k = st === 'done' ? 'st-done' : (st === 'partial' ? 'st-part' : (st === 'carried' ? 'st-carry' : ''));
+                        html += '<div class="slot-task ' + k + '" title="' + esc(p.title || '') + '">'
+                            + '<span class="st-dot"></span>'
+                            + '<span class="st-title">' + esc(p.title || '（无标题）') + '</span>'
+                            + '<span class="st-meta">' + (p.est_min || 0) + '分·' + (p.score || 0) + '</span></div>';
+                    });
+                    if (arr.length > shown.length) {
+                        html += '<div class="slot-task st-more">还有 ' + (arr.length - shown.length) + ' 项</div>';
+                    }
+                    html += '</td>';
+                });
+                html += '</tr>';
+            });
+            html += '</tbody></table>';
+            if (!anyPlan) {
+                html += '<div class="slot-empty-hint">这一周还没有<b>今日安排</b>数据。'
+                    + '在桌面看板点「记插单」把任务排进上午/下午，或在网页<b>收件箱</b>转入任务，'
+                    + '排程结果会实时显示在这里（长任务会自动填满上下午，新任务插入后自动顺延）。</div>';
+            }
+            host.innerHTML = html;
+            const stats = document.getElementById('calStats');
+            if (stats) {
+                let total = 0, done = 0;
+                Object.keys(_wbSlotsPlanMap).forEach(function(d) {
+                    ['am', 'pm'].forEach(function(sl) {
+                        (_wbSlotsPlanMap[d][sl] || []).forEach(function(p) {
+                            total++; if (p.status === 'done') done++;
+                        });
+                    });
+                });
+                stats.innerHTML = '<span>📋 本周排程 ' + total + ' 项</span>'
+                    + '<span>✅ 已完成 ' + done + '</span>'
+                    + '<span>⏳ 待办 ' + (total - done) + '</span>'
+                    + '<span style="margin-left:auto;">💡 上午/下午按积分自动分配，插单自动顺延</span>';
+            }
+        }
+        function _slotsNavigate(delta) {
+            const anchor = _wbSlotsAnchor || _slotsStartOfWeek(new Date());
+            const d = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + delta * 7);
+            _wbSlotsAnchor = d;
+            _slotsRender();
+        }
+        function _slotsToday() {
+            _wbSlotsAnchor = _slotsStartOfWeek(new Date());
+            _slotsRender();
         }
 
         function initFullCalendar() {
@@ -8711,6 +8918,14 @@ function renderSettlement(mc) {
             } catch (e) {}
         }
 
+        function calNav(delta) {
+            if (calViewMode === 'slots') { _slotsNavigate(delta); return; }
+            calNavigate(delta);
+        }
+        function calNavToday() {
+            if (calViewMode === 'slots') { _slotsToday(); return; }
+            calToday();
+        }
         function calNavigate(delta) {
             const container = document.getElementById('fcCalendar');
             if (container && $(container).fullCalendar) {
@@ -8729,7 +8944,18 @@ function renderSettlement(mc) {
         }
 
         function setCalView(mode) {
+            const prev = calViewMode;
             calViewMode = mode;
+            // 【v22.3】切换到时段视图：重建整个日历页（时段视图是自绘网格，不走 FullCalendar）
+            if (mode === 'slots' || prev === 'slots') {
+                document.querySelectorAll('.cal-toolbar .view-group button').forEach(function(btn) {
+                    const txt = btn.textContent.trim();
+                    const map = { '月': 'month', '周': 'week', '日': 'day', '时段': 'slots' };
+                    btn.classList.toggle('active', map[txt] === mode);
+                });
+                renderCalendar(document.getElementById('mainContent'));
+                return;
+            }
             const viewMap = { 'month': 'month', 'week': 'basicWeek', 'day': 'basicDay' };
             const viewName = viewMap[mode] || 'month';
             const container = document.getElementById('fcCalendar');
