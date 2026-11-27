@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.1">
+    <meta name="app-version" content="22.2">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1079,6 +1079,24 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .fc-calendar-container .fc-day.wb-rest-day .fc-day-number { color:#94a3b8 !important; }
 .fc-calendar-container .fc-day.wb-makeup-day { background:rgba(16,185,129,0.12) !important; }
 .fc-calendar-container .fc-day.wb-makeup-day .fc-day-number { color:#059669 !important; font-weight:600 !important; }
+/* 【v22.2】日历格内上午/下午时段徽标：半透明圆角条，不参与 FullCalendar table 布局 */
+.wb-day-slots { display:flex; flex-direction:column; gap:2px; margin:2px 3px 0; clear:both; }
+.wb-slot-chip { cursor:pointer; display:flex; align-items:center; gap:3px; padding:1px 5px; border-radius:6px; font-size:11px; line-height:1.35;
+  background:rgba(30,58,95,0.06); border:1px solid rgba(30,58,95,0.10); color:var(--primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.wb-slot-chip:hover { background:rgba(30,58,95,0.12); }
+.wb-slot-chip .wb-slot-tag { font-weight:700; opacity:0.8; flex-shrink:0; white-space:nowrap; }
+.wb-slot-chip .wb-slot-cnt { margin-left:auto; font-variant-numeric:tabular-nums; flex-shrink:0; padding-left:4px; }
+.wb-slot-chip.wb-slot-done { background:rgba(16,185,129,0.10); border-color:rgba(16,185,129,0.22); color:#059669; }
+.wb-slot-chip.wb-slot-part { background:rgba(245,158,11,0.10); border-color:rgba(245,158,11,0.22); color:#b45309; }
+.wb-slot-empty { font-size:10px; color:var(--text-tertiary,#94a3b8); padding:1px 5px; }
+/* 月视图格子小：徽标更紧凑，两时并排一行 */
+.fc-calendar-container .fc-month-view .wb-day-slots { flex-direction:row; flex-wrap:wrap; gap:2px; margin:1px 2px 0; }
+.fc-calendar-container .fc-month-view .wb-slot-chip { font-size:10px; padding:0 4px; flex:1 1 auto; min-width:0; }
+.wb-slot-detail { position:fixed; z-index:9999; max-width:280px; background:#fff; border:1px solid var(--border,#e2e8f0); border-radius:10px;
+  box-shadow:0 8px 28px rgba(15,23,42,0.18); padding:10px 12px; font-size:12px; color:var(--text-primary,#1e293b); }
+.wb-slot-detail h4 { margin:0 0 6px; font-size:13px; color:var(--primary); }
+.wb-slot-detail .wb-sli { padding:3px 0; border-top:1px dashed var(--border,#eef2f7); display:flex; gap:6px; }
+.wb-slot-detail .wb-sli .wb-sdot { width:7px; height:7px; border-radius:50%; margin-top:5px; flex-shrink:0; }
 
 .fc-calendar-container .fc-day-grid-event { font-size:13px !important; padding:4px 6px !important; margin:2px 3px !important; border-radius:6px; line-height:1.4; }
 .fc-calendar-container .fc-day-grid-event .fc-title { font-size:12px !important; }
@@ -2539,6 +2557,9 @@ async function mergeCloudStateBeforeUpload() {
         let calFilterStatus = 'all';
         let calFilterCompany = '';
         let fcInstance = null;
+        // 【v22.2 日历时段】按日缓存 task_plans：{ 'YYYY-MM-DD': { am:[...], pm:[...] } }
+        let _wbPlanDayMap = {};
+        let _wbPlanDayMapLoaded = false;
 
         // ============================================================
         // 数据层
@@ -8421,7 +8442,108 @@ function renderSettlement(mc) {
                   ${statsHtml}
                 </div>
               `;
-            initFullCalendar();
+            fetchPlanDayMap(function(){ initFullCalendar(); });
+        }
+
+        // 【v22.2】拉取 task_plans，按日期+上午/下午分组缓存（云端失败静默降级，不影响日历主体）
+        function fetchPlanDayMap(cb) {
+            if (_wbPlanDayMapLoaded) { if (cb) cb(); return; }
+            _wbPlanDayMapLoaded = true; // 先置位避免并发重复拉取；失败也只拉一次
+            if (!supabaseClient || !getSupabaseConfig()) { if (cb) cb(); return; }
+            const since = new Date(); since.setDate(since.getDate() - 30);
+            const until = new Date(); until.setDate(until.getDate() + 60);
+            supabaseClient.from('task_plans').select('plan_date,slot,status,title,score,est_min,seq')
+              .gte('plan_date', fmtLocal(since)).lte('plan_date', fmtLocal(until))
+              .then(function(res) {
+                if (!res.error && res.data) {
+                  const map = {};
+                  res.data.forEach(function(p) {
+                    const d = (p.plan_date || '').slice(0, 10);
+                    if (!d) return;
+                    const sl = (p.slot === 'pm') ? 'pm' : 'am';
+                    (map[d] = map[d] || { am: [], pm: [] })[sl].push(p);
+                  });
+                  Object.keys(map).forEach(function(d){
+                    map[d].am.sort(function(a,b){return (a.seq||0)-(b.seq||0);});
+                    map[d].pm.sort(function(a,b){return (a.seq||0)-(b.seq||0);});
+                  });
+                  _wbPlanDayMap = map;
+                }
+                if (cb) cb();
+              }).catch(function(e){ console.error('[v22.2] task_plans 拉取失败:', e); if (cb) cb(); });
+        }
+
+        // 【v22.2】给某个 FullCalendar 日期格注入上午/下午徽标
+        function decorateCalDaySlots(cell, dateObj) {
+            const ds = (typeof dateObj.format === 'function')
+                ? dateObj.format('YYYY-MM-DD')
+                : fmtLocal(dateObj.toDate ? dateObj.toDate() : dateObj);
+            const slots = _wbPlanDayMap[ds];
+            if (!slots || (!slots.am.length && !slots.pm.length)) return;
+            const cellEl = cell[0] || cell;
+            if (!cellEl) return;
+            // 【v22.2】FullCalendar 3.10 把日期数字放在独立的表头格 td.fc-day-top（与内容格 td.fc-day
+            // 靠 data-date 关联），所以徽标要插到「日期数字那一格」，紧跟日期下方显示。
+            // 月视图：td.fc-day-top（含 .fc-day-number）；周/日视图：th.fc-day-header（含「周日 11/22」）
+            let topCell = document.querySelector('.fc-day-top[data-date="' + ds + '"]');
+            if (!topCell) topCell = document.querySelector('.fc-day-header[data-date="' + ds + '"]');
+            if (!topCell) topCell = cellEl;
+            let host = topCell.querySelector('.wb-day-slots');
+            if (!host) {
+                host = document.createElement('div');
+                host.className = 'wb-day-slots';
+                host.setAttribute('data-ds', ds);
+                const anchor = topCell.querySelector('.fc-day-number') || topCell.querySelector('span');
+                if (anchor && anchor.parentNode === topCell) topCell.insertBefore(host, anchor.nextSibling);
+                else topCell.appendChild(host);
+            }
+            function stat(arr) {
+                const done = arr.filter(function(p){return p.status === 'done';}).length;
+                const part = arr.filter(function(p){return p.status === 'partial' || p.status === 'carried';}).length;
+                if (done === arr.length) return 'done';
+                if (done || part) return 'part';
+                return '';
+            }
+            function chip(key, label) {
+                const arr = slots[key];
+                if (!arr.length) return '';
+                const cls = stat(arr);
+                const mark = cls === 'done' ? '✓' : (cls === 'part' ? '◐' : '○');
+                return '<div class="wb-slot-chip ' + (cls === 'done' ? 'wb-slot-done' : cls === 'part' ? 'wb-slot-part' : '') + '"'
+                    + ' data-ds="' + ds + '" data-slot="' + key + '" onclick="showSlotDetail(event,this)">'
+                    + '<span class="wb-slot-tag">' + label + ' ' + mark + '</span>'
+                    + '<span class="wb-slot-cnt">' + arr.filter(function(p){return p.status==='done';}).length + '/' + arr.length + '</span></div>';
+            }
+            host.innerHTML = chip('am', '上午') + chip('pm', '下午');
+        }
+
+        // 【v22.2】点击时段徽标弹出当日该时段任务明细（复用 esc）
+        function showSlotDetail(ev, el) {
+            if (ev && ev.stopPropagation) ev.stopPropagation();
+            document.querySelectorAll('.wb-slot-detail').forEach(function(x){x.remove();});
+            const ds = el.getAttribute('data-ds');
+            const slot = el.getAttribute('data-slot');
+            const arr = (_wbPlanDayMap[ds] || {})[slot] || [];
+            const title = ds + ' ' + (slot === 'am' ? '上午' : '下午') + ' · ' + arr.length + ' 项';
+            const icon = { done:'#10b981', partial:'#f59e0b', carried:'#f59e0b', planned:'#3b6df0' };
+            const box = document.createElement('div');
+            box.className = 'wb-slot-detail';
+            box.innerHTML = '<h4>' + esc(title) + '</h4>' + arr.map(function(p){
+                const c = icon[p.status] || '#3b6df0';
+                const st = p.status === 'done' ? '已完成' : p.status === 'carried' ? '已结转' : p.status === 'partial' ? '部分完成' : '计划中';
+                return '<div class="wb-sli"><span class="wb-sdot" style="background:' + c + ';"></span>'
+                    + '<span style="flex:1;">' + esc(p.title || '（无标题）') + '</span>'
+                    + '<span style="color:var(--text-secondary,#64748b);">' + st + '</span></div>';
+            }).join('');
+            document.body.appendChild(box);
+            const r = el.getBoundingClientRect();
+            box.style.left = Math.min(window.innerWidth - 290, Math.max(8, r.left)) + 'px';
+            box.style.top = (r.bottom + 6) + 'px';
+            setTimeout(function(){
+                document.addEventListener('click', function close(e){
+                    if (!box.contains(e.target) && !el.contains(e.target)) { box.remove(); document.removeEventListener('click', close); }
+                });
+            }, 0);
         }
 
         function initFullCalendar() {
@@ -8535,6 +8657,8 @@ function renderSettlement(mc) {
                             cell.addClass('wb-makeup-day');
                         }
                     }
+                    // 【v22.2】叠加上午/下午时段徽标（不影响原有节假日高亮）
+                    if (typeof decorateCalDaySlots === 'function') decorateCalDaySlots(cell, date);
                 },
                 viewRender: function(view, element) {
                     const label = document.getElementById('calMonthLabel');
@@ -8556,6 +8680,14 @@ function renderSettlement(mc) {
                 try { $(container).fullCalendar('refetchEvents');
                     updateCalendarStats(); } catch (e) {}
             }
+            // 【v22.2】时段徽标跟随 task_plans 刷新（拉新数据后重渲染日历）
+            _wbPlanDayMapLoaded = false;
+            fetchPlanDayMap(function(){
+                const c2 = document.getElementById('fcCalendar');
+                if (c2 && $(c2).fullCalendar) {
+                    try { $(c2).fullCalendar('render'); } catch (e) {}
+                }
+            });
         }
 
         function updateCalendarStats() {
