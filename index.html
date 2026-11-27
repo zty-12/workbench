@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.6">
+    <meta name="app-version" content="22.7">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -8944,9 +8944,11 @@ function renderSettlement(mc) {
                     agg[key] = { title: p.title, score: p.score || 5, est_min: 0, task_id: p.task_id || null,
                                  source: p.source || 'history', carry_from: p.plan_date };
                 }
-                let seg = (p.seg_min === undefined || p.seg_min === null)
-                    ? Math.max(0, (p.est_min || 0) - (p.recorded_min || 0)) : p.seg_min;
-                if (p.seg_min === undefined || p.seg_min === null) {
+                // 【v22.7 修复】seg_min 缺失或为 0 都要走兜底：老数据 seg_min=0 时直接用 0
+                // 会让任务估时归零、重排后从排程里消失（桌面与网页互相覆盖 → 数据不一致）。
+                let seg = p.seg_min;
+                if (seg === undefined || seg === null || !seg) {
+                    seg = Math.max(0, (p.est_min || 0) - (p.recorded_min || 0));
                     if (agg[key].est_min > 0) seg = 0;
                 }
                 agg[key].est_min += seg;
