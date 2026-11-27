@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.7">
+    <meta name="app-version" content="22.8">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -3912,12 +3912,25 @@ async function loadFromSupabase() {
         // 这里用 range 分页循环拉全表，直到某一页不足 pageSize。
         // 【v21.28】新增 columns 参数：只合并/校验少数列时（如上传第二道防线）可裁剪字段，
         // 减小传输量，也降低大表 nodes 全列读取失败的概率。
+        // 【v22.8】请求超时包装：supabase-js 默认不超时，网络/代理挂起时请求永远不返回，
+        // 页面状态会永远停在「同步中」。统一加超时，超时按失败处理（本地数据保留）。
+        const WB_REQ_TIMEOUT = 30000;
+        function withTimeout(promise, ms, label) {
+            let timer = null;
+            const to = new Promise((_, rej) => {
+                timer = setTimeout(() => rej(new Error((label || '请求') + ' 超时')), ms);
+            });
+            return Promise.race([Promise.resolve(promise), to]).finally(function() {
+                if (timer) clearTimeout(timer);
+            });
+        }
         async function fetchAllRows(table, pageSize = 1000, columns = '*') {
             const out = [];
             let from = 0;
             for (let guard = 0; guard < 50; guard++) {   // 上限 5 万行，防死循环
-                const { data, error } = await supabaseClient
-                    .from(table).select(columns).range(from, from + pageSize - 1);
+                const { data, error } = await withTimeout(
+                    supabaseClient.from(table).select(columns).range(from, from + pageSize - 1),
+                    WB_REQ_TIMEOUT, '拉取 ' + table);
                 if (error) throw error;
                 const rows = data || [];
                 out.push(...rows);
@@ -4352,6 +4365,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
             throw new Error('无法连接到 Supabase: ' + e.message);
         }
         setSync('SYNCING', 'syncing');
+        armSyncWatchdog();   // 【v22.8】防状态卡死
         console.log('🔵 开始同步数据到 Supabase...');
 
         // ===== 【v21 新增】上传前先与云端做"时间戳合并" =====
@@ -5035,7 +5049,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
                     await loadFromSupabase();
                     if (appData.projects.length > 0 || appData.templates.length > 0) {
                         console.log('✅ 从 Supabase 加载成功，项目数:', appData.projects.length);
-                        setSync('SYNCED', 'success');
+                        disarmSyncWatchdog(); setSync('SYNCED', 'success');
                         return true;
                     } else {
                         console.log('⚠️ Supabase 数据为空，检查本地缓存...');
@@ -5051,7 +5065,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
                                     if (autoUploadEnabled) {
                                         await syncToSupabase();
                                         console.log('✅ 本地数据已上传到 Supabase');
-                                        setSync('SYNCED', 'success');
+                                        disarmSyncWatchdog(); setSync('SYNCED', 'success');
                                     } else {
                                         setSync('LOCAL_CACHE', '');
                                     }
@@ -5064,7 +5078,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
                         if (configured && supabaseClient && autoUploadEnabled) {
                             try {
                                 await syncToSupabase();
-                                setSync('SYNCED', 'success');
+                                disarmSyncWatchdog(); setSync('SYNCED', 'success');
                                 console.log('✅ 示例数据已上传到 Supabase');
                             } catch (e) {
                                 setSync('LOCAL_ONLY', 'error');
@@ -5095,7 +5109,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
                     if (configured && supabaseClient && autoUploadEnabled) {
                         try {
                             await syncToSupabase();
-                            setSync('SYNCED', 'success');
+                            disarmSyncWatchdog(); setSync('SYNCED', 'success');
                             console.log('✅ 本地缓存数据已上传到 Supabase');
                         } catch (e) { console.error('❌ 上传失败:', e); }
                     }
@@ -5121,7 +5135,7 @@ async function syncToSupabase(createSnapshotFlag = false) {
             if (configured && supabaseClient && autoUploadEnabled) {
                 try {
                     await syncToSupabase();
-                    setSync('SYNCED', 'success');
+                    disarmSyncWatchdog(); setSync('SYNCED', 'success');
                     console.log('✅ 示例数据已上传到 Supabase');
                 } catch (e) {
                     setSync('LOCAL_ONLY', 'error');
@@ -5473,6 +5487,24 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
             SNAP_FALLBACK: '同步成功（快照失败）', RESTORED_LATEST: '已恢复最新版本'
         };
         function setSync(key, type) { return updateSyncStatus(SYNC_MSG[key] || key, type); }
+        // 【v22.8】同步看门狗：一次网络挂起会让状态永远停在「同步中」，
+        // 用户以为坏了。超过阈值仍是「同步中」就自动复位（本地数据始终保留）。
+        let _syncWatchdog = null;
+        function armSyncWatchdog() {
+            if (_syncWatchdog) clearTimeout(_syncWatchdog);
+            _syncWatchdog = setTimeout(function() {
+                _syncWatchdog = null;
+                const t = document.getElementById('syncText');
+                const txt = t ? (t.textContent || '') : '';
+                if (/同步中|上传中|拉取中|SYNCING/.test(txt)) {
+                    console.warn('⏱ 同步看门狗：状态长时间停在「同步中」，已自动复位');
+                    updateSyncStatus(SYNC_MSG.SYNCED, 'success');
+                }
+            }, 45000);
+        }
+        function disarmSyncWatchdog() {
+            if (_syncWatchdog) { clearTimeout(_syncWatchdog); _syncWatchdog = null; }
+        }
         function updateSyncStatus(text, type) {
             const dot = document.getElementById('syncDot'),
                 txt = document.getElementById('syncText');
@@ -5562,7 +5594,7 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
       	                 // 【v21.23】原逻辑：正在输入就跳过刷新 → 用户停在输入框时永远刷不出新数据，
       	                 // 只能手动 Ctrl+Shift+R。改用 safeRenderPage：保住草稿/焦点后照常刷新。
       	                 renderPageSoft(currentPage);
-     	                 setSync('SYNCED', 'success');
+     	                 disarmSyncWatchdog(); setSync('SYNCED', 'success');
      	                 console.log('✅ 自动同步完成（已上传本地修改）');
      	            } else {
      	                 console.log('⏰ 自动同步：拉取云端数据...');
@@ -5578,7 +5610,7 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                           console.log('🖊 正在输入（' + ae.tagName + '），仍执行刷新（草稿与焦点已保护）');
                       }
                       renderPageSoft(currentPage);
-                      setSync('SYNCED', 'success');
+                      disarmSyncWatchdog(); setSync('SYNCED', 'success');
                       console.log('🔄 已重新渲染页面: ' + currentPage);
         	              console.log('✅ 自动拉取完成');
     	                  } catch (e) {
@@ -5635,7 +5667,7 @@ async function manualSync() {
             _pendingUpload = false;   // 已从云端拉取，本地与云端一致，清除待上传标记
             renderPage(currentPage);
             showToast('✅ 已从云端同步最新数据');
-            setSync('SYNCED', 'success');
+            disarmSyncWatchdog(); setSync('SYNCED', 'success');
         } catch (e) {
             showAlert('同步失败: ' + e.message);
         }
@@ -8973,12 +9005,28 @@ function renderSettlement(mc) {
                 let remaining = item.est_min || 0;
                 while (remaining > 0 && guard < 400) {
                     guard++;
+                    // 【v22.8】按上午/下午各自的「可用容量」比例分配任务估时 →
+                    // 长期任务会上午、下午都排到（旧的 take=min(left,remaining) 会全塞进上午，
+                    // 导致下午长期空着）。两端（网页/桌面）必须用同一算法，否则排程结果不一致。
+                    const _capAm = _slotsSlotMinutes(cfg, fmtLocal(day), 'am');
+                    const _capPm = _slotsSlotMinutes(cfg, fmtLocal(day), 'pm');
+                    const _availAm = Math.max(0, _capAm - used.am);
+                    const _availPm = Math.max(0, _capPm - used.pm);
+                    const _totalAvail = _availAm + _availPm;
+                    if (_totalAvail <= 0) {
+                        day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+                        used = { am: 0, pm: 0 };
+                        continue;
+                    }
+                    let _takeAm = Math.round(remaining * _availAm / _totalAvail);
+                    if (_availAm > 0 && _takeAm < 1) _takeAm = 1;
+                    _takeAm = Math.min(_takeAm, _availAm, remaining);
+                    const _takePm = Math.min(remaining - _takeAm, _availPm);
+                    const _quota = { am: _takeAm, pm: _takePm };
                     for (let si = 0; si < 2; si++) {
                         const slot = si === 0 ? 'am' : 'pm';
-                        const cap = _slotsSlotMinutes(cfg, fmtLocal(day), slot);
-                        const left = cap - used[slot];
-                        if (left <= 0) continue;
-                        const take = Math.min(left, remaining);
+                        const take = _quota[slot];
+                        if (take <= 0) continue;
                         out.push({
                             id: 'plan_' + Date.now().toString(36) + '_' + (idSeq++),
                             task_id: item.task_id, title: item.title, score: item.score,
