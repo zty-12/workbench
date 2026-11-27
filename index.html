@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.3">
+    <meta name="app-version" content="22.4">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1094,21 +1094,24 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .fc-calendar-container .fc-month-view .wb-slot-chip { font-size:10px; padding:0 4px; flex:1 1 auto; min-width:0; }
 /* ===== 【v22.3】时段视图：左侧上午/下午行头 + 7 个日期列 = 8 列 × 2 行 ===== */
 .slot-grid-wrap { flex:1; min-height:0; overflow:auto; padding:4px 2px 8px; display:flex; flex-direction:column; }
-.slot-grid-wrap .slot-grid { flex:1 1 auto; min-height:0; }
-.slot-grid { width:100%; height:100%; border-collapse:separate; border-spacing:6px; table-layout:fixed; }
-.slot-grid th, .slot-grid td { padding:0; vertical-align:top; }
-.slot-rowhead { width:74px; min-width:74px; background:linear-gradient(180deg,#f1f5f9,#e8eef6); border-radius:10px;
-  padding:8px 6px !important; text-align:center; color:var(--primary); font-size:13px; font-weight:700; line-height:1.35; }
+.slot-grid-wrap .slot-grid { flex:1 1 auto; min-height:0; min-width:760px; }
+/* 【v22.4】改用 CSS Grid：表头行 auto + 上午/下午两行 1fr 1fr → 精确等分 */
+.slot-grid { display:grid; gap:6px; height:100%; grid-template-rows:auto 1fr 1fr; align-content:stretch; }
+.slot-grid .slot-h { align-self:end; }
+.slot-grid .slot-cell, .slot-grid .slot-rowhead { min-height:0; overflow:hidden; }
+.slot-rowhead { background:linear-gradient(180deg,#f1f5f9,#e8eef6); border-radius:10px;
+  padding:8px 6px; text-align:center; color:var(--primary); font-size:13px; font-weight:700; line-height:1.35;
+  display:flex; flex-direction:column; justify-content:center; }
 .slot-rowhead .slot-range { display:block; font-size:10px; font-weight:500; color:var(--text-secondary,#64748b); margin-top:3px; letter-spacing:-0.2px; }
 .slot-rowhead .slot-cap { display:block; font-size:10px; font-weight:600; color:var(--text-tertiary,#94a3b8); margin-top:2px; }
-.slot-dayhead { background:transparent; text-align:center !important; padding:4px 2px 6px !important; }
+.slot-dayhead { background:transparent; text-align:center; padding:4px 2px 6px; }
 .slot-dayhead .slot-dow { display:block; font-size:12px; color:var(--text-secondary,#64748b); font-weight:600; }
 .slot-dayhead .slot-dnum { display:block; font-size:15px; color:var(--text-primary,#1e293b); font-weight:700; margin-top:1px; }
 .slot-dayhead.slot-today .slot-dnum { color:var(--primary); }
 .slot-dayhead.slot-today .slot-dow { color:var(--primary); }
 .slot-dayhead.slot-rest .slot-dnum { color:#94a3b8; }
-.slot-cell { background:#f8fafc; border:1px solid #eef2f7; border-radius:10px; padding:6px 7px !important; height:100%; vertical-align:top !important;
-  transition:background .18s, border-color .18s; }
+.slot-cell { background:#f8fafc; border:1px solid #eef2f7; border-radius:10px; padding:6px 7px;
+  transition:background .18s, border-color .18s; overflow-y:auto; }
 .slot-cell.slot-rest { background:rgba(148,163,184,0.10); }
 .slot-cell.slot-today { border-color:rgba(21,101,192,0.28); background:rgba(21,101,192,0.045); }
 .slot-cell:hover { background:#fff; border-color:rgba(21,101,192,0.25); }
@@ -1126,6 +1129,11 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .slot-task.st-carry { background:rgba(239,68,68,0.08); border-color:rgba(239,68,68,0.20); }
 .slot-task.st-carry .st-dot { background:#ef4444; }
 .slot-task.st-more { justify-content:center; color:var(--text-secondary,#64748b); background:transparent; border-style:dashed; font-size:11px; }
+/* 【v22.4】未排入具体时段的普通项目任务（浅色，与时段任务区分） */
+.slot-task.st-plain { background:rgba(148,163,184,0.14); border-color:rgba(148,163,184,0.30); }
+.slot-task.st-plain .st-dot { background:#94a3b8; }
+.slot-task.st-plain .st-title { color:#475569; }
+.slot-dayname { font-size:11px; font-weight:600; color:var(--text-tertiary,#94a3b8); display:block; margin-top:1px; }
 .slot-empty-hint { padding:10px 14px; border-radius:10px; background:rgba(21,101,192,0.05); border:1px dashed rgba(21,101,192,0.22);
   color:var(--text-secondary,#64748b); font-size:12.5px; line-height:1.6; }
 .slot-empty-hint b { color:var(--primary); }
@@ -2591,7 +2599,7 @@ async function mergeCloudStateBeforeUpload() {
 	let _tasksHasCompletedDate = null;
 	// 【v21.26】数据版本号：每次 saveData 递增，用于让 getProjectName 等处的一次性索引缓存失效
 	let _dataVersion = 0;
-        let calViewMode = 'slots';
+        let calViewMode = 'week';
         let calFilterProject = 'all';
         let calFilterStatus = 'all';
         let calFilterCompany = '';
@@ -8451,7 +8459,6 @@ function renderSettlement(mc) {
                     <button class="${calViewMode === 'month' ? 'active' : ''}" onclick="setCalView('month')">月</button>
                     <button class="${calViewMode === 'week' ? 'active' : ''}" onclick="setCalView('week')">周</button>
                     <button class="${calViewMode === 'day' ? 'active' : ''}" onclick="setCalView('day')">日</button>
-                    <button class="${calViewMode === 'slots' ? 'active' : ''}" onclick="setCalView('slots')">时段</button>
                   </div>
                   <div class="nav-group">
                     <button onclick="calNav(-1)">◀</button>
@@ -8474,7 +8481,7 @@ function renderSettlement(mc) {
                 </div>
               `;
 
-            const containerHtml = (calViewMode === 'slots')
+            const containerHtml = (calViewMode === 'week' || calViewMode === 'day')
                 ? `<div class="slot-grid-wrap" id="slotGridHost"></div>`
                 : `<div class="fc-calendar-container" id="fcContainer"><div id="fcCalendar"></div></div>`;
             const statsHtml =
@@ -8487,7 +8494,7 @@ function renderSettlement(mc) {
                   ${statsHtml}
                 </div>
               `;
-            if (calViewMode === 'slots') {
+            if (calViewMode === 'week' || calViewMode === 'day') {
                 loadPlanConfigFromCloud().then(function(cfg) {
                     _wbSlotsCfg = cfg;
                     _slotsRender();
@@ -8602,6 +8609,7 @@ function renderSettlement(mc) {
         // 布局：左侧 1 个行头列（上午/下午）+ 7 个日期列 = 8 列；行 = 上午、下午 2 行。
         // 数据源：task_plans（plan_date + slot），由桌面端「记插单」排程后上传，
         // 长任务会按估时自动填满上下午，新任务插入后自动顺延显示。
+        function _slotsIsDayMode() { return calViewMode === 'day'; }
         function _slotsStartOfWeek(d) {
             const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
             x.setDate(x.getDate() - x.getDay()); // 周日为一周起点（与日历 firstDay=0 一致）
@@ -8655,13 +8663,42 @@ function renderSettlement(mc) {
                 if (cb) cb();
             });
         }
+        // 【v22.4】当天到期的普通项目任务（tasks 表），排除已排入今日安排的
+        function _slotsPlainTasks(ds) {
+            try {
+                const all = (typeof appData !== 'undefined' && appData.tasks) || [];
+                const inPlan = {};
+                Object.keys(_wbSlotsPlanMap || {}).forEach(function(d) {
+                    ['am', 'pm'].forEach(function(sl) {
+                        (_wbSlotsPlanMap[d][sl] || []).forEach(function(p) {
+                            if (p.task_id) inPlan[String(p.task_id)] = 1;
+                        });
+                    });
+                });
+                const out = [];
+                all.forEach(function(t) {
+                    if (t.completed) return;
+                    const sd = t.startDate || t.planDate || t.dueDate || '';
+                    const ed = t.endDate || t.dueDate || sd;
+                    if (!sd) return;
+                    if (sd.slice(0, 10) > ds) return;
+                    if ((ed || sd).slice(0, 10) < ds) return;
+                    if (t.id && inPlan[String(t.id)]) return;
+                    out.push(t);
+                });
+                return out.slice(0, 3);
+            } catch (e) {
+                return [];
+            }
+        }
         function _slotsRender() {
             const host = document.getElementById('slotGridHost');
             if (!host) return;
             const anchor = _wbSlotsAnchor || _slotsStartOfWeek(new Date());
             _wbSlotsAnchor = anchor;
             const days = [];
-            for (let i = 0; i < 7; i++) {
+            const nDays = _slotsIsDayMode() ? 1 : 7;
+            for (let i = 0; i < nDays; i++) {
                 const d = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + i);
                 days.push(d);
             }
@@ -8669,7 +8706,9 @@ function renderSettlement(mc) {
             const endStr = fmtLocal(days[6]);
             const label = document.getElementById('calMonthLabel');
             if (label) {
-                label.textContent = fmtLocal(days[0]).replace(/-/g, '/') + ' — ' + fmtLocal(days[6]).replace(/-/g, '/');
+                label.textContent = days.length > 1
+                    ? fmtLocal(days[0]).replace(/-/g, '/') + ' — ' + fmtLocal(days[6]).replace(/-/g, '/')
+                    : fmtLocal(days[0]).replace(/-/g, '/');
             }
             _slotsLoadPlans(startStr, endStr, function() { _slotsPaint(host, days); });
         }
@@ -8678,31 +8717,41 @@ function renderSettlement(mc) {
             const todayStr = fmtLocal(new Date());
             const dow = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
             let anyPlan = false;
-            let html = '<table class="slot-grid"><thead><tr><th class="slot-rowhead"></th>';
+            let html = '<div class="slot-grid" style="grid-template-columns:74px repeat(' + days.length + ',minmax(0,1fr));">'
+                + '<div class="slot-h slot-rowhead"></div>';
             days.forEach(function(d, i) {
                 const ds = fmtLocal(d);
                 const isToday = ds === todayStr;
                 const rest = (typeof wbIsWorkday === 'function') ? !wbIsWorkday(d) : (d.getDay() === 0 || d.getDay() === 6);
-                html += '<th class="slot-dayhead' + (isToday ? ' slot-today' : '') + (rest ? ' slot-rest' : '') + '">'
+                html += '<div class="slot-h slot-dayhead' + (isToday ? ' slot-today' : '') + (rest ? ' slot-rest' : '') + '">'
                     + '<span class="slot-dow">' + dow[i] + '</span>'
-                    + '<span class="slot-dnum">' + (d.getMonth() + 1) + '/' + d.getDate() + '</span></th>';
+                    + '<span class="slot-dnum">' + (d.getMonth() + 1) + '/' + d.getDate() + '</span></div>';
             });
-            html += '</tr></thead><tbody>';
             [['am', '上午'], ['pm', '下午']].forEach(function(pair) {
                 const slot = pair[0], label = pair[1];
                 // 行头：用「今天」的时段配置作为代表
                 const rng = _slotsRangeOf(cfg, todayStr, slot);
                 const cap = _slotsMinutes(rng);
-                html += '<tr><th class="slot-rowhead">' + label
+                html += '<div class="slot-rowhead">' + label
                     + '<span class="slot-range">' + (rng[0] || '') + '–' + (rng[1] || '') + '</span>'
-                    + '<span class="slot-cap">' + cap + ' 分钟</span></th>';
+                    + '<span class="slot-cap">' + cap + ' 分钟</span></div>';
                 days.forEach(function(d) {
                     const ds = fmtLocal(d);
                     const rest = (typeof wbIsWorkday === 'function') ? !wbIsWorkday(d) : (d.getDay() === 0 || d.getDay() === 6);
                     const arr = ((_wbSlotsPlanMap[ds] || {})[slot]) || [];
                     if (arr.length) anyPlan = true;
-                    const cls = 'slot-cell' + (rest ? ' slot-rest' : '') + (ds === todayStr ? ' slot-today' : '') + (arr.length ? '' : ' slot-empty');
-                    html += '<td class="' + cls + '" data-ds="' + ds + '" data-slot="' + slot + '">';
+                    // 【v22.4】普通项目任务：按到期日归入当天「未排时段」（只放上午格一次）
+                    const plain = (slot === 'am') ? _slotsPlainTasks(ds) : [];
+                    if (plain.length) anyPlan = true;
+                    const total = arr.length + plain.length;
+                    const cls = 'slot-cell' + (rest ? ' slot-rest' : '') + (ds === todayStr ? ' slot-today' : '') + (total ? '' : ' slot-empty');
+                    html += '<div class="' + cls + '" data-ds="' + ds + '" data-slot="' + slot + '">';
+                    plain.forEach(function(t) {
+                        html += '<div class="slot-task st-plain" title="' + esc(t.title || '') + '">'
+                            + '<span class="st-dot"></span>'
+                            + '<span class="st-title">' + esc(t.title || '（无标题）') + '</span>'
+                            + '<span class="st-meta">待办</span></div>';
+                    });
                     const shown = arr.slice(0, 4);
                     shown.forEach(function(p) {
                         const st = p.status || 'planned';
@@ -8715,11 +8764,10 @@ function renderSettlement(mc) {
                     if (arr.length > shown.length) {
                         html += '<div class="slot-task st-more">还有 ' + (arr.length - shown.length) + ' 项</div>';
                     }
-                    html += '</td>';
+                    html += '</div>';
                 });
-                html += '</tr>';
             });
-            html += '</tbody></table>';
+            html += '</div>';
             if (!anyPlan) {
                 html += '<div class="slot-empty-hint">这一周还没有<b>今日安排</b>数据。'
                     + '在桌面看板点「记插单」把任务排进上午/下午，或在网页<b>收件箱</b>转入任务，'
@@ -8744,12 +8792,13 @@ function renderSettlement(mc) {
         }
         function _slotsNavigate(delta) {
             const anchor = _wbSlotsAnchor || _slotsStartOfWeek(new Date());
-            const d = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + delta * 7);
+            const step = _slotsIsDayMode() ? 1 : 7;
+            const d = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() + delta * step);
             _wbSlotsAnchor = d;
             _slotsRender();
         }
         function _slotsToday() {
-            _wbSlotsAnchor = _slotsStartOfWeek(new Date());
+            _wbSlotsAnchor = _slotsIsDayMode() ? new Date() : _slotsStartOfWeek(new Date());
             _slotsRender();
         }
 
@@ -8919,11 +8968,11 @@ function renderSettlement(mc) {
         }
 
         function calNav(delta) {
-            if (calViewMode === 'slots') { _slotsNavigate(delta); return; }
+            if (calViewMode === 'week' || calViewMode === 'day') { _slotsNavigate(delta); return; }
             calNavigate(delta);
         }
         function calNavToday() {
-            if (calViewMode === 'slots') { _slotsToday(); return; }
+            if (calViewMode === 'week' || calViewMode === 'day') { _slotsToday(); return; }
             calToday();
         }
         function calNavigate(delta) {
@@ -8946,13 +8995,17 @@ function renderSettlement(mc) {
         function setCalView(mode) {
             const prev = calViewMode;
             calViewMode = mode;
-            // 【v22.3】切换到时段视图：重建整个日历页（时段视图是自绘网格，不走 FullCalendar）
-            if (mode === 'slots' || prev === 'slots') {
+            // 【v22.4】周/日 走时段网格（上午/下午分区），月 走 FullCalendar 任务条视图。
+            // 两者结构不同 → 切换时整页重建。
+            var gridMode = m => (m === 'week' || m === 'day');
+            if (gridMode(mode) || gridMode(prev)) {
                 document.querySelectorAll('.cal-toolbar .view-group button').forEach(function(btn) {
                     const txt = btn.textContent.trim();
-                    const map = { '月': 'month', '周': 'week', '日': 'day', '时段': 'slots' };
+                    const map = { '月': 'month', '周': 'week', '日': 'day' };
                     btn.classList.toggle('active', map[txt] === mode);
                 });
+                if (mode === 'day' && !gridMode(prev)) _wbSlotsAnchor = new Date();
+                if (mode === 'week' && !gridMode(prev)) _wbSlotsAnchor = _slotsStartOfWeek(new Date());
                 renderCalendar(document.getElementById('mainContent'));
                 return;
             }
