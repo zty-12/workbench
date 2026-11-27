@@ -1,5 +1,5 @@
 // sw.js - 离线缓存（导航请求始终走网络取最新，跨域 API 请求一律走网络不缓存，配合 index.html 版本探测自动刷新）
-const CACHE_NAME = 'workbench-v51';
+const CACHE_NAME = 'workbench-v52';
 const urlsToCache = [
   '.',
   'manifest.json',
