@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.9">
+    <meta name="app-version" content="22.10">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -8591,10 +8591,27 @@ function renderSettlement(mc) {
         }
         // ===== 【v22.5】桌面看板任务：云端 task_plans 里的"临时任务"同步到收件箱，可编辑/删除 =====
         let _wbDeskTasks = [];
+        // 【v22.10】从 source 解析项目名：source 形如 node:项目名 / task:项目名 / new / inbox / manual
+        function _deskProjectOf(t) {
+            const s = String(t && t.source || '');
+            const m = s.match(/^(node|task):(.*)$/);
+            return m ? (m[2] || '') : '';
+        }
+        function _deskProjectKind(t) {
+            const s = String(t && t.source || '');
+            const m = s.match(/^(node|task):/);
+            return m ? m[1] : 'node';
+        }
         function _deskRowHtml(t) {
             const id = esc(t.id || '');
+            // 【v22.10】项目用自由输入框：桌面端 source 可能是 node:/task: 前缀的任意历史项目名，
+            // 用下拉会丢失不在当前项目清单里的历史值；输入框可任意编辑/清空，最稳妥。
+            const proj = esc(_deskProjectOf(t));
+            const projInput = '<input class="form-input" id="dt_proj_' + id + '" value="' + proj
+                + '" style="flex:1;min-width:130px;" placeholder="关联项目（可空）" title="关联项目，保存后写回 source">';
             return '<div class="ui22-desk-row">'
                 + '<input class="form-input" id="dt_title_' + id + '" value="' + esc(t.title || '') + '" style="flex:2;min-width:150px;" placeholder="任务名">'
+                + projInput
                 + '<input class="form-input" type="number" min="1" max="10" id="dt_score_' + id + '" value="' + (t.score || 5) + '" style="width:62px;" title="积分">'
                 + '<input class="form-input" type="number" min="5" max="6000" step="5" id="dt_est_' + id + '" value="' + (t.est_min || 60) + '" style="width:84px;" title="估时(分钟)">'
                 + '<input class="form-input" type="date" id="dt_date_' + id + '" value="' + esc(t.plan_date || '') + '" style="width:140px;">'
@@ -8680,10 +8697,16 @@ function renderSettlement(mc) {
             const est = Math.max(5, Math.min(6000, parseInt(g('dt_est_'), 10) || 60));
             const date = g('dt_date_') || t.plan_date;
             const slot = g('dt_slot_') === 'pm' ? 'pm' : 'am';
+            // 【v22.10】关联项目：保留原 source 前缀(node:/task:)；清空则回退为 new。
+            const projVal = g('dt_proj_');
+            const oldSrc = String(t.source || '');
+            const kind = /^task:/.test(oldSrc) ? 'task' : 'node';
+            const newSource = projVal ? (kind + ':' + projVal) : 'new';
             const upd = {
                 id: t.id, title: title, score: score, est_min: est,
                 plan_date: date, slot: slot, status: 'planned',
                 recorded_min: 0, seq: t.seq || 0, note: t.note || '',
+                source: newSource,
                 updated_at: new Date().toISOString()
             };
             supabaseClient.from('task_plans').update(upd).eq('id', id).then(function(res) {
@@ -8777,8 +8800,8 @@ function renderSettlement(mc) {
                   <div class="card-header"><h3>🖥️ 桌面看板新增的任务</h3>
                     <span class="tag" id="inboxDeskCount">0 条</span></div>
                   <div style="font-size:12px;color:var(--text-secondary,#64748b);margin-bottom:10px;">
-                    桌面看板「记插单」新建的任务会同步到这里，可直接改标题 / 积分 / 估时 / 日期 / 时段，
-                    保存后自动重排；删除即撤销，桌面看板同步生效。
+                    桌面看板「记插单」新建的任务会同步到这里，可直接改标题 / 关联项目 / 积分 / 估时 / 日期 / 时段，
+                    保存后自动重排；删除即撤销，桌面看板同步生效。（v22.10 起支持编辑关联项目）
                   </div>
                   <div id="inboxDeskHost"><div class="empty-state">加载中…</div></div>
                 </div>`;
