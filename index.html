@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.8">
+    <meta name="app-version" content="22.9">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1084,6 +1084,12 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .fc-calendar-container .fc-month-view .wb-day-slots { flex-direction:row; flex-wrap:wrap; gap:2px; margin:1px 2px 0; }
 .fc-calendar-container .fc-month-view .wb-slot-chip { font-size:10px; padding:0 4px; flex:1 1 auto; min-width:0; }
 /* ===== 【v22.3】时段视图：左侧上午/下午行头 + 7 个日期列 = 8 列 × 2 行 ===== */
+/* 【v22.9】侧边栏版本标识 */
+.sidebar-ver { margin-top:auto; padding:10px 14px 12px; border-top:1px solid var(--border,#e8edf3);
+  font-size:10.5px; line-height:1.6; color:var(--text-tertiary,#94a3b8); letter-spacing:0.2px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; user-select:copy; }
+.sidebar-ver b { color:var(--text-secondary,#64748b); font-weight:600; }
+
 .slot-grid-wrap { flex:1; min-height:0; overflow:auto; padding:4px 2px 8px; display:flex; flex-direction:column; }
 .slot-grid-wrap .slot-grid { flex:1 1 auto; min-height:0; min-width:760px; }
 /* 【v22.4】改用 CSS Grid：表头行 auto + 上午/下午两行 1fr 1fr → 精确等分 */
@@ -1874,6 +1880,8 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
             <a data-page="knowledge" data-page-node-id="nRexmtOikwlk4OlR9B4H2s">🧠 知识库</a>
             <a data-page="cloudsync" data-page-node-id="Si7NBznoERJWSTbdbaz5xR">☁️ 云同步</a>
         </nav>
+        <!-- 【v22.9】版本标识：侧边栏底部，一眼确认线上跑的是哪一版（排查 Service Worker 缓存） -->
+        <div class="sidebar-ver" id="sidebarVer" title="版本与首次加载时间">加载中…</div>
     </aside>
 
     <!-- 底部导航栏（仅移动端显示，PC 隐藏） -->
@@ -5486,6 +5494,28 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
             SYNCING: '同步中...', SYNC_FAIL: '同步失败', SYNCED: '已同步',
             SNAP_FALLBACK: '同步成功（快照失败）', RESTORED_LATEST: '已恢复最新版本'
         };
+        // 【v22.9】渲染版本标识：版本号从 meta 读取（跑旧缓存时显示旧号 → 一眼看出没更新）
+        function renderVersionBadge() {
+            var el = document.getElementById('sidebarVer');
+            if (!el) return;
+            try {
+                var m = document.querySelector('meta[name="app-version"]');
+                var ver = m ? (m.getAttribute('content') || '') : '';
+                var key = 'wb_first_loaded_at';
+                var ts = localStorage.getItem(key);
+                if (!ts) {
+                    var d = new Date(), p = function(n) { return String(n).padStart(2, '0'); };
+                    ts = d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) +
+                         ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
+                    try { localStorage.setItem(key, ts); } catch (e) {}
+                }
+                el.innerHTML = '<b>v' + esc(ver) + '</b> · ' + esc(ts);
+            } catch (e) {
+                el.textContent = '版本未知';
+            }
+        }
+        // 【v22.9】脚本位于 body 末尾，DOM 已就绪 → 直接渲染一次
+        try { renderVersionBadge(); } catch (e) { console.warn('版本标识渲染失败', e); }
         function setSync(key, type) { return updateSyncStatus(SYNC_MSG[key] || key, type); }
         // 【v22.8】同步看门狗：一次网络挂起会让状态永远停在「同步中」，
         // 用户以为坏了。超过阈值仍是「同步中」就自动复位（本地数据始终保留）。
