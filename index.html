@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.4">
+    <meta name="app-version" content="22.5">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -1080,15 +1080,6 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .fc-calendar-container .fc-day.wb-makeup-day { background:rgba(16,185,129,0.12) !important; }
 .fc-calendar-container .fc-day.wb-makeup-day .fc-day-number { color:#059669 !important; font-weight:600 !important; }
 /* 【v22.2】日历格内上午/下午时段徽标：半透明圆角条，不参与 FullCalendar table 布局 */
-.wb-day-slots { display:flex; flex-direction:column; gap:2px; margin:2px 3px 0; clear:both; }
-.wb-slot-chip { cursor:pointer; display:flex; align-items:center; gap:3px; padding:1px 5px; border-radius:6px; font-size:11px; line-height:1.35;
-  background:rgba(30,58,95,0.06); border:1px solid rgba(30,58,95,0.10); color:var(--primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-.wb-slot-chip:hover { background:rgba(30,58,95,0.12); }
-.wb-slot-chip .wb-slot-tag { font-weight:700; opacity:0.8; flex-shrink:0; white-space:nowrap; }
-.wb-slot-chip .wb-slot-cnt { margin-left:auto; font-variant-numeric:tabular-nums; flex-shrink:0; padding-left:4px; }
-.wb-slot-chip.wb-slot-done { background:rgba(16,185,129,0.10); border-color:rgba(16,185,129,0.22); color:#059669; }
-.wb-slot-chip.wb-slot-part { background:rgba(245,158,11,0.10); border-color:rgba(245,158,11,0.22); color:#b45309; }
-.wb-slot-empty { font-size:10px; color:var(--text-tertiary,#94a3b8); padding:1px 5px; }
 /* 月视图格子小：徽标更紧凑，两时并排一行 */
 .fc-calendar-container .fc-month-view .wb-day-slots { flex-direction:row; flex-wrap:wrap; gap:2px; margin:1px 2px 0; }
 .fc-calendar-container .fc-month-view .wb-slot-chip { font-size:10px; padding:0 4px; flex:1 1 auto; min-width:0; }
@@ -1130,6 +1121,10 @@ tr.settlement-default { border-left:4px solid #adb5bd; }
 .slot-task.st-carry .st-dot { background:#ef4444; }
 .slot-task.st-more { justify-content:center; color:var(--text-secondary,#64748b); background:transparent; border-style:dashed; font-size:11px; }
 /* 【v22.4】未排入具体时段的普通项目任务（浅色，与时段任务区分） */
+.slot-subhead { font-size:10px; color:var(--text-tertiary,#94a3b8); font-weight:600; margin:0 0 3px; }
+/* 【v22.5】收件箱：桌面看板任务的行内编辑行 */
+.ui22-desk-row { display:flex; gap:6px; align-items:center; flex-wrap:wrap; padding:6px 0; border-top:1px solid var(--border,#eef2f7); }
+.ui22-desk-row .form-input { height:32px; padding:4px 8px; font-size:12px; }
 .slot-task.st-plain { background:rgba(148,163,184,0.14); border-color:rgba(148,163,184,0.30); }
 .slot-task.st-plain .st-dot { background:#94a3b8; }
 .slot-task.st-plain .st-title { color:#475569; }
@@ -5566,7 +5561,7 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
       	                     ae.tagName === 'SELECT' || ae.isContentEditable);
       	                 // 【v21.23】原逻辑：正在输入就跳过刷新 → 用户停在输入框时永远刷不出新数据，
       	                 // 只能手动 Ctrl+Shift+R。改用 safeRenderPage：保住草稿/焦点后照常刷新。
-      	                 safeRenderPage(currentPage);
+      	                 renderPageSoft(currentPage);
      	                 setSync('SYNCED', 'success');
      	                 console.log('✅ 自动同步完成（已上传本地修改）');
      	            } else {
@@ -5582,7 +5577,7 @@ appData.reportHistory = appData.reportHistory.filter(r => r && r.id);
                           // 输入中同样刷新：草稿与光标已由 safeRenderPage 保护，不会打断输入
                           console.log('🖊 正在输入（' + ae.tagName + '），仍执行刷新（草稿与焦点已保护）');
                       }
-                      safeRenderPage(currentPage);
+                      renderPageSoft(currentPage);
                       setSync('SYNCED', 'success');
                       console.log('🔄 已重新渲染页面: ' + currentPage);
         	              console.log('✅ 自动拉取完成');
@@ -5618,7 +5613,7 @@ async function manualUpload() {
             try {
                 await loadFromSupabase();
                 _pendingUpload = false;
-                renderPage(currentPage);
+                renderPageSoft(currentPage, true);
             } catch (e) { console.warn('⚠️ 上传后拉取云端数据失败（上传本身已成功）:', e); }
         } catch (e) {
             showAlert('上传失败: ' + e.message);
@@ -5717,6 +5712,54 @@ async function manualSync() {
             renderPage(page);
             updateBadges();
             syncMobileBottomNav();
+        }
+
+        // 【v22.5】数据指纹：判断自动同步后数据是否真的变了（变了才重绘，避免每 30s 整页闪）
+        let _lastSyncFingerprint = null;
+        function _dataFingerprint() {
+            try {
+                let h = 5381;
+                const push = function(str) {
+                    const s = String(str);
+                    for (let i = 0; i < s.length; i++) {
+                        h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+                    }
+                };
+                (appData.projects || []).forEach(function(p) {
+                    push(p.id || ''); push(p.status || ''); push(p.done_date || '');
+                    (p.nodes || []).forEach(function(n) {
+                        push(n.name || ''); push(n.status || ''); push(n.done_date || '');
+                    });
+                });
+                (appData.tasks || []).forEach(function(t) {
+                    push(t.id || ''); push(t.completed ? '1' : '0');
+                    push(t.completedDate || ''); push(t.title || ''); push(t.dueDate || '');
+                });
+                return String(h);
+            } catch (e) {
+                return 'err';
+            }
+        }
+        // 【v22.5】软刷新：日历页只刷新时段网格/事件，不重建页面；其它页按指纹决定是否重绘
+        function renderPageSoft(page, force) {
+            if (page === 'calendar') {
+                if (calViewMode === 'week' || calViewMode === 'day') {
+                    if (typeof _slotsRender === 'function') _slotsRender();
+                } else {
+                    refreshFullCalendar();
+                }
+                return;
+            }
+            if (page === 'logs') { safeRenderPage(page); return; }
+            if (!force) {
+                const fp = _dataFingerprint();
+                if (fp === _lastSyncFingerprint) {
+                    console.log('⏭ 数据无变化，跳过页面重绘: ' + page);
+                    return;
+                }
+                _lastSyncFingerprint = fp;
+            }
+            safeRenderPage(page);
         }
 
         function renderPage(page) {
@@ -8384,24 +8427,184 @@ function renderSettlement(mc) {
         }
         function commitInboxToPlans(items) {
             if (!supabaseClient || !getSupabaseConfig()) return Promise.resolve(false);
-            const rows = items.map(function(it, i) {
-                return {
-                    id: 'plan_' + Date.now() + '_' + i,
-                    task_id: it.task_id || null, title: it.title, score: it.score || 5,
-                    est_min: it.est_min || 60, recorded_min: 0, plan_date: fmtLocal(),
-                    slot: 'am', seq: i, status: 'planned', note: '来自收件箱',
-                    source: it.source || 'inbox',
-                    created_at: new Date().toISOString(), updated_at: new Date().toISOString()
-                };
-            });
-            return supabaseClient.from('task_plans').insert(rows).then(function(res) {
-                if (res.error) { console.error('[v22] inbox→plans 失败:', res.error); return false; }
-                return true;
-            }).catch(function(e) { console.error('[v22] inbox→plans 异常:', e); return false; });
+            const today = fmtLocal(new Date());
+            // 【v22.5】先读云端现有排程 → 跑排程算法 → 写回（不再硬编码 slot='am'）
+            return supabaseClient.from('task_plans').select('*').gte('plan_date', today).limit(500)
+              .then(function(res) {
+                if (res.error) { console.error('[v22.5] 读取现有排程失败:', res.error); return false; }
+                const existing = (res.data || []).map(function(p) { return Object.assign({}, p); });
+                return loadPlanConfigFromCloud().then(function(cfg) {
+                    const r = _slotsScheduleInsert(existing, items, cfg, today);
+                    const newRows = r.plans.filter(function(p) { return (p.plan_date || '') >= today; });
+                    const newIds = {};
+                    newRows.forEach(function(p) { newIds[p.id] = 1; });
+                    // 需要清掉的旧片段：今天及以后、未完成、且不在新结果里
+                    const staleIds = existing.filter(function(p) {
+                        return (p.plan_date || '') >= today && p.status !== 'done' && !newIds[p.id];
+                    }).map(function(p) { return p.id; });
+                    return _planCols(function(cols) {
+                        const payload = newRows.map(function(p) {
+                            const row = {
+                                id: p.id, task_id: p.task_id, title: p.title, score: p.score,
+                                est_min: p.est_min, recorded_min: p.recorded_min,
+                                plan_date: p.plan_date, slot: p.slot, seq: p.seq,
+                                status: p.status, carry_from: p.carry_from,
+                                reason: p.reason, note: p.note || '',
+                                created_at: p.created_at, updated_at: p.updated_at
+                            };
+                            if (cols.seg) row.seg_min = p.seg_min;
+                            if (cols.src) row.source = p.source;
+                            return row;
+                        });
+                        if (!payload.length) return true;
+                        return supabaseClient.from('task_plans').upsert(payload, { onConflict: 'id' })
+                          .then(function(up) {
+                            if (up.error) { console.error('[v22.5] 写入排程失败:', up.error); return false; }
+                            if (!staleIds.length) return true;
+                            // 先写新再删旧：中断时最坏是重复，不会丢数据
+                            return supabaseClient.from('task_plans').delete().in('id', staleIds)
+                              .then(function() { return true; })
+                              .catch(function(e) { console.error('[v22.5] 清理旧片段失败:', e); return true; });
+                          }).catch(function(e) { console.error('[v22.5] 写入排程异常:', e); return false; });
+                    });
+                });
+              }).catch(function(e) { console.error('[v22.5] inbox→plans 异常:', e); return false; });
         }
+        // ===== 【v22.5】桌面看板任务：云端 task_plans 里的"临时任务"同步到收件箱，可编辑/删除 =====
+        let _wbDeskTasks = [];
+        function _deskRowHtml(t) {
+            const id = esc(t.id || '');
+            return '<div class="ui22-desk-row">'
+                + '<input class="form-input" id="dt_title_' + id + '" value="' + esc(t.title || '') + '" style="flex:2;min-width:150px;" placeholder="任务名">'
+                + '<input class="form-input" type="number" min="1" max="10" id="dt_score_' + id + '" value="' + (t.score || 5) + '" style="width:62px;" title="积分">'
+                + '<input class="form-input" type="number" min="5" max="6000" step="5" id="dt_est_' + id + '" value="' + (t.est_min || 60) + '" style="width:84px;" title="估时(分钟)">'
+                + '<input class="form-input" type="date" id="dt_date_' + id + '" value="' + esc(t.plan_date || '') + '" style="width:140px;">'
+                + '<select class="form-input" id="dt_slot_' + id + '" style="width:76px;">'
+                + '<option value="am"' + (t.slot !== 'pm' ? ' selected' : '') + '>上午</option>'
+                + '<option value="pm"' + (t.slot === 'pm' ? ' selected' : '') + '>下午</option></select>'
+                + '<button class="btn btn-sm btn-primary" onclick="saveDeskTask(\'' + id + '\')">保存</button>'
+                + '<button class="btn btn-xs btn-ghost" onclick="deleteDeskTask(\'' + id + '\')">删除</button>'
+                + '</div>';
+        }
+        function loadDeskTasks(cb) {
+            if (!supabaseClient || !getSupabaseConfig()) { _wbDeskTasks = []; if (cb) cb(); return; }
+            supabaseClient.from('task_plans').select('*').is('task_id', null)
+              .order('plan_date', { ascending: true }).limit(300)
+              .then(function(res) {
+                  if (!res.error && res.data) {
+                      _wbDeskTasks = res.data.map(function(p) {
+                          return Object.assign({}, p, {
+                              plan_date: (p.plan_date || '').slice(0, 10),
+                              est_min: p.est_min || 0, score: p.score || 0
+                          });
+                      });
+                  }
+                  if (cb) cb();
+              }).catch(function(e) { console.error('[v22.5] 读取桌面任务失败:', e); if (cb) cb(); });
+        }
+        // 重排：读云端 → 排程算法 → 写回（编辑/删除后调用，保证顺延一致）
+        function reschedulePlans(changedItems, removedIds, cb) {
+            if (!supabaseClient || !getSupabaseConfig()) { if (cb) cb(false); return; }
+            const today = fmtLocal(new Date());
+            return supabaseClient.from('task_plans').select('*').gte('plan_date', today).limit(500)
+              .then(function(res) {
+                  const existing = (res.data || []).map(function(p) { return Object.assign({}, p); });
+                  const keep = existing.filter(function(p) {
+                      return !(removedIds && removedIds.indexOf(p.id) >= 0);
+                  });
+                  return loadPlanConfigFromCloud().then(function(cfg) {
+                      const r = _slotsScheduleInsert(keep, changedItems || [], cfg, today);
+                      const newRows = r.plans.filter(function(p) { return (p.plan_date || '') >= today; });
+                      const newIds = {};
+                      newRows.forEach(function(p) { newIds[p.id] = 1; });
+                      const staleIds = existing.filter(function(p) {
+                          return (p.plan_date || '') >= today && p.status !== 'done' && !newIds[p.id];
+                      }).map(function(p) { return p.id; });
+                      return _planCols(function(cols) {
+                          const payload = newRows.map(function(p) {
+                              const row = {
+                                  id: p.id, task_id: p.task_id, title: p.title, score: p.score,
+                                  est_min: p.est_min, recorded_min: p.recorded_min,
+                                  plan_date: p.plan_date, slot: p.slot, seq: p.seq,
+                                  status: p.status, carry_from: p.carry_from,
+                                  reason: p.reason, note: p.note || '',
+                                  created_at: p.created_at, updated_at: p.updated_at
+                              };
+                              if (cols.seg) row.seg_min = p.seg_min;
+                              if (cols.src) row.source = p.source;
+                              return row;
+                          });
+                          const write = payload.length
+                              ? supabaseClient.from('task_plans').upsert(payload, { onConflict: 'id' })
+                              : Promise.resolve({ error: null });
+                          return write.then(function(up) {
+                              if (up.error) { console.error('[v22.5] 重排写入失败:', up.error); return false; }
+                              if (!staleIds.length) return true;
+                              return supabaseClient.from('task_plans').delete().in('id', staleIds)
+                                .then(function() { return true; })
+                                .catch(function(e) { console.error('[v22.5] 清理旧片段失败:', e); return true; });
+                          }).catch(function(e) { console.error('[v22.5] 重排异常:', e); return false; });
+                      });
+                  });
+              }).catch(function(e) { console.error('[v22.5] 重排读失败:', e); return false; });
+        }
+        function saveDeskTask(id) {
+            const t = _wbDeskTasks.find(function(x) { return x.id === id; });
+            if (!t) return;
+            const g = function(pref) {
+                const el = document.getElementById(pref + id);
+                return el ? String(el.value || '').trim() : '';
+            };
+            const title = g('dt_title_');
+            if (!title) { showToast('⚠️ 标题不能为空'); return; }
+            const score = Math.max(1, Math.min(10, parseInt(g('dt_score_'), 10) || 5));
+            const est = Math.max(5, Math.min(6000, parseInt(g('dt_est_'), 10) || 60));
+            const date = g('dt_date_') || t.plan_date;
+            const slot = g('dt_slot_') === 'pm' ? 'pm' : 'am';
+            const upd = {
+                id: t.id, title: title, score: score, est_min: est,
+                plan_date: date, slot: slot, status: 'planned',
+                recorded_min: 0, seq: t.seq || 0, note: t.note || '',
+                updated_at: new Date().toISOString()
+            };
+            supabaseClient.from('task_plans').update(upd).eq('id', id).then(function(res) {
+                if (res.error) { console.error('[v22.5] 保存失败:', res.error); showToast('⚠️ 保存失败'); return; }
+                reschedulePlans([], [], function(ok) {
+                    loadDeskTasks(function() {
+                        renderInbox(document.getElementById('mainContent'));
+                        if (typeof _slotsRender === 'function') _slotsRender();
+                        showToast(ok ? '✅ 已保存并重新排程' : '⚠️ 已保存（重排未完成）');
+                    });
+                });
+            }).catch(function(e) { console.error('[v22.5] 保存异常:', e); showToast('⚠️ 保存失败'); });
+        }
+        function deleteDeskTask(id) {
+            const t = _wbDeskTasks.find(function(x) { return x.id === id; });
+            if (!t) return;
+            if (!confirm('确定删除「' + (t.title || '') + '」这条安排？桌面看板会同步撤销。')) return;
+            supabaseClient.from('task_plans').delete().eq('id', id).then(function(res) {
+                if (res.error) { console.error('[v22.5] 删除失败:', res.error); showToast('⚠️ 删除失败'); return; }
+                loadDeskTasks(function() {
+                    renderInbox(document.getElementById('mainContent'));
+                    if (typeof _slotsRender === 'function') _slotsRender();
+                    showToast('🗑️ 已删除，桌面看板将同步撤销');
+                });
+            }).catch(function(e) { console.error('[v22.5] 删除异常:', e); showToast('⚠️ 删除失败'); });
+        }
+
         function renderInbox(mc) {
             const arr = loadInbox();
             const c = mc || document.getElementById('mainContent');
+            // 【v22.5】拉取桌面看板任务并回填到「桌面看板新增的任务」分组
+            loadDeskTasks(function() {
+                const host = document.getElementById('inboxDeskHost');
+                const cntEl = document.getElementById('inboxDeskCount');
+                if (cntEl) cntEl.textContent = _wbDeskTasks.length + ' 条';
+                if (!host) return;
+                host.innerHTML = _wbDeskTasks.length
+                    ? '<div class="ui22-inbox-list">' + _wbDeskTasks.map(_deskRowHtml).join('') + '</div>'
+                    : '<div class="empty-state">桌面看板还没有新增任务。在桌面点「记插单」→ 新建任务，这里就会同步出现。</div>';
+            });
             c.innerHTML = `
                 <div class="page-header"><h2>📥 收件箱</h2>
                   <span style="color:var(--text-secondary);font-size:13px;">碎片任务先收进来，转出后进入今日安排（桌面端可见）</span></div>
@@ -8434,6 +8637,15 @@ function renderSettlement(mc) {
                       <button class="btn btn-sm btn-primary" onclick="inboxToPlan('${x.id}')">转入安排</button>
                       <button class="btn btn-xs btn-ghost" onclick="deleteInboxItem('${x.id}')">删除</button>
                     </div>`).join('') + '</div>' : '<div class="empty-state">收件箱是空的，先记几个碎片任务吧</div>'}
+                </div>
+                <div class="card">
+                  <div class="card-header"><h3>🖥️ 桌面看板新增的任务</h3>
+                    <span class="tag" id="inboxDeskCount">0 条</span></div>
+                  <div style="font-size:12px;color:var(--text-secondary,#64748b);margin-bottom:10px;">
+                    桌面看板「记插单」新建的任务会同步到这里，可直接改标题 / 积分 / 估时 / 日期 / 时段，
+                    保存后自动重排；删除即撤销，桌面看板同步生效。
+                  </div>
+                  <div id="inboxDeskHost"><div class="empty-state">加载中…</div></div>
                 </div>`;
             updateInboxBadge();
             if (window._weeklyDraft) {
@@ -8495,10 +8707,15 @@ function renderSettlement(mc) {
                 </div>
               `;
             if (calViewMode === 'week' || calViewMode === 'day') {
-                loadPlanConfigFromCloud().then(function(cfg) {
-                    _wbSlotsCfg = cfg;
+                // 【v22.5】配置已缓存则直接用，避免每次切换都等一次网络请求
+                if (_wbSlotsCfg) {
                     _slotsRender();
-                });
+                } else {
+                    loadPlanConfigFromCloud().then(function(cfg) {
+                        _wbSlotsCfg = cfg;
+                        _slotsRender();
+                    });
+                }
             } else {
                 fetchPlanDayMap(function(){ initFullCalendar(); });
             }
@@ -8635,6 +8852,92 @@ function renderSettlement(mc) {
             if (a.length < 2 || b.length < 2) return 0;
             return Math.max(0, (parseInt(b[0], 10) * 60 + parseInt(b[1], 10)) - (parseInt(a[0], 10) * 60 + parseInt(a[1], 10)));
         }
+        // ===== 【v22.5】排程算法（与桌面 schedule_insert 逻辑一致）=====
+        // 高分优先；上午→下午→次日；长任务自动填满上下午；历史日期锁定不动。
+        function _slotsSlotMinutes(cfg, dateStr, slot) {
+            return _slotsMinutes(_slotsRangeOf(cfg, dateStr, slot));
+        }
+        function _slotsScheduleInsert(localPlans, newItems, cfg, startDateStr) {
+            const tstr = startDateStr || fmtLocal(new Date());
+            const plans = (localPlans || []).map(function(p) { return Object.assign({}, p); });
+            const locked = plans.filter(function(p) { return (p.plan_date || '') < tstr; });
+            const future = plans.filter(function(p) { return (p.plan_date || '') >= tstr; });
+            const queue = [];
+            const agg = {};
+            future.forEach(function(p) {
+                if (p.status !== 'planned' && p.status !== 'carried') return;
+                const key = p.task_id || p.title;
+                if (!agg[key]) {
+                    agg[key] = { title: p.title, score: p.score || 5, est_min: 0, task_id: p.task_id || null,
+                                 source: p.source || 'history', carry_from: p.plan_date };
+                }
+                let seg = (p.seg_min === undefined || p.seg_min === null)
+                    ? Math.max(0, (p.est_min || 0) - (p.recorded_min || 0)) : p.seg_min;
+                if (p.seg_min === undefined || p.seg_min === null) {
+                    if (agg[key].est_min > 0) seg = 0;
+                }
+                agg[key].est_min += seg;
+            });
+            Object.keys(agg).forEach(function(k) { queue.push(agg[k]); });
+            (newItems || []).forEach(function(it) {
+                if (!it.title || !String(it.title).trim()) return;
+                queue.push({ title: it.title, score: it.score || 5, est_min: it.est_min || 0,
+                             task_id: it.task_id || null, source: it.source || 'manual', carry_from: null });
+            });
+            queue.sort(function(a, b) { return (b.score - a.score) || (a.est_min - b.est_min); });
+            const out = locked.slice();
+            const base = tstr.split('-').map(Number);
+            let day = new Date(base[0], base[1] - 1, base[2]);
+            const seqCounters = { am: 0, pm: 0 };
+            let used = { am: 0, pm: 0 };
+            const finish = {};
+            let guard = 0, idSeq = 0;
+            const stamp = new Date().toISOString();
+            for (let i = 0; i < queue.length; i++) {
+                const item = queue[i];
+                let remaining = item.est_min || 0;
+                while (remaining > 0 && guard < 400) {
+                    guard++;
+                    for (let si = 0; si < 2; si++) {
+                        const slot = si === 0 ? 'am' : 'pm';
+                        const cap = _slotsSlotMinutes(cfg, fmtLocal(day), slot);
+                        const left = cap - used[slot];
+                        if (left <= 0) continue;
+                        const take = Math.min(left, remaining);
+                        out.push({
+                            id: 'plan_' + Date.now().toString(36) + '_' + (idSeq++),
+                            task_id: item.task_id, title: item.title, score: item.score,
+                            est_min: item.est_min, recorded_min: 0, seg_min: take,
+                            plan_date: fmtLocal(day), slot: slot, seq: seqCounters[slot],
+                            status: 'planned', carry_from: item.carry_from, reason: null, note: '',
+                            source: item.source || 'manual',
+                            created_at: stamp, updated_at: stamp
+                        });
+                        seqCounters[slot]++;
+                        used[slot] += take;
+                        remaining -= take;
+                        finish[item.title] = fmtLocal(day);
+                        if (remaining <= 0) break;
+                    }
+                    if (remaining > 0) {
+                        day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
+                        used = { am: 0, pm: 0 };
+                    }
+                }
+            }
+            return { plans: out, finish: finish };
+        }
+        // 探测 task_plans 是否有 seg_min / source 列（老库缺列时自动降级）
+        let _planColsHas = null;
+        function _planCols(cb) {
+            if (_planColsHas) { cb(_planColsHas); return; }
+            supabaseClient.from('task_plans').select('*').limit(1).then(function(res) {
+                if (res.error || !res.data || !res.data.length) { cb({ seg: false, src: false }); return; }
+                const k = Object.keys(res.data[0]);
+                _planColsHas = { seg: k.indexOf('seg_min') >= 0, src: k.indexOf('source') >= 0 };
+                cb(_planColsHas);
+            }).catch(function() { cb({ seg: false, src: false }); });
+        }
         // 拉取指定日期范围的 task_plans
         function _slotsLoadPlans(startStr, endStr, cb) {
             if (!supabaseClient || !getSupabaseConfig()) { _wbSlotsPlanMap = {}; if (cb) cb(); return; }
@@ -8706,16 +9009,16 @@ function renderSettlement(mc) {
             const endStr = fmtLocal(days[6]);
             const label = document.getElementById('calMonthLabel');
             if (label) {
-                label.textContent = days.length > 1
-                    ? fmtLocal(days[0]).replace(/-/g, '/') + ' — ' + fmtLocal(days[6]).replace(/-/g, '/')
-                    : fmtLocal(days[0]).replace(/-/g, '/');
+                const f = function(d) { const p = fmtLocal(d).split('-'); return p[0] + '/' + p[1] + '/' + p[2]; };
+                label.textContent = days.length > 1 ? (f(days[0]) + ' — ' + f(days[days.length - 1])) : f(days[0]);
             }
             _slotsLoadPlans(startStr, endStr, function() { _slotsPaint(host, days); });
         }
         function _slotsPaint(host, days) {
             const cfg = _wbSlotsCfg || { slots: { summer: { am: ['08:30', '12:00'], pm: ['13:30', '18:00'] }, standard: { am: ['09:00', '12:00'], pm: ['13:00', '17:30'] } }, profile: 'auto', summer_range: { from: '04-01', to: '10-31' } };
             const todayStr = fmtLocal(new Date());
-            const dow = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+            const DOW = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+            const dow = days.map(function(d) { return DOW[d.getDay()]; });
             let anyPlan = false;
             let html = '<div class="slot-grid" style="grid-template-columns:74px repeat(' + days.length + ',minmax(0,1fr));">'
                 + '<div class="slot-h slot-rowhead"></div>';
@@ -8746,12 +9049,15 @@ function renderSettlement(mc) {
                     const total = arr.length + plain.length;
                     const cls = 'slot-cell' + (rest ? ' slot-rest' : '') + (ds === todayStr ? ' slot-today' : '') + (total ? '' : ' slot-empty');
                     html += '<div class="' + cls + '" data-ds="' + ds + '" data-slot="' + slot + '">';
-                    plain.forEach(function(t) {
-                        html += '<div class="slot-task st-plain" title="' + esc(t.title || '') + '">'
-                            + '<span class="st-dot"></span>'
-                            + '<span class="st-title">' + esc(t.title || '（无标题）') + '</span>'
-                            + '<span class="st-meta">待办</span></div>';
-                    });
+                    if (plain.length) {
+                        html += '<div class="slot-subhead">当日待办 · 未排时段</div>';
+                        plain.forEach(function(t) {
+                            html += '<div class="slot-task st-plain" title="' + esc(t.title || '') + '">'
+                                + '<span class="st-dot"></span>'
+                                + '<span class="st-title">' + esc(t.title || '（无标题）') + '</span>'
+                                + '<span class="st-meta">待办</span></div>';
+                        });
+                    }
                     const shown = arr.slice(0, 4);
                     shown.forEach(function(p) {
                         const st = p.status || 'planned';
@@ -8913,8 +9219,7 @@ function renderSettlement(mc) {
                             cell.addClass('wb-makeup-day');
                         }
                     }
-                    // 【v22.2】叠加上午/下午时段徽标（不影响原有节假日高亮）
-                    if (typeof decorateCalDaySlots === 'function') decorateCalDaySlots(cell, date);
+                    // 【v22.5】月视图不再叠加时段小徽标（时段已在周/日视图完整呈现）
                 },
                 viewRender: function(view, element) {
                     const label = document.getElementById('calMonthLabel');
@@ -9004,8 +9309,9 @@ function renderSettlement(mc) {
                     const map = { '月': 'month', '周': 'week', '日': 'day' };
                     btn.classList.toggle('active', map[txt] === mode);
                 });
-                if (mode === 'day' && !gridMode(prev)) _wbSlotsAnchor = new Date();
-                if (mode === 'week' && !gridMode(prev)) _wbSlotsAnchor = _slotsStartOfWeek(new Date());
+                // 【v22.5】任何情况下切到日/周都重置锚点，避免周视图从"今天"起算导致星期错位
+                if (mode === 'day') _wbSlotsAnchor = new Date();
+                if (mode === 'week') _wbSlotsAnchor = _slotsStartOfWeek(new Date());
                 renderCalendar(document.getElementById('mainContent'));
                 return;
             }
