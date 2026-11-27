@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.5">
+    <meta name="app-version" content="22.6">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -8387,6 +8387,63 @@ function renderSettlement(mc) {
         function saveInbox(arr) {
             localStorage.setItem(INBOX_KEY, JSON.stringify(arr));
             updateInboxBadge();
+            // 【v22.6】同步上云（notes 表 id='inbox' 存整份 JSON），让桌面看板也能看到
+            syncInboxToCloud(arr);
+        }
+        // ===== 【v22.6】收件箱云端同步（notes 表，无需改表结构）=====
+        const INBOX_CLOUD_ID = 'inbox';
+        let _wbInboxCloudReady = false;
+        function syncInboxToCloud(arr) {
+            if (!supabaseClient || !getSupabaseConfig()) return;
+            const payload = {
+                id: INBOX_CLOUD_ID,
+                content: JSON.stringify(arr || []),
+                updated_at: new Date().toISOString()
+            };
+            supabaseClient.from('notes').upsert(payload, { onConflict: 'id' })
+              .then(function(res) {
+                  if (res.error) console.error('[v22.6] 收件箱上云失败:', res.error);
+              })
+              .catch(function(e) { console.error('[v22.6] 收件箱上云异常:', e); });
+        }
+        // 读云端收件箱：云端有数据则以云端为准并回填本地缓存；云端空则把本地存量迁移上云
+        function fetchInboxCloud(cb) {
+            if (!supabaseClient || !getSupabaseConfig()) {
+                _wbInboxCloudReady = true;
+                if (cb) cb(loadInbox());
+                return;
+            }
+            supabaseClient.from('notes').select('content,updated_at').eq('id', INBOX_CLOUD_ID)
+              .then(function(res) {
+                  const remote = [];
+                  if (!res.error && res.data && res.data.length) {
+                      try {
+                          const parsed = JSON.parse(res.data[0].content || '[]');
+                          if (Array.isArray(parsed)) parsed.forEach(function(x) { remote.push(x); });
+                      } catch (e) { console.error('[v22.6] 收件箱解析失败:', e); }
+                  }
+                  const local = loadInbox();
+                  if (remote.length) {
+                      // 云端为准：回填本地缓存（保持两端一致）
+                      localStorage.setItem(INBOX_KEY, JSON.stringify(remote));
+                      updateInboxBadge();
+                      _wbInboxCloudReady = true;
+                      if (cb) cb(remote);
+                  } else if (local.length) {
+                      // 云端空但本地有 → 迁移上云（首次使用场景）
+                      syncInboxToCloud(local);
+                      _wbInboxCloudReady = true;
+                      if (cb) cb(local);
+                  } else {
+                      _wbInboxCloudReady = true;
+                      if (cb) cb(local);
+                  }
+              })
+              .catch(function(e) {
+                  console.error('[v22.6] 收件箱读取失败:', e);
+                  _wbInboxCloudReady = true;
+                  if (cb) cb(loadInbox());
+              });
         }
         function updateInboxBadge() {
             const b = document.getElementById('inboxBadge');
@@ -8595,6 +8652,22 @@ function renderSettlement(mc) {
         function renderInbox(mc) {
             const arr = loadInbox();
             const c = mc || document.getElementById('mainContent');
+            // 【v22.6】先从云端拉收件箱（与桌面看板同一份数据），拉到后重绘列表
+            fetchInboxCloud(function(remote) {
+                const host = document.getElementById('inboxLocalHost');
+                if (!host) return;
+                host.innerHTML = remote.length
+                    ? '<div class="ui22-inbox-list">' + remote.map(function(x) {
+                        return '<div class="ui22-inbox-item">'
+                            + '<span class="ui22-inbox-title">' + esc(x.title) + '</span>'
+                            + '<span class="ui22-inbox-time">' + esc(x.createdAt || '') + '</span>'
+                            + '<button class="btn btn-sm btn-primary" onclick="inboxToPlan(\'' + esc(x.id) + '\')">转入安排</button>'
+                            + '<button class="btn btn-xs btn-ghost" onclick="deleteInboxItem(\'' + esc(x.id) + '\')">删除</button>'
+                            + '</div>';
+                    }).join('') + '</div>'
+                    : '<div class="empty-state">收件箱是空的，先记几个碎片任务吧</div>';
+                updateInboxBadge();
+            });
             // 【v22.5】拉取桌面看板任务并回填到「桌面看板新增的任务」分组
             loadDeskTasks(function() {
                 const host = document.getElementById('inboxDeskHost');
@@ -8630,13 +8703,13 @@ function renderSettlement(mc) {
                 </div>
                 <div class="card">
                   <div class="card-header"><h3>📋 待转入任务</h3><span class="tag">${arr.length} 条</span></div>
-                  ${arr.length ? '<div class="ui22-inbox-list">' + arr.map(x => `
+                  <div id="inboxLocalHost">${arr.length ? '<div class="ui22-inbox-list">' + arr.map(x => `
                     <div class="ui22-inbox-item">
                       <span class="ui22-inbox-title">${esc(x.title)}</span>
                       <span class="ui22-inbox-time">${esc(x.createdAt || '')}</span>
                       <button class="btn btn-sm btn-primary" onclick="inboxToPlan('${x.id}')">转入安排</button>
                       <button class="btn btn-xs btn-ghost" onclick="deleteInboxItem('${x.id}')">删除</button>
-                    </div>`).join('') + '</div>' : '<div class="empty-state">收件箱是空的，先记几个碎片任务吧</div>'}
+                    </div>`).join('') + '</div>' : '<div class="empty-state">收件箱是空的，先记几个碎片任务吧</div>'}</div>
                 </div>
                 <div class="card">
                   <div class="card-header"><h3>🖥️ 桌面看板新增的任务</h3>
