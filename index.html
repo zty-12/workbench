@@ -708,7 +708,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.10">
+    <meta name="app-version" content="22.11">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -8602,16 +8602,48 @@ function renderSettlement(mc) {
             const m = s.match(/^(node|task):/);
             return m ? m[1] : 'node';
         }
+        // 【v22.11】关联项目下拉选项：工作台已有项目的任务节点（公司-模板-节点）+ 独立任务（task:），
+        // 与桌面看板「记插单」的候选来源一致。
+        function _deskProjectOptions(curVal, curKind) {
+            const nodeOpts = [], taskOpts = [];
+            (appData.projects || []).forEach(function(p) {
+                if (p.status === 'archived' || p.status === 'shelved' || p.status === 'terminated') return;
+                const prefix = [p.company, getTplName(p.templateId)].filter(Boolean).join(' - ') || '未命名项目';
+                (p.nodes || []).forEach(function(n) {
+                    const nm = n && n.name || '';
+                    if (!nm) return;
+                    if (n.status === 'done') return;
+                    nodeOpts.push(prefix + ' - ' + nm);
+                });
+            });
+            (appData.tasks || []).forEach(function(t) {
+                if (t && !t.completed && t.title) taskOpts.push(String(t.title));
+            });
+            const seen = {};
+            let html = '<option value="">（不关联）</option>';
+            const add = function(kind, val) {
+                const key = kind + ':' + val;
+                if (!val || seen[key]) return;
+                seen[key] = 1;
+                const sel = (kind === curKind && val === curVal) ? ' selected' : '';
+                html += '<option value="' + esc(key) + '"' + sel + '>' + esc(val) + '</option>';
+            };
+            // 历史值若不在当前清单里，先加进去避免保存时丢失
+            if (curVal) add(curKind || 'node', curVal);
+            nodeOpts.forEach(function(v) { add('node', v); });
+            taskOpts.forEach(function(v) { add('task', v); });
+            return html;
+        }
         function _deskRowHtml(t) {
             const id = esc(t.id || '');
-            // 【v22.10】项目用自由输入框：桌面端 source 可能是 node:/task: 前缀的任意历史项目名，
-            // 用下拉会丢失不在当前项目清单里的历史值；输入框可任意编辑/清空，最稳妥。
-            const proj = esc(_deskProjectOf(t));
-            const projInput = '<input class="form-input" id="dt_proj_' + id + '" value="' + proj
-                + '" style="flex:1;min-width:130px;" placeholder="关联项目（可空）" title="关联项目，保存后写回 source">';
+            // 【v22.11】关联项目改为下拉：可选项来自工作台项目节点/任务，历史值自动保留。
+            const projVal = _deskProjectOf(t);
+            const projKind = _deskProjectKind(t);
+            const projSelect = '<select class="form-input" id="dt_proj_' + id + '" style="flex:1;min-width:150px;" title="关联项目（工作台项目节点/任务）">'
+                + _deskProjectOptions(projVal, projKind) + '</select>';
             return '<div class="ui22-desk-row">'
                 + '<input class="form-input" id="dt_title_' + id + '" value="' + esc(t.title || '') + '" style="flex:2;min-width:150px;" placeholder="任务名">'
-                + projInput
+                + projSelect
                 + '<input class="form-input" type="number" min="1" max="10" id="dt_score_' + id + '" value="' + (t.score || 5) + '" style="width:62px;" title="积分">'
                 + '<input class="form-input" type="number" min="5" max="6000" step="5" id="dt_est_' + id + '" value="' + (t.est_min || 60) + '" style="width:84px;" title="估时(分钟)">'
                 + '<input class="form-input" type="date" id="dt_date_' + id + '" value="' + esc(t.plan_date || '') + '" style="width:140px;">'
@@ -8697,11 +8729,9 @@ function renderSettlement(mc) {
             const est = Math.max(5, Math.min(6000, parseInt(g('dt_est_'), 10) || 60));
             const date = g('dt_date_') || t.plan_date;
             const slot = g('dt_slot_') === 'pm' ? 'pm' : 'am';
-            // 【v22.10】关联项目：保留原 source 前缀(node:/task:)；清空则回退为 new。
+            // 【v22.11】关联项目下拉值形如 node:公司 - 模板 - 节点 / task:任务名；空则回退 new。
             const projVal = g('dt_proj_');
-            const oldSrc = String(t.source || '');
-            const kind = /^task:/.test(oldSrc) ? 'task' : 'node';
-            const newSource = projVal ? (kind + ':' + projVal) : 'new';
+            const newSource = projVal || 'new';
             const upd = {
                 id: t.id, title: title, score: score, est_min: est,
                 plan_date: date, slot: slot, status: 'planned',
@@ -8753,16 +8783,8 @@ function renderSettlement(mc) {
                     : '<div class="empty-state">收件箱是空的，先记几个碎片任务吧</div>';
                 updateInboxBadge();
             });
-            // 【v22.5】拉取桌面看板任务并回填到「桌面看板新增的任务」分组
-            loadDeskTasks(function() {
-                const host = document.getElementById('inboxDeskHost');
-                const cntEl = document.getElementById('inboxDeskCount');
-                if (cntEl) cntEl.textContent = _wbDeskTasks.length + ' 条';
-                if (!host) return;
-                host.innerHTML = _wbDeskTasks.length
-                    ? '<div class="ui22-inbox-list">' + _wbDeskTasks.map(_deskRowHtml).join('') + '</div>'
-                    : '<div class="empty-state">桌面看板还没有新增任务。在桌面点「记插单」→ 新建任务，这里就会同步出现。</div>';
-            });
+            // 【v22.11】桌面看板任务回填：必须在 c.innerHTML 重建 DOM 之后执行，
+            // 否则异步回调会渲染到即将被覆盖的旧 DOM（表现为"桌面新增任务不显示/显示旧数据"）。
             c.innerHTML = `
                 <div class="page-header"><h2>📥 收件箱</h2>
                   <span style="color:var(--text-secondary);font-size:13px;">碎片任务先收进来，转出后进入今日安排（桌面端可见）</span></div>
@@ -8801,10 +8823,20 @@ function renderSettlement(mc) {
                     <span class="tag" id="inboxDeskCount">0 条</span></div>
                   <div style="font-size:12px;color:var(--text-secondary,#64748b);margin-bottom:10px;">
                     桌面看板「记插单」新建的任务会同步到这里，可直接改标题 / 关联项目 / 积分 / 估时 / 日期 / 时段，
-                    保存后自动重排；删除即撤销，桌面看板同步生效。（v22.10 起支持编辑关联项目）
+                    保存后自动重排；删除即撤销，桌面看板同步生效。（v22.11 关联项目改为下拉，可选工作台项目节点/任务）
                   </div>
                   <div id="inboxDeskHost"><div class="empty-state">加载中…</div></div>
                 </div>`;
+            // 【v22.11】DOM 重建完成后再异步拉取并回填桌面任务（修复竞态）
+            loadDeskTasks(function() {
+                const host = document.getElementById('inboxDeskHost');
+                const cntEl = document.getElementById('inboxDeskCount');
+                if (cntEl) cntEl.textContent = _wbDeskTasks.length + ' 条';
+                if (!host) return;
+                host.innerHTML = _wbDeskTasks.length
+                    ? '<div class="ui22-inbox-list">' + _wbDeskTasks.map(_deskRowHtml).join('') + '</div>'
+                    : '<div class="empty-state">桌面看板还没有新增任务。在桌面点「记插单」→ 新建任务，这里就会同步出现。</div>';
+            });
             updateInboxBadge();
             if (window._weeklyDraft) {
                 const wb = document.getElementById('weeklyDraftBody');
@@ -9010,17 +9042,34 @@ function renderSettlement(mc) {
             if (a.length < 2 || b.length < 2) return 0;
             return Math.max(0, (parseInt(b[0], 10) * 60 + parseInt(b[1], 10)) - (parseInt(a[0], 10) * 60 + parseInt(a[1], 10)));
         }
-        // ===== 【v22.5】排程算法（与桌面 schedule_insert 逻辑一致）=====
-        // 高分优先；上午→下午→次日；长任务自动填满上下午；历史日期锁定不动。
+        // ===== 【v22.11】排程算法（与桌面 schedule_insert 完全一致）=====
+        // 新插单按「插入时刻」锚定起始时段优先排；长期任务随后从上午开始 first-fit
+        // 填满上午→下午→次日；同一任务同一时段只生成一个片段（不再按比例劈成两半）。
         function _slotsSlotMinutes(cfg, dateStr, slot) {
             return _slotsMinutes(_slotsRangeOf(cfg, dateStr, slot));
         }
-        function _slotsScheduleInsert(localPlans, newItems, cfg, startDateStr) {
+        function _hhmmMin(s) {
+            const a = String(s || '').split(':');
+            if (a.length < 2) return 0;
+            return (parseInt(a[0], 10) * 60 + parseInt(a[1], 10)) || 0;
+        }
+        // 按插入时刻返回 [dayOffset, slot]：上午→当日am；下午剩余够→当日pm；很晚→次日am
+        function _slotsInsertAnchor(cfg, dateStr, now, estMin) {
+            const amR = _slotsRangeOf(cfg, dateStr, 'am');
+            const pmR = _slotsRangeOf(cfg, dateStr, 'pm');
+            const nowMin = now.getHours() * 60 + now.getMinutes();
+            const amEnd = _hhmmMin(amR[1]);
+            const pmEnd = _hhmmMin(pmR[1]);
+            if (nowMin < amEnd) return [0, 'am'];
+            if (nowMin < pmEnd && (pmEnd - nowMin) >= (estMin || 0)) return [0, 'pm'];
+            return [1, 'am'];
+        }
+        function _slotsScheduleInsert(localPlans, newItems, cfg, startDateStr, nowArg) {
             const tstr = startDateStr || fmtLocal(new Date());
+            const now = nowArg || new Date();
             const plans = (localPlans || []).map(function(p) { return Object.assign({}, p); });
             const locked = plans.filter(function(p) { return (p.plan_date || '') < tstr; });
             const future = plans.filter(function(p) { return (p.plan_date || '') >= tstr; });
-            const queue = [];
             const agg = {};
             future.forEach(function(p) {
                 if (p.status !== 'planned' && p.status !== 'carried') return;
@@ -9029,8 +9078,6 @@ function renderSettlement(mc) {
                     agg[key] = { title: p.title, score: p.score || 5, est_min: 0, task_id: p.task_id || null,
                                  source: p.source || 'history', carry_from: p.plan_date };
                 }
-                // 【v22.7 修复】seg_min 缺失或为 0 都要走兜底：老数据 seg_min=0 时直接用 0
-                // 会让任务估时归零、重排后从排程里消失（桌面与网页互相覆盖 → 数据不一致）。
                 let seg = p.seg_min;
                 if (seg === undefined || seg === null || !seg) {
                     seg = Math.max(0, (p.est_min || 0) - (p.recorded_min || 0));
@@ -9038,66 +9085,67 @@ function renderSettlement(mc) {
                 }
                 agg[key].est_min += seg;
             });
-            Object.keys(agg).forEach(function(k) { queue.push(agg[k]); });
+            const queue = [];
             (newItems || []).forEach(function(it) {
                 if (!it.title || !String(it.title).trim()) return;
-                queue.push({ title: it.title, score: it.score || 5, est_min: it.est_min || 0,
-                             task_id: it.task_id || null, source: it.source || 'manual', carry_from: null });
+                const est = it.est_min || 0;
+                queue.push({ title: it.title, score: it.score || 5, est_min: est,
+                             task_id: it.task_id || null, source: it.source || 'manual',
+                             carry_from: null,
+                             _anchor: it._anchor || _slotsInsertAnchor(cfg, tstr, now, est),
+                             _isNew: true });
             });
-            queue.sort(function(a, b) { return (b.score - a.score) || (a.est_min - b.est_min); });
+            Object.keys(agg).forEach(function(k) {
+                agg[k]._anchor = null; agg[k]._isNew = false; queue.push(agg[k]);
+            });
+            queue.sort(function(a, b) {
+                return ((a._isNew ? 0 : 1) - (b._isNew ? 0 : 1)) || (b.score - a.score) || (a.est_min - b.est_min);
+            });
             const out = locked.slice();
             const base = tstr.split('-').map(Number);
-            let day = new Date(base[0], base[1] - 1, base[2]);
             const seqCounters = { am: 0, pm: 0 };
-            let used = { am: 0, pm: 0 };
+            const used = {};
             const finish = {};
             let guard = 0, idSeq = 0;
             const stamp = new Date().toISOString();
+            const addDays = function(d, n) { return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n); };
             for (let i = 0; i < queue.length; i++) {
                 const item = queue[i];
                 let remaining = item.est_min || 0;
+                let day, cur;
+                if (item._anchor) {
+                    day = addDays(new Date(base[0], base[1] - 1, base[2]), item._anchor[0]);
+                    cur = item._anchor[1];
+                } else {
+                    day = new Date(base[0], base[1] - 1, base[2]); cur = 'am';
+                }
                 while (remaining > 0 && guard < 400) {
                     guard++;
-                    // 【v22.8】按上午/下午各自的「可用容量」比例分配任务估时 →
-                    // 长期任务会上午、下午都排到（旧的 take=min(left,remaining) 会全塞进上午，
-                    // 导致下午长期空着）。两端（网页/桌面）必须用同一算法，否则排程结果不一致。
-                    const _capAm = _slotsSlotMinutes(cfg, fmtLocal(day), 'am');
-                    const _capPm = _slotsSlotMinutes(cfg, fmtLocal(day), 'pm');
-                    const _availAm = Math.max(0, _capAm - used.am);
-                    const _availPm = Math.max(0, _capPm - used.pm);
-                    const _totalAvail = _availAm + _availPm;
-                    if (_totalAvail <= 0) {
-                        day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
-                        used = { am: 0, pm: 0 };
+                    const cap = _slotsSlotMinutes(cfg, fmtLocal(day), cur);
+                    const key = fmtLocal(day) + '_' + cur;
+                    const left = cap - (used[key] || 0);
+                    if (left <= 0) {
+                        if (cur === 'am') cur = 'pm';
+                        else { day = addDays(day, 1); cur = 'am'; }
                         continue;
                     }
-                    let _takeAm = Math.round(remaining * _availAm / _totalAvail);
-                    if (_availAm > 0 && _takeAm < 1) _takeAm = 1;
-                    _takeAm = Math.min(_takeAm, _availAm, remaining);
-                    const _takePm = Math.min(remaining - _takeAm, _availPm);
-                    const _quota = { am: _takeAm, pm: _takePm };
-                    for (let si = 0; si < 2; si++) {
-                        const slot = si === 0 ? 'am' : 'pm';
-                        const take = _quota[slot];
-                        if (take <= 0) continue;
-                        out.push({
-                            id: 'plan_' + Date.now().toString(36) + '_' + (idSeq++),
-                            task_id: item.task_id, title: item.title, score: item.score,
-                            est_min: item.est_min, recorded_min: 0, seg_min: take,
-                            plan_date: fmtLocal(day), slot: slot, seq: seqCounters[slot],
-                            status: 'planned', carry_from: item.carry_from, reason: null, note: '',
-                            source: item.source || 'manual',
-                            created_at: stamp, updated_at: stamp
-                        });
-                        seqCounters[slot]++;
-                        used[slot] += take;
-                        remaining -= take;
-                        finish[item.title] = fmtLocal(day);
-                        if (remaining <= 0) break;
-                    }
+                    const take = Math.min(left, remaining);
+                    out.push({
+                        id: 'plan_' + Date.now().toString(36) + '_' + (idSeq++),
+                        task_id: item.task_id, title: item.title, score: item.score,
+                        est_min: item.est_min, recorded_min: 0, seg_min: take,
+                        plan_date: fmtLocal(day), slot: cur, seq: seqCounters[cur],
+                        status: 'planned', carry_from: item.carry_from, reason: null, note: '',
+                        source: item.source || 'manual',
+                        created_at: stamp, updated_at: stamp
+                    });
+                    seqCounters[cur]++;
+                    used[key] = (used[key] || 0) + take;
+                    remaining -= take;
+                    finish[item.title] = fmtLocal(day);
                     if (remaining > 0) {
-                        day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
-                        used = { am: 0, pm: 0 };
+                        if (cur === 'am') cur = 'pm';
+                        else { day = addDays(day, 1); cur = 'am'; }
                     }
                 }
             }
