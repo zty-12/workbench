@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- v22.13-dedupe-slots 2026-11-28
+<!-- v22.14-same-task-est-sync 2026-11-28
      修复旧算法把同一任务拆成上午/下午两行：收件箱、日历徽标、周/日时段视图统一折叠展示；
      编辑/删除按整个任务处理，估时不再被旧片段 seg_min 吃掉。
      ------------------------------------------------------------ -->
@@ -712,7 +712,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.13">
+    <meta name="app-version" content="22.14">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -8704,7 +8704,7 @@ function renderSettlement(mc) {
                 + '<input class="form-input" id="dt_title_' + id + '" value="' + esc(t.title || '') + '" style="flex:2;min-width:150px;" placeholder="任务名">'
                 + projSelect
                 + '<input class="form-input" type="number" min="1" max="10" id="dt_score_' + id + '" value="' + (t.score || 5) + '" style="width:62px;" title="积分">'
-                + '<input class="form-input" type="number" min="5" max="6000" step="5" id="dt_est_' + id + '" value="' + (t.est_min || 60) + '" style="width:84px;" title="估时(分钟)">'
+                + '<input class="form-input" type="number" min="5" max="6000" step="5" id="dt_est_' + id + '" value="' + (t.est_min || 60) + '" style="width:84px;" title="估时(分钟)" oninput="_syncSameTaskEst(\'' + id + '\', this.value)">'
                 + '<input class="form-input" type="date" id="dt_date_' + id + '" value="' + esc(t.plan_date || '') + '" style="width:140px;">'
                 + '<select class="form-input" id="dt_slot_' + id + '" style="width:76px;">'
                 + '<option value="am"' + (t.slot !== 'pm' ? ' selected' : '') + '>上午</option>'
@@ -8712,6 +8712,21 @@ function renderSettlement(mc) {
                 + '<button class="btn btn-sm btn-primary" onclick="saveDeskTask(\'' + id + '\')">保存</button>'
                 + '<button class="btn btn-xs btn-ghost" onclick="deleteDeskTask(\'' + id + '\')">删除</button>'
                 + '</div>';
+        }
+        // 【v22.14】同一任务被旧算法拆成多个片段（跨日/跨时段）时，估时输入框联动：
+        // 改任一行的估时，同任务其余行的估时输入框同步更新，避免出现「改了 11/28 的 280→60，
+        // 11/29 那段还留着 280」的假不同步。判定口径与 _deskGroupIds 一致：task_id 或 title。
+        function _syncSameTaskEst(id, val) {
+            const t = _wbDeskTasks.find(function(x) { return x.id === id; });
+            if (!t) return;
+            const key = t.task_id || t.title;
+            const v = String(val || '');
+            _wbDeskTasks.forEach(function(x) {
+                if (x.id === id) return;
+                if ((x.task_id || x.title) !== key) return;
+                const inp = document.getElementById('dt_est_' + x.id);
+                if (inp) inp.value = v;
+            });
         }
         function loadDeskTasks(cb) {
             if (!supabaseClient || !getSupabaseConfig()) { _wbDeskTasks = []; if (cb) cb(); return; }
