@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- v22.12-dedupe-slots 2026-11-28
+<!-- v22.13-dedupe-slots 2026-11-28
      修复旧算法把同一任务拆成上午/下午两行：收件箱、日历徽标、周/日时段视图统一折叠展示；
      编辑/删除按整个任务处理，估时不再被旧片段 seg_min 吃掉。
      ------------------------------------------------------------ -->
@@ -712,7 +712,7 @@ v21.51-mobile-split  2026-10-10
     <title>个人工作台 · 专业版</title>
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#1a3a5c">
-    <meta name="app-version" content="22.12">
+    <meta name="app-version" content="22.13">
     <!-- 【v21.44 修复】禁止浏览器缓存本页面（与 sw.js 的 cache:'reload' 配合），避免打开时拿到旧 HTML -->
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
@@ -8781,9 +8781,16 @@ function renderSettlement(mc) {
         function _deskGroupIds(t) {
             if (!t) return [];
             const key = t.task_id || t.title;
-            return _wbDeskTasks.filter(function(x) {
-                return (x.task_id || x.title) === key;
-            }).map(function(x) { return String(x.id || ''); });
+            const out = [];
+            _wbDeskTasks.forEach(function(x) {
+                if ((x.task_id || x.title) !== key) return;
+                out.push(String(x.id || ''));
+                // 【v22.12】折叠显示后，一行可能代表多个原始片段，必须一起清掉
+                (x._wb_merged_ids || []).forEach(function(mid) {
+                    out.push(String(mid || ''));
+                });
+            });
+            return out.filter(function(v, i) { return v && out.indexOf(v) === i; });
         }
         function saveDeskTask(id) {
             const t = _wbDeskTasks.find(function(x) { return x.id === id; });
